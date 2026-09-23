@@ -1,0 +1,1297 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03: サーバーコンポーネントとデータ取得 | Next.js ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Next.js</li>
+          <li aria-current="page">03</li>
+        </ol>
+        <h1 class="lesson-title">サーバーコンポーネントとデータ取得</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 02 を終え、外部 API のデータを Next.js の画面に表示したい人</li>
+          <li class="lesson-meta__item">📋 前提: JavaScript の <code>async</code> / <code>await</code> と <code>Promise</code> の基本が分かること</li>
+          <li class="lesson-meta__item">🌐 ネットワーク: 外部 API（JSONPlaceholder）に接続できる環境が必要</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../02-app-router/index.html">02: App Router の基礎とファイルベースルーティング</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>サーバーコンポーネントがサーバー上で動くことを確かめ、クライアントコンポーネントとの違いを説明できる</li>
+          <li><code>async</code> コンポーネントの中で <code>fetch</code> を使い、外部 API のデータを表示できる</li>
+          <li><code>fetch</code> のキャッシュ設定によって、ビルド結果（Static / Dynamic / ISR）が変わることを読み取れる</li>
+          <li><code>Promise.all</code> で並列にデータを取得し、<code>Suspense</code> でページの一部を後から表示できる</li>
+          <li>Route Handler で自前の API エンドポイントを作れる</li>
+          <li><code>error.tsx</code> でデータ取得の失敗を画面に表示できる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        02 では、記事データを <code>src/app/blog/_data/posts.ts</code> の配列に直接書き、<code>loading.tsx</code> の動作を見せるために 1 秒の <code>delay()</code> を入れていました。
+        このレッスンでは、この配列を外部 API からの取得に置き換えます。ダミーの遅延が担っていた「データを待つ時間」は、本物の API の応答待ちが引き継ぎます。
+      </p>
+      <p>
+        外部 API には、登録不要で使えるテスト用の REST API「JSONPlaceholder」（<code>https://jsonplaceholder.typicode.com</code>）を使います。
+        記事（<code>/posts</code>）とユーザー（<code>/users</code>）のダミーデータを JSON で返してくれます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">出発点</p>
+          <p>
+            02 で使ったプロジェクトをそのまま使って続けます。ディレクトリ名は変えなくて構いません。
+            02 の完成状態（<code>_data/posts.ts</code> の配列と 1 秒の <code>delay()</code> を使うブログ）がこのレッスンのスタート地点です。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--warning">
+        <span class="callout__icon" aria-hidden="true">⚠️</span>
+        <div class="callout__body">
+          <p class="callout__title">インターネット接続が必要です</p>
+          <p>
+            このレッスンでは、開発サーバーの実行中だけでなく <code>npm run build</code> の実行中にも JSONPlaceholder へアクセスします。
+            オフラインの環境や、社内プロキシで外部への通信が制限されている環境では、ページの表示やビルドが失敗します。
+            うまくいかないときは、まずブラウザで <code>https://jsonplaceholder.typicode.com/posts/1</code> を開き、JSON が表示されるかを確かめてください。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>Node.js 24.21.0 / npm 11.19.0 / Next.js 16.3.6 / React 19.2.8 / sass 1.105.0 で動作を確認しています（執筆時点: 2026年9月）。02 と同じ構成です。</p>
+        </div>
+      </div>
+
+      <h3 id="server-vs-client">サーバーコンポーネントとクライアントコンポーネント</h3>
+      <p>
+        App Router のコンポーネントは、何も指定しなければ「サーバーコンポーネント」になります。ファイルの先頭に <code>"use client"</code> と書いたものだけが「クライアントコンポーネント」です。
+        02 では、現在のパスを知るために <code>usePathname</code> を使う <code>Header</code> にだけ <code>"use client"</code> を付けました。それ以外の <code>page.tsx</code> や <code>layout.tsx</code> はすべてサーバーコンポーネントです。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>観点</th><th>サーバーコンポーネント</th><th>クライアントコンポーネント</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>指定方法</td><td>既定（何も書かない）</td><td>ファイル先頭に <code>"use client"</code></td></tr>
+          <tr><td>実行される場所</td><td>サーバー（Node.js）</td><td>ブラウザ（初回の HTML はサーバーでも生成される）</td></tr>
+          <tr><td><code>async</code> / <code>await</code> でのデータ取得</td><td>コンポーネント内で直接書ける</td><td>コンポーネントを <code>async</code> にはできない</td></tr>
+          <tr><td><code>useState</code> やクリックなどの操作</td><td>使えない</td><td>使える</td></tr>
+          <tr><td>このプロジェクトでの例</td><td><code>blog/page.tsx</code>、<code>blog/layout.tsx</code></td><td><code>_components/Header/Header.tsx</code></td></tr>
+        </tbody>
+      </table>
+
+      <h3 id="data-fetching-options">データ取得の 3 つの選択肢</h3>
+      <p>Next.js でデータを取得する方法は、大きく 3 つあります。このレッスンでは前の 2 つを扱います。</p>
+
+      <table>
+        <thead>
+          <tr><th>方法</th><th>向いている用途</th><th>扱う場所</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>サーバーコンポーネントで <code>fetch</code></td><td>ページの表示に必要なデータを、サーバー側で取得して HTML に含める</td><td>このレッスンのステップ 2〜4</td></tr>
+          <tr><td>Route Handler（<code>route.ts</code>）</td><td>ブラウザやモバイルアプリなど、外部のクライアントに向けて API を公開する</td><td>このレッスンのステップ 5</td></tr>
+          <tr><td>クライアントコンポーネントから取得</td><td>ボタン操作や入力に応じて、表示後にデータを取り直す</td><td>04: クライアントコンポーネントと状態管理</td></tr>
+        </tbody>
+      </table>
+
+      <p>レッスンを終えると、<code>src/</code> は次の構成になります（02 から変わらない部分は省略しています）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">src/</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">src/
+├── app/
+│   ├── (marketing)/ …        # 02 のまま
+│   ├── _components/ …        # 02 のまま
+│   ├── about/ …              # 02 のまま
+│   ├── api/
+│   │   └── posts/
+│   │       └── route.ts      # /api/posts（新規）
+│   ├── blog/
+│   │   ├── [slug]/
+│   │   │   ├── page.module.scss
+│   │   │   └── page.tsx      # 変更
+│   │   ├── _components/
+│   │   │   └── AuthorList/   # 新規
+│   │   │       ├── AuthorList.module.scss
+│   │   │       ├── AuthorList.tsx
+│   │   │       └── index.ts
+│   │   ├── error.module.scss # 新規
+│   │   ├── error.tsx         # 新規
+│   │   ├── layout.module.scss
+│   │   ├── layout.tsx        # 変更
+│   │   ├── loading.module.scss
+│   │   ├── loading.tsx
+│   │   ├── page.module.scss  # 変更
+│   │   └── page.tsx          # 変更（_data/ は削除）
+│   ├── favicon.ico
+│   ├── layout.tsx
+│   ├── not-found.module.scss
+│   ├── not-found.tsx
+│   ├── page.module.scss
+│   └── page.tsx
+├── features/                 # 新規
+│   ├── posts/
+│   │   ├── api/
+│   │   │   └── fetchPosts.ts
+│   │   └── types.ts
+│   └── users/
+│       ├── api/
+│       │   └── fetchUsers.ts
+│       └── types.ts
+└── styles/
+    └── globals.scss</code></pre>
+</div>
+
+      <h2 id="step-by-step">手順</h2>
+      <p>作業はプロジェクトのディレクトリで行います。ステップ 3 以外は、開発サーバー（<code>npm run dev</code>）を起動したまま進めます。</p>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">サーバーコンポーネントがサーバーで動くことを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>src/app/blog/page.tsx</code> には <code>"use client"</code> が書かれていないので、サーバーコンポーネントです。
+            本当にサーバーで実行されているのかを、<code>console.log</code> を一時的に追加して確かめます。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  export default async function BlogPage() {</span><span class="diff-line diff-line--add">+   console.log("[server] BlogPage");</span><span class="diff-line">    const posts = await getPosts();</span></pre>
+</div>
+
+          <p>開発サーバーを起動し、別のターミナルから <code>/blog</code> にアクセスします（ブラウザで <code>http://localhost:3000/blog</code> を開いても構いません）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run dev</span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line">- Local:         http://localhost:3000</span><span class="terminal__line">✓ Ready in 221ms</span><span class="terminal__line">✓ Running next.config.ts took 68ms</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（別のターミナル）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w "GET /blog -&gt; %{http_code}\n" http://localhost:3000/blog</span><span class="terminal__line">GET /blog -&gt; 200</span></pre>
+</div>
+
+          <p><code>npm run dev</code> を実行しているターミナルに、次のように出力されます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run dev 側）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">[server] BlogPage</span><span class="terminal__line"> GET /blog 200 in 1992ms (next.js: 961ms, application-code: 1031ms)</span></pre>
+</div>
+
+          <p>
+            <code>console.log</code> の出力が <code>npm run dev</code> のターミナルに表示されました。ブラウザではなく <code>curl</code> でアクセスしても出力されることから、このコンポーネントがサーバー（Node.js）で実行されていることが分かります。
+            <code>application-code: 1031ms</code> のうち約 1 秒は、02 で入れた <code>delay(1000)</code> の待ち時間です。
+          </p>
+          <p>確認できたら、追加した <code>console.log</code> の行は削除してください。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/blog</code> へのアクセスのたびに、<code>npm run dev</code> のターミナルへ <code>[server] BlogPage</code> が表示されれば成功です。確認後に <code>console.log</code> を削除したことも確かめておきましょう。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">fetch で JSONPlaceholder から記事を取得する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            データ取得の処理は、ページのファイルには書かず、<code>src/features/posts/</code> へ切り出します。
+            プロジェクトの構成規約で「機能単位のまとまりは <code>src/features/&lt;feature&gt;/</code> に置く」と決めているためです。
+            まず、画面で扱う記事の型を定義します。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/posts/types.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export type Post = {
+  id: number;
+  userId: number;
+  slug: string;
+  title: string;
+  body: string;
+};</code></pre>
+</div>
+
+          <p>
+            次に、JSONPlaceholder から記事を取得する関数を作ります。API が返す形（<code>JsonPlaceholderPost</code>）を <code>toPost</code> で画面用の <code>Post</code> に変換し、
+            API の <code>id</code> を動的ルート <code>[slug]</code> の値として使います。
+            応答が失敗（<code>res.ok</code> が <code>false</code>）のときは例外を投げます。この例外はステップ 6 で <code>error.tsx</code> が受け止めます。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/posts/api/fetchPosts.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import type { Post } from "../types";
+
+const API_BASE = "https://jsonplaceholder.typicode.com";
+
+type JsonPlaceholderPost = {
+  id: number;
+  userId: number;
+  title: string;
+  body: string;
+};
+
+function toPost(raw: JsonPlaceholderPost): Post {
+  return {
+    id: raw.id,
+    userId: raw.userId,
+    // JSONPlaceholder の id をそのまま動的ルート [slug] の値として使う。
+    slug: String(raw.id),
+    title: raw.title,
+    body: raw.body,
+  };
+}
+
+export async function fetchPosts(): Promise&lt;Post[]&gt; {
+  const res = await fetch(`${API_BASE}/posts?_limit=5`);
+
+  if (!res.ok) {
+    throw new Error(`記事一覧の取得に失敗しました (status: ${res.status})`);
+  }
+
+  const posts: JsonPlaceholderPost[] = await res.json();
+
+  return posts.map(toPost);
+}
+
+export async function fetchPost(id: string): Promise&lt;Post | null&gt; {
+  const res = await fetch(`${API_BASE}/posts/${id}`);
+
+  if (res.status === 404) {
+    return null;
+  }
+
+  if (!res.ok) {
+    throw new Error(`記事の取得に失敗しました (status: ${res.status})`);
+  }
+
+  const post: JsonPlaceholderPost = await res.json();
+
+  return toPost(post);
+}</code></pre>
+</div>
+
+          <p>
+            ここで <code>fetch</code> に渡しているのは、ブラウザと同じ標準の <code>fetch</code> です。サーバーコンポーネントは <code>async</code> 関数にできるので、<code>await fetchPosts()</code> のように書くだけで取得が終わるまで待てます。
+          </p>
+          <p>続いて、<code>_data/posts.ts</code> を使っている箇所を置き換えます。消す前に、どこから参照されているかを <code>grep</code> で洗い出します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rn "_data/posts" src</span><span class="terminal__line">src/app/blog/layout.tsx:2:import { POSTS } from "./_data/posts";</span><span class="terminal__line">src/app/blog/page.tsx:2:import { getPosts } from "./_data/posts";</span><span class="terminal__line">src/app/blog/[slug]/page.tsx:2:import { POSTS, getPost } from "../_data/posts";</span></pre>
+</div>
+
+          <p>参照は 3 か所です。一覧ページから順に置き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import Link from "next/link";</span><span class="diff-line diff-line--remove">- import { getPosts } from "./_data/posts";</span><span class="diff-line diff-line--add">+ import { fetchPosts } from "@/features/posts/api/fetchPosts";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line"> </span><span class="diff-line">  export default async function BlogPage() {</span><span class="diff-line diff-line--remove">-   const posts = await getPosts();</span><span class="diff-line diff-line--add">+   const posts = await fetchPosts();</span></pre>
+</div>
+
+          <p>
+            詳細ページも置き換えます。<code>generateStaticParams</code> の中でも <code>fetchPosts()</code> を <code>await</code> するので、関数に <code>async</code> を付けます。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/[slug]/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import { notFound } from "next/navigation";</span><span class="diff-line diff-line--remove">- import { POSTS, getPost } from "../_data/posts";</span><span class="diff-line diff-line--add">+ import { fetchPost, fetchPosts } from "@/features/posts/api/fetchPosts";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- export function generateStaticParams() {</span><span class="diff-line diff-line--remove">-   return POSTS.map((post) =&gt; ({ slug: post.slug }));</span><span class="diff-line diff-line--add">+ export async function generateStaticParams() {</span><span class="diff-line diff-line--add">+   const posts = await fetchPosts();</span><span class="diff-line diff-line--add">+   return posts.map((post) =&gt; ({ slug: post.slug }));</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  export default async function BlogPostPage({</span><span class="diff-line">    params,</span><span class="diff-line">  }: PageProps&lt;"/blog/[slug]"&gt;) {</span><span class="diff-line">    const { slug } = await params;</span><span class="diff-line diff-line--remove">-   const post = await getPost(slug);</span><span class="diff-line diff-line--add">+   const post = await fetchPost(slug);</span><span class="diff-line"> </span><span class="diff-line">    if (!post) {</span><span class="diff-line">      notFound();</span><span class="diff-line">    }</span></pre>
+</div>
+
+          <p>
+            最後にサイドバーの <code>layout.tsx</code> です。02 では遅延なしの <code>POSTS</code> 配列を直接参照していました。
+            <code>fetchPosts()</code> を <code>await</code> するため、<code>BlogLayout</code> も <code>async</code> 関数にします。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/layout.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import Link from "next/link";</span><span class="diff-line diff-line--remove">- import { POSTS } from "./_data/posts";</span><span class="diff-line diff-line--add">+ import { fetchPosts } from "@/features/posts/api/fetchPosts";</span><span class="diff-line">  import styles from "./layout.module.scss";</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- export default function BlogLayout({ children }: LayoutProps&lt;"/blog"&gt;) {</span><span class="diff-line diff-line--add">+ export default async function BlogLayout({ children }: LayoutProps&lt;"/blog"&gt;) {</span><span class="diff-line diff-line--add">+   const posts = await fetchPosts();</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">    return (</span><span class="diff-line">      &lt;div className={styles.layout}&gt;</span><span class="diff-line">        &lt;aside className={styles.sidebar}&gt;</span><span class="diff-line">          &lt;p className={styles.sidebarTitle}&gt;記事一覧&lt;/p&gt;</span><span class="diff-line">          &lt;ul className={styles.sidebarList}&gt;</span><span class="diff-line diff-line--remove">-           {POSTS.map((post) =&gt; (</span><span class="diff-line diff-line--add">+           {posts.map((post) =&gt; (</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>layout.tsx</code> の置き換えを忘れやすい</p>
+              <p>
+                <code>_data/posts.ts</code> を参照しているのは一覧と詳細のページだけではありません。サイドバーの <code>layout.tsx</code> を置き換え忘れたまま <code>_data/</code> を削除すると、import エラーになります。
+                ファイルを消す前に、上のように <code>grep</code> で参照箇所をすべて洗い出してください。
+              </p>
+            </div>
+          </div>
+
+          <p>3 か所とも置き換えたら、不要になった <code>_data/</code> を削除します。一緒に 1 秒の <code>delay()</code> もなくなります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -rf src/app/blog/_data</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              ブラウザで <code>http://localhost:3000/blog</code> を開き、サイドバーと一覧にタイトルが 5 件並べば成功です。タイトルは「sunt aut facere repellat provident…」のようなラテン語風の文です。
+              タイトルをクリックすると <code>/blog/1</code> のような URL の詳細ページが表示されます。ページを読み込んでいる間は、02 で作った「記事を読み込み中...」が表示されます。
+            </p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/blog</span><span class="terminal__line">200</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/blog/1</span><span class="terminal__line">200</span></pre>
+</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">キャッシュの挙動をビルド結果で確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            Next.js 16 の <code>fetch</code> は、オプションによって「いつ外部 API にアクセスするか」が変わります。その違いは、<code>npm run build</code> の <code>Route (app)</code> の一覧に表れます。
+            まず、ステップ 2 のようにオプションを省略したときの動作を押さえておきます。
+          </p>
+          <ul>
+            <li><code>npm run dev</code>（開発中）では、リクエストのたびに外部 API から取得します。</li>
+            <li><code>npm run build</code> では、ビルド中に 1 回だけ取得し、その結果を静的な HTML として保存します（<code>○ Static</code>）。ただし、そのルートで <code>cookies()</code>・<code>headers()</code> などのリクエスト時に決まる API を使っている場合は、リクエストのたびに取得します。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">「オプション省略 = 毎回取得する動的なページ」ではない</p>
+              <p>
+                開発中は毎回取得されるため、オプションを省略すると本番でも常に最新のデータを取りに行くと思いがちです。
+                実際には、<code>/blog</code> のようにリクエスト時に決まる入力を使わないルートでは、ビルド時に 1 回だけ取得した内容が静的な HTML に焼き込まれます。この場合のビルド結果は、次に試す <code>cache: "force-cache"</code> と同じです。
+                リクエストごとに取得する動的なページ（<code>ƒ Dynamic</code>）にしたいときは、<code>cache: "no-store"</code> を明示します。この挙動は、Next.js 同梱ドキュメントの <code>fetch</code> の API リファレンスに記載されています。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            ここからはオプションだけを変えてビルドを 3 回実行し、結果を比べます。開発サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めてから進めてください。
+            ビルドはいずれも次のコマンドで実行します。前回の結果が残らないよう、<code>.next</code> を消してからビルドします。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -rf .next &amp;&amp; npm run build</span></pre>
+</div>
+
+          <p>以下の出力は、<code>Route (app)</code> の一覧だけを抜粋しています。</p>
+
+          <p><strong>パターン 1: <code>cache: "no-store"</code>（リクエストごとに取得）</strong></p>
+          <p><code>fetchPosts</code> の中の <code>fetch</code> を、一時的に次のように書き換えます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/posts/api/fetchPosts.ts（fetchPosts 内・一時的な変更）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">const res = await fetch(`${API_BASE}/posts?_limit=5`, { cache: "no-store" });</code></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">npm run build（cache: "no-store"）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">├ ○ /_not-found</span><span class="terminal__line">├ ○ /about</span><span class="terminal__line">├ ƒ /blog</span><span class="terminal__line">├ ƒ /blog/[slug]</span><span class="terminal__line">└ ○ /contact</span><span class="terminal__line"></span><span class="terminal__line">○  (Static)   prerendered as static content</span><span class="terminal__line">ƒ  (Dynamic)  server-rendered on demand</span></pre>
+</div>
+
+          <p>
+            <code>/blog</code> と <code>/blog/[slug]</code> が <code>ƒ (Dynamic)</code> になりました。<code>no-store</code> はリクエストのたびに取得するため、ビルド時に内容を確定できません。
+            <code>generateStaticParams</code> があっても、記事ごとのページは事前に生成されません。
+            <code>/blog/[slug]</code> も動的になるのは、サイドバーの <code>layout.tsx</code> が <code>fetchPosts()</code> を呼んでいるためです。
+          </p>
+
+          <p><strong>パターン 2: <code>cache: "force-cache"</code>（キャッシュを使う）</strong></p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/posts/api/fetchPosts.ts（fetchPosts 内・一時的な変更）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">const res = await fetch(`${API_BASE}/posts?_limit=5`, { cache: "force-cache" });</code></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">npm run build（cache: "force-cache"）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">├ ○ /_not-found</span><span class="terminal__line">├ ○ /about</span><span class="terminal__line">├ ○ /blog</span><span class="terminal__line">├   /blog/[slug]</span><span class="terminal__line">│ ├ ● /blog/1</span><span class="terminal__line">│ ├ ● /blog/2</span><span class="terminal__line">│ ├ ● /blog/3</span><span class="terminal__line">│ └ ● [+2 more paths]</span><span class="terminal__line">└ ○ /contact</span><span class="terminal__line"></span><span class="terminal__line">○  (Static)  prerendered as static content</span><span class="terminal__line">●  (SSG)     prerendered as static HTML (uses generateStaticParams)</span></pre>
+</div>
+
+          <p>
+            <code>/blog</code> が <code>○ (Static)</code> に戻り、<code>/blog/[slug]</code> は <code>generateStaticParams</code> が返した値ごとに <code>● (SSG)</code> として生成されています。
+            JSONPlaceholder から取得した 5 件のうち、3 件が表示され、残りは <code>[+2 more paths]</code> にまとめられています。
+          </p>
+
+          <p><strong>パターン 3（最終形）: <code>next: { revalidate: 60 }</code>（60 秒ごとに再生成）</strong></p>
+          <p>
+            最後に、<code>fetchPosts</code> と <code>fetchPost</code> の両方に <code>next: { revalidate: 60 }</code> を指定します。
+            以下の diff はステップ 2 の状態（<code>fetch</code> にオプションを渡していない状態）からの差分です。パターン 1・2 の一時的な変更は、この形に置き換えてください。これを最終形として残します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/features/posts/api/fetchPosts.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+ /**</span><span class="diff-line diff-line--add">+  * 記事一覧を取得する。</span><span class="diff-line diff-line--add">+  * `next.revalidate: 60` により ISR（Incremental Static Regeneration）になる:</span><span class="diff-line diff-line--add">+  * ビルド時に一度取得した結果を最大 60 秒間キャッシュして返し、</span><span class="diff-line diff-line--add">+  * 60 秒経過後の最初のアクセスをきっかけにバックグラウンドで再取得・再生成する。</span><span class="diff-line diff-line--add">+  */</span><span class="diff-line">  export async function fetchPosts(): Promise&lt;Post[]&gt; {</span><span class="diff-line diff-line--remove">-   const res = await fetch(`${API_BASE}/posts?_limit=5`);</span><span class="diff-line diff-line--add">+   const res = await fetch(`${API_BASE}/posts?_limit=5`, {</span><span class="diff-line diff-line--add">+     next: { revalidate: 60 },</span><span class="diff-line diff-line--add">+   });</span><span class="diff-line"> </span><span class="diff-line">    if (!res.ok) {</span><span class="diff-line">      throw new Error(`記事一覧の取得に失敗しました (status: ${res.status})`);</span><span class="diff-line">    }</span><span class="diff-line"> </span><span class="diff-line">    const posts: JsonPlaceholderPost[] = await res.json();</span><span class="diff-line"> </span><span class="diff-line">    return posts.map(toPost);</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ /**</span><span class="diff-line diff-line--add">+  * 記事を 1 件取得する。存在しない id の場合は null を返す（呼び出し側で notFound() する）。</span><span class="diff-line diff-line--add">+  */</span><span class="diff-line">  export async function fetchPost(id: string): Promise&lt;Post | null&gt; {</span><span class="diff-line diff-line--remove">-   const res = await fetch(`${API_BASE}/posts/${id}`);</span><span class="diff-line diff-line--add">+   const res = await fetch(`${API_BASE}/posts/${id}`, {</span><span class="diff-line diff-line--add">+     next: { revalidate: 60 },</span><span class="diff-line diff-line--add">+   });</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">npm run build（next: { revalidate: 60 }）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">Route (app)            Revalidate  Expire</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">├ ○ /_not-found</span><span class="terminal__line">├ ○ /about</span><span class="terminal__line">├ ƒ /api/posts</span><span class="terminal__line">├ ○ /blog                      1m      1y</span><span class="terminal__line">├   /blog/[slug]</span><span class="terminal__line">│ ├ ● /blog/1                  1m      1y</span><span class="terminal__line">│ ├ ● /blog/2                  1m      1y</span><span class="terminal__line">│ ├ ● /blog/3                  1m      1y</span><span class="terminal__line">│ └ ● [+2 more paths]</span><span class="terminal__line">└ ○ /contact</span><span class="terminal__line"></span><span class="terminal__line">○  (Static)   prerendered as static content</span><span class="terminal__line">●  (SSG)      prerendered as static HTML (uses generateStaticParams)</span><span class="terminal__line">ƒ  (Dynamic)  server-rendered on demand</span></pre>
+</div>
+
+          <p>
+            パターン 2 との違いは、<code>Revalidate</code> と <code>Expire</code> の列が加わったことです。<code>Revalidate</code> が <code>1m</code> のページは、ビルド時に生成した HTML を 60 秒間は使い回します。
+            60 秒を過ぎた後の最初のアクセスをきっかけに、裏側で API から取得し直してページを作り直します。この仕組みを ISR（Incremental Static Regeneration）と呼びます。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>ƒ /api/posts</code> の行について</p>
+              <p>パターン 3 の出力は、レッスンをすべて終えた状態で取得したものです。<code>ƒ /api/posts</code> はステップ 5 で作る Route Handler の行で、この時点ではまだ表示されません。</p>
+            </div>
+          </div>
+
+          <table>
+            <thead>
+              <tr><th><code>fetch</code> のオプション</th><th><code>/blog</code> のビルド結果</th><th>外部 API にアクセスするタイミング</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>省略</td><td><code>○ Static</code></td><td>ビルド時に 1 回（リクエスト時の API を使わない場合）</td></tr>
+              <tr><td><code>cache: "no-store"</code></td><td><code>ƒ Dynamic</code></td><td>リクエストのたび</td></tr>
+              <tr><td><code>cache: "force-cache"</code></td><td><code>○ Static</code></td><td>ビルド時に 1 回</td></tr>
+              <tr><td><code>next: { revalidate: 60 }</code></td><td><code>○ Static</code>（Revalidate <code>1m</code>）</td><td>ビルド時と、60 秒経過後の最初のアクセス時</td></tr>
+            </tbody>
+          </table>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              3 回のビルドで、<code>/blog</code> の記号が <code>ƒ</code> → <code>○</code> → <code>○</code>（<code>Revalidate</code> 列が <code>1m</code>）と変われば成功です。
+              最後に <code>fetchPosts.ts</code> が <code>next: { revalidate: 60 }</code> の形になっていることを確かめ、<code>npm run dev</code> で開発サーバーを起動し直してください。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">Promise.all で並列に取得し、Suspense で一部を後から表示する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            一覧ページに、記事ごとの著者名と、ページ下部の「投稿者一覧」を追加します。ユーザー情報は JSONPlaceholder の <code>/users</code> から取得します。
+            記事と同じように、<code>src/features/users/</code> に型と取得関数を作ります。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/users/types.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export type User = {
+  id: number;
+  name: string;
+  username: string;
+};</code></pre>
+</div>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/users/api/fetchUsers.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import type { User } from "../types";
+
+const API_BASE = "https://jsonplaceholder.typicode.com";
+
+type JsonPlaceholderUser = {
+  id: number;
+  name: string;
+  username: string;
+};
+
+/**
+ * ユーザー一覧を取得する。オプション省略（auto no cache）。
+ * Data Cache は使わないが、静的ルートではビルド時に 1 回だけ取得される。
+ */
+export async function fetchUsers(): Promise&lt;User[]&gt; {
+  const res = await fetch(`${API_BASE}/users`);
+
+  if (!res.ok) {
+    throw new Error(`ユーザー一覧の取得に失敗しました (status: ${res.status})`);
+  }
+
+  const users: JsonPlaceholderUser[] = await res.json();
+
+  return users.map((user) =&gt; ({
+    id: user.id,
+    name: user.name,
+    username: user.username,
+  }));
+}</code></pre>
+</div>
+
+          <p>
+            次に、投稿者一覧を表示する <code>AuthorList</code> を、<code>blog</code> 専用の部品として <code>_components/</code> に作ります。
+            コンポーネント自体を <code>async</code> 関数にして、中で <code>fetchUsers()</code> を <code>await</code> します。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/blog/_components/AuthorList/AuthorList.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { fetchUsers } from "@/features/users/api/fetchUsers";
+import styles from "./AuthorList.module.scss";
+
+// async コンポーネント。fetch が終わるまでの間、page.tsx 側の Suspense fallback が表示され、
+// 準備できたこの部分だけが後からストリーミングで差し込まれる。
+export async function AuthorList() {
+  const users = await fetchUsers();
+
+  return (
+    &lt;aside className={styles.authors}&gt;
+      &lt;p className={styles.authorsTitle}&gt;投稿者一覧&lt;/p&gt;
+      &lt;ul className={styles.authorsList}&gt;
+        {users.map((user) =&gt; (
+          &lt;li key={user.id} className={styles.authorsItem}&gt;
+            {user.name}（@{user.username}）
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+    &lt;/aside&gt;
+  );
+}</code></pre>
+</div>
+
+          <p>02 の <code>Header</code> と同じように、<code>index.ts</code> から再エクスポートします。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/blog/_components/AuthorList/index.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export { AuthorList } from "./AuthorList";</code></pre>
+</div>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/app/blog/_components/AuthorList/AuthorList.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.authors {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e5e5e5;
+}
+
+.authorsTitle {
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.authorsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.authorsItem {
+  color: #666;
+  font-size: 0.875rem;
+}</code></pre>
+</div>
+
+          <p>一覧ページを次の内容に書き換えます（全文）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/blog/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import Link from "next/link";
+import { Suspense } from "react";
+import { fetchPosts } from "@/features/posts/api/fetchPosts";
+import { fetchUsers } from "@/features/users/api/fetchUsers";
+import { AuthorList } from "./_components/AuthorList";
+import styles from "./page.module.scss";
+
+export default async function BlogPage() {
+  // 投稿と著者を直列に await すると 2 回分の待ち時間がかかる。
+  // Promise.all で同時に投げて、両方の完了を 1 回の待ち時間にまとめる。
+  const [posts, users] = await Promise.all([fetchPosts(), fetchUsers()]);
+
+  const authorNameById = new Map(users.map((user) =&gt; [user.id, user.name]));
+
+  return (
+    &lt;div&gt;
+      &lt;h1 className={styles.title}&gt;Blog&lt;/h1&gt;
+      &lt;ul className={styles.list}&gt;
+        {posts.map((post) =&gt; (
+          &lt;li key={post.slug} className={styles.item}&gt;
+            &lt;Link href={`/blog/${post.slug}`} className={styles.itemTitle}&gt;
+              {post.title}
+            &lt;/Link&gt;
+            &lt;p className={styles.itemAuthor}&gt;
+              by {authorNameById.get(post.userId) ?? "unknown"}
+            &lt;/p&gt;
+            &lt;p className={styles.itemBody}&gt;{post.body}&lt;/p&gt;
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+
+      {/*
+        AuthorList は fetchUsers() を内部で再度呼んでいるが、
+        同一レンダーパス中の同一 URL・オプションの GET fetch は Next.js が自動的にメモ化するため、
+        実際に発生する外部リクエストは 1 回だけになる。
+        Suspense でストリーミングされる境界であることを示すため、あえて別コンポーネントに切り出している。
+      */}
+      &lt;Suspense fallback={&lt;p className={styles.authorsLoading}&gt;投稿者一覧を読み込み中...&lt;/p&gt;}&gt;
+        &lt;AuthorList /&gt;
+      &lt;/Suspense&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+</div>
+
+          <p>ポイントは 2 つです。</p>
+          <ul>
+            <li>
+              <strong>並列取得</strong>: <code>await fetchPosts()</code> と <code>await fetchUsers()</code> を順に書くと、1 つ目の応答を待ってから 2 つ目を送るため、待ち時間が 2 回分かかります。
+              <code>Promise.all</code> で 2 つを同時に送れば、待ち時間は遅いほう 1 回分で済みます。
+            </li>
+            <li>
+              <strong>Suspense</strong>: <code>&lt;Suspense&gt;</code> で包んだ <code>AuthorList</code> は、データの準備ができるまで <code>fallback</code> の「投稿者一覧を読み込み中...」が表示されます。準備ができると、その部分だけが後から差し込まれます（ストリーミング）。
+            </li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>&lt;Suspense&gt;</code> と <code>loading.tsx</code> の使い分け</p>
+              <p>
+                <code>loading.tsx</code> は、ルートセグメント（ここでは <code>/blog</code> 配下）のページ全体を 1 つのフォールバックで覆います。ページ全体の準備ができるまで、中身はまとめて表示されません。
+                <code>&lt;Suspense&gt;</code> は、ページの中の特定の部分だけを囲む境界です。囲んだ部分が待っている間も、ページのほかの部分（記事一覧など）は先に表示されます。
+              </p>
+              <p>
+                両方を併用できます。ページを移動した直後の反応をよくしたいときは <code>loading.tsx</code>、ページ内で「すぐ見せたい部分」と「少し待たせてもよい部分」を分けたいときは <code>&lt;Suspense&gt;</code> を使います。
+                今回は、記事一覧はすぐ見せ、投稿者一覧は後から表示してもよい、という想定で <code>AuthorList</code> だけを <code>&lt;Suspense&gt;</code> で包んでいます。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">同じ <code>fetch</code> を何度呼んでも、リクエストは 1 回にまとまる</p>
+              <p>
+                <code>page.tsx</code> と <code>AuthorList</code> はどちらも <code>fetchUsers()</code> を呼んでいます。<code>layout.tsx</code> と <code>page.tsx</code> も、どちらも <code>fetchPosts()</code> を呼んでいます。
+                1 回の描画の中で、同じ URL・同じオプションの <code>GET</code> の <code>fetch</code> は自動的にまとめられ（メモ化）、外部 API へのリクエストは 1 回しか送られません。
+                そのため、データが必要なコンポーネントの中で、それぞれ取得関数を呼んで構いません。
+              </p>
+              <p>
+                このメモ化は 1 回の描画の間だけ有効で、ステップ 3 の <code>revalidate</code> などによるキャッシュ（リクエストをまたいで保持される）とは別の仕組みです。
+                なお、この例では <code>page.tsx</code> が先に <code>fetchUsers()</code> の完了を待っているため、<code>AuthorList</code> のフォールバックはほとんど目に見えない場合があります。ストリーミングの境界の書き方を示すために、あえて別コンポーネントに分けています。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>async</code> コンポーネントはサーバーコンポーネントの中でだけ使える</p>
+              <p>
+                <code>AuthorList</code> のような <code>async function</code> のコンポーネントは、サーバーコンポーネントの JSX の中では <code>&lt;AuthorList /&gt;</code> とそのまま書けます。
+                ただし、<code>"use client"</code> を付けたクライアントコンポーネントから import して使うことはできません。
+              </p>
+            </div>
+          </div>
+
+          <p>最後に、著者名と読み込み中表示のスタイルを <code>page.module.scss</code> に追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/page.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  .itemTitle {</span><span class="diff-line">    font-weight: 700;</span><span class="diff-line">    color: #0070f3;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ .itemAuthor {</span><span class="diff-line diff-line--add">+   color: #888;</span><span class="diff-line diff-line--add">+   font-size: 0.875rem;</span><span class="diff-line diff-line--add">+   margin-top: 0.25rem;</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  .itemBody {</span><span class="diff-line">    color: #666;</span><span class="diff-line">    margin-top: 0.25rem;</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ .authorsLoading {</span><span class="diff-line diff-line--add">+   color: #888;</span><span class="diff-line diff-line--add">+   margin-top: 2rem;</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>/blog</code> の各記事の下に「by」に続けて著者名が表示され、ページ下部に「投稿者一覧」が並べば成功です。
+              ターミナルからは、記事の本文と著者名がどちらもサーバーで生成された HTML に含まれていることを確かめられます。
+              JSONPlaceholder の記事 5 件はすべて <code>userId: 1</code>（Leanne Graham）なので、「by Leanne Graham」が 5 件分含まれているはずです。
+            </p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/blog</span><span class="terminal__line">200</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s http://localhost:3000/blog -o /tmp/blog.html</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -o "Bret\|Antonette\|Samantha" /tmp/blog.html | sort -u</span><span class="terminal__line">Antonette</span><span class="terminal__line">Bret</span><span class="terminal__line">Samantha</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -c "Leanne Graham" /tmp/blog.html</span><span class="terminal__line">6</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -o "sunt aut facere" /tmp/blog.html | head -1</span><span class="terminal__line">sunt aut facere</span></pre>
+</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">Route Handler で /api/posts を公開する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            Route Handler は、<code>route.ts</code> に HTTP メソッド名（<code>GET</code>・<code>POST</code> など）の関数を書いて、Web API のエンドポイントを作る仕組みです。
+            <code>page.tsx</code> と同じくフォルダ構成が URL になり、<code>src/app/api/posts/route.ts</code> は <code>/api/posts</code> になります。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/api/posts/route.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { NextResponse } from "next/server";
+
+// Route Handler。ブラウザや curl など、サーバーコンポーネントの外側から呼ばれる
+// 独立した Web API エンドポイントとして動く。サーバーコンポーネントから直接この URL を
+// fetch する必要はない（fetchPosts() は JSONPlaceholder を直接叩いている）。
+export async function GET() {
+  const res = await fetch("https://jsonplaceholder.typicode.com/posts?_limit=5");
+
+  if (!res.ok) {
+    return NextResponse.json(
+      { error: `記事一覧の取得に失敗しました (status: ${res.status})` },
+      { status: res.status },
+    );
+  }
+
+  const posts = await res.json();
+
+  return NextResponse.json({ posts });
+}</code></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">なぜ <code>fetchPosts</code> は <code>/api/posts</code> を呼ばないのか</p>
+              <p>
+                Route Handler は、ブラウザの JavaScript・モバイルアプリ・<code>curl</code> など、Next.js のコンポーネントの外にいるクライアントへ API を公開するためのものです。
+                サーバーコンポーネントはもともとサーバー上で動いているので、外部 API やデータベースに直接アクセスできます。自分の Route Handler を経由すると、同じサーバーの中で HTTP リクエストを 1 回余分に往復させることになります。
+                そのため、<code>fetchPosts</code> は JSONPlaceholder を直接呼んでいます。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>curl</code> で <code>/api/posts</code> にアクセスし、<code>{"posts":[...]}</code> の形の JSON が返れば成功です（出力は先頭 400 バイトのみ）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s http://localhost:3000/api/posts | head -c 400</span><span class="terminal__line">{"posts":[{"userId":1,"id":1,"title":"sunt aut facere repellat provident occaecati excepturi optio reprehenderit","body":"quia et suscipit\nsuscipit recusandae consequuntur expedita et cum\nreprehenderit molestiae ut ut quas totam\nnostrum rerum est autem sunt rem eveniet architecto"},{"userId":1,"id":2,"title":"qui est esse","body":"est rerum tempore vitae\nsequi sint nihil reprehenderit dolor be</span></pre>
+</div>
+            <p><code>npm run build</code> の一覧では、ステップ 3 のパターン 3 に示したとおり <code>ƒ /api/posts</code>（動的）として表示されます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">error.tsx で取得の失敗を扱う</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            外部 API は、ネットワークの不調や相手側の障害で失敗することがあります。<code>fetchPosts</code> と <code>fetchUsers</code> は、失敗時に例外を投げるように書いてあります。
+            その例外を受け止めて代わりの画面を表示するのが <code>error.tsx</code> です。<code>src/app/blog/error.tsx</code> を置くと、同じ階層の <code>page.tsx</code>（と、その下の入れ子のページ）で発生したエラーをここで表示します。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/blog/error.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client"; // error.tsx はエラーバウンダリなので必ず Client Component にする
+
+import { useEffect } from "react";
+import styles from "./error.module.scss";
+
+export default function BlogError({
+  error,
+  reset,
+}: {
+  error: Error &amp; { digest?: string };
+  reset: () =&gt; void;
+}) {
+  useEffect(() =&gt; {
+    // エラーレポーティングサービスに送る想定。ここでは開発用にログのみ。
+    console.error(error);
+  }, [error]);
+
+  return (
+    &lt;div className={styles.error}&gt;
+      &lt;p className={styles.errorTitle}&gt;記事の読み込みに失敗しました&lt;/p&gt;
+      &lt;p className={styles.errorMessage}&gt;{error.message}&lt;/p&gt;
+      &lt;button type="button" className={styles.errorButton} onClick={() =&gt; reset()}&gt;
+        もう一度読み込む
+      &lt;/button&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+</div>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/app/blog/error.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.error {
+  padding: 1.5rem;
+  border: 1px solid #f0b0b0;
+  border-radius: 4px;
+  background: #fff5f5;
+}
+
+.errorTitle {
+  font-weight: 700;
+  color: #c0392b;
+  margin-bottom: 0.5rem;
+}
+
+.errorMessage {
+  color: #666;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+.errorButton {
+  border: 1px solid #c0392b;
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  background: transparent;
+  color: #c0392b;
+  cursor: pointer;
+
+  &amp;:hover {
+    background: #c0392b;
+    color: #fff;
+  }
+}</code></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>error.tsx</code> には <code>"use client"</code> が必須</p>
+              <p>
+                <code>error.tsx</code> は React のエラーバウンダリとして動きます。エラーバウンダリは React の仕組み上クライアント側でしか動かないため、先頭の <code>"use client"</code> を省略するとエラーになります。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">壊すなら <code>fetchPosts</code> ではなく <code>fetchUsers</code></p>
+              <p>
+                <code>error.tsx</code> は同じ階層の <code>layout.tsx</code> を包みません（包む向きは逆で、<code>layout.tsx</code> が <code>error.tsx</code> を包みます）。
+                <code>fetchPosts</code> はサイドバーを描画する <code>src/app/blog/layout.tsx</code> でも呼ばれているため、こちらを壊すと <code>blog/error.tsx</code> では捕まらず、このレッスンでは用意していない <code>global-error.tsx</code>（Next.js 既定のエラー画面）まで例外が伝播します。
+                <code>blog/error.tsx</code> が意図どおり効くことを確かめるには、<code>src/app/blog/page.tsx</code> だけが呼んでいる <code>fetchUsers</code> を壊します。
+              </p>
+            </div>
+          </div>
+
+          <p>動作を確かめるため、<code>fetchUsers</code> の <code>API_BASE</code> を存在しない URL に一時的に書き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/features/users/api/fetchUsers.ts（動作確認のための一時的な変更）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">- const API_BASE = "https://jsonplaceholder.typicode.com";</span><span class="diff-line diff-line--add">+ const API_BASE = "https://jsonplaceholder.typicode.com/broken";</span></pre>
+</div>
+
+          <div class="callout callout--danger">
+            <span class="callout__icon" aria-hidden="true">🚫</span>
+            <div class="callout__body">
+              <p class="callout__title">URL を壊すのは <code>npm run dev</code> の上だけ。ビルドの前に必ず戻す</p>
+              <p>
+                <code>/blog</code> は <code>○ (Static)</code> なので、<code>npm run build</code> はビルド時に <code>fetchUsers()</code> を実行してこのページをプリレンダーしようとします。URL を壊したままビルドすると、プリレンダー中に例外が発生してビルド自体が失敗します。
+                この確認は開発サーバーの上だけで行い、終わったら必ず元の URL に戻してください。
+              </p>
+            </div>
+          </div>
+
+          <p>開発サーバーを起動したまま、<code>/blog</code> にアクセスします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/blog</span><span class="terminal__line">200</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run dev 側）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">⨯ Error: ユーザー一覧の取得に失敗しました (status: 404)</span><span class="terminal__line">    at fetchUsers (src/features/users/api/fetchUsers.ts:19:11)</span><span class="terminal__line">    at async BlogPage (src/app/blog/page.tsx:11:26)</span><span class="terminal__line">  ...</span><span class="terminal__line"> GET /blog 200 in 623ms (next.js: 4ms, application-code: 619ms)</span></pre>
+</div>
+
+          <p>
+            ステータスコードは <code>200</code> のままです。<code>fetchUsers</code> は <code>blog/error.tsx</code> が包む <code>page.tsx</code> 側だけが呼んでいるため、<code>layout.tsx</code> の描画は成功し、外側の HTML はいったん配信されてから、<code>page.tsx</code> の例外がストリーミングで <code>blog/error.tsx</code> に差し替えられます。
+            開発サーバーのターミナルには <code>fetchUsers</code> と <code>BlogPage</code> のスタックトレースが表示され、<code>BlogLayout</code> は現れません。これが、<code>fetchPosts</code> ではなく <code>fetchUsers</code> を壊すべき理由の裏付けです。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>curl</code> では <code>error.tsx</code> の表示までは確かめられない</p>
+              <p>
+                <code>error.tsx</code> の見出しやボタンは、ブラウザで JavaScript が実行されてから描画されます。今回はステータスコードも <code>200</code> のままなので、<code>curl</code> だけでは失敗にすら気づけません。
+                <code>curl</code> で確かめられるのは開発サーバーのログ（スタックトレースの発生元）までです。画面の表示は必ずブラウザで確認してください。
+              </p>
+            </div>
+          </div>
+
+          <p>確認が終わったら、<code>API_BASE</code> を元に戻します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/features/users/api/fetchUsers.ts（元に戻す）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">- const API_BASE = "https://jsonplaceholder.typicode.com/broken";</span><span class="diff-line diff-line--add">+ const API_BASE = "https://jsonplaceholder.typicode.com";</span></pre>
+</div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>reset</code> と <code>retry</code></p>
+              <p>
+                この教材では、エラー状態を消して中身を描画し直す <code>reset()</code> をボタンに割り当てています。
+                Next.js 16.3 からは、中身のデータを取得し直してから描画し直す <code>retry()</code> が正式な API になり、公式ドキュメントでは多くの場合 <code>retry()</code> を使うよう勧めています。
+                実際のアプリで「もう一度読み込む」ボタンを作るときは、<code>retry()</code> を検討してください。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">本番環境ではエラーメッセージが表示されない</p>
+              <p>
+                開発中は <code>error.message</code> に元の例外のメッセージが入るため、画面に「ユーザー一覧の取得に失敗しました (status: 404)」と表示されます。
+                本番ビルドでは、機密情報の漏えいを防ぐため、サーバーコンポーネントから渡されるエラーは汎用のメッセージと識別子（<code>error.digest</code>）に置き換えられます。この挙動は、Next.js 同梱ドキュメントの <code>error.js</code> の API リファレンスに記載されています。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              URL を壊した状態でブラウザから <code>http://localhost:3000/blog</code> を開き、「記事の読み込みに失敗しました」と「もう一度読み込む」ボタンが表示されれば成功です。
+              <code>curl</code> のステータスコードは <code>200</code> のままなので、代わりに開発サーバーのログで <code>fetchUsers</code> / <code>BlogPage</code> のスタックトレースが出ることを確かめます。最後に <code>fetchUsers.ts</code> の <code>API_BASE</code> が <code>https://jsonplaceholder.typicode.com</code> に戻り、<code>/blog</code> が再び記事一覧と投稿者一覧を表示することを確認してください。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="build">本番ビルドと lint で最終確認する</h2>
+      <p>
+        <code>API_BASE</code> を元に戻したことを確かめてから、開発サーバーを止めて <code>npm run build</code> と <code>npm run lint</code> を実行します。
+        ビルドの <code>Route (app)</code> の一覧が、ステップ 3 のパターン 3 と同じになれば完成です。<code>npm run build</code> と <code>npm run lint</code> がどちらもエラーが出ずに終われば OK です。
+      </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run build）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">Route (app)            Revalidate  Expire</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">├ ○ /_not-found</span><span class="terminal__line">├ ○ /about</span><span class="terminal__line">├ ƒ /api/posts</span><span class="terminal__line">├ ○ /blog                      1m      1y</span><span class="terminal__line">├   /blog/[slug]</span><span class="terminal__line">│ ├ ● /blog/1                  1m      1y</span><span class="terminal__line">│ ├ ● /blog/2                  1m      1y</span><span class="terminal__line">│ ├ ● /blog/3                  1m      1y</span><span class="terminal__line">│ └ [+2 more paths]</span><span class="terminal__line">└ ○ /contact</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run lint）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line">&gt; 02-app-router@0.1.0 lint</span><span class="terminal__line">&gt; eslint</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>package.json</code> の <code>name</code> について</p>
+              <p>
+                実行結果に表示されている <code>02-app-router@0.1.0</code> は <code>package.json</code> の <code>name</code> フィールドの値です。
+                このレッスンのプロジェクトを前のレッスンからコピーして作った場合はこのままで問題ありません。動作には影響しません。
+              </p>
+            </div>
+          </div>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">サーバーコンポーネントの <code>console.log</code> が <code>npm run dev</code> のターミナルに出ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>_data/posts.ts</code> の参照を <code>grep</code> で洗い出し、3 か所とも <code>fetchPosts</code> / <code>fetchPost</code> に置き換えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>fetch</code> のオプションを省略したとき、ビルド結果が <code>ƒ Dynamic</code> ではなく <code>○ Static</code> になる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>no-store</code>・<code>force-cache</code>・<code>revalidate: 60</code> のビルド結果の違いを読み取れた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>Promise.all</code> を使うと待ち時間が短くなる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>&lt;Suspense&gt;</code> と <code>loading.tsx</code> の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>/api/posts</code> から JSON が返ることを <code>curl</code> で確かめ、サーバーコンポーネントがこの API を経由しない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">ブラウザで <code>error.tsx</code> の画面を確かめ、<code>fetchUsers.ts</code> の <code>API_BASE</code> を元に戻してからビルドした</label>
+        </li>
+      </ul>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        サーバーコンポーネントの中で <code>fetch</code> を使い、外部 API のデータを表示しました。<code>fetch</code> のオプションでビルド結果が変わること、<code>Promise.all</code> と <code>&lt;Suspense&gt;</code> で待ち時間を扱う方法、Route Handler と <code>error.tsx</code> の役割も確かめました。
+        次の項目では、<code>"use client"</code> を付けたクライアントコンポーネントと、<code>useState</code> などのフックを使った状態管理を学びます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>nextjs/03-server-components</code> の <code>nextjs/03-server-components/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../02-app-router/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">02: App Router の基礎とファイルベースルーティング</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">04: クライアントコンポーネントと状態管理</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
