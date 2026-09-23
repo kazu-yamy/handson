@@ -1,0 +1,1505 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04: クライアントコンポーネントと状態管理 | Next.js ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Next.js</li>
+          <li aria-current="page">04</li>
+        </ol>
+        <h1 class="lesson-title">クライアントコンポーネントと状態管理</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 03 を終え、クリックや入力に反応する画面を Next.js で作りたい人</li>
+          <li class="lesson-meta__item">📋 前提: React のコンポーネントと props、JSX の基本が分かること</li>
+          <li class="lesson-meta__item">🌐 ネットワーク: 03 と同じく外部 API（JSONPlaceholder）に接続できる環境が必要</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../03-server-components/index.html">03: サーバーコンポーネントとデータ取得</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>状態・イベント・ブラウザ API の有無で、サーバーコンポーネントとクライアントコンポーネントを使い分けられる</li>
+          <li><code>"use client"</code> を付けたコンポーネントで <code>useState</code> を使い、クリックや入力に反応する UI を作れる</li>
+          <li>サーバーからクライアントへ渡す props の制約（シリアライズ可能な値だけ）を説明できる</li>
+          <li>「データ取得はサーバー、操作はクライアント」の分担と、<code>children</code> でサーバーコンポーネントを包むパターンを使える</li>
+          <li><code>useEffect</code> でブラウザ API の値を反映し、<code>window is not defined</code> とハイドレーション不一致を避けられる</li>
+          <li><code>useState</code> と <code>useReducer</code> の違いを説明できる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        03 では、サーバーコンポーネントで外部 API のデータを取得して表示しました。ただし、表示した画面はクリックや入力をしても何も変わりません。
+        このレッスンでは、03 のブログに「いいねボタン」「記事の検索」「投稿者一覧の開閉」「テーマ切り替え」を加え、ユーザーの操作に反応する部分をクライアントコンポーネントとして作ります。
+      </p>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">出発点</p>
+              <p>
+                03 で使ったプロジェクトをそのまま使って続けます。03 の完成状態（JSONPlaceholder から記事と投稿者を取得するブログ）がこのレッスンのスタート地点です。
+                作業を始める前に、<code>package.json</code> の <code>name</code> を <code>04-client-components</code> に直しておきます（<code>02-app-router</code> のまま残っている場合があります）。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">使用バージョン</p>
+              <p>Node.js 24.21.0 / npm 11.19.0 / Next.js 16.3.6 / React 19.2.8 / sass 1.105.0 で動作を確認しています（執筆時点: 2026年9月）。03 と同じ構成です。</p>
+            </div>
+          </div>
+
+
+      <h3 id="server-or-client">サーバーとクライアントの使い分けの判断基準</h3>
+      <p>
+        03 で見たとおり、App Router のコンポーネントは既定でサーバーコンポーネントです。クライアントコンポーネントにするのは、次の表の左側のどれかが必要な部分だけに絞ります。
+      </p>
+      <table>
+        <thead>
+          <tr><th>コンポーネントに必要なもの</th><th>選ぶ種類</th><th>このレッスンでの例</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>状態（<code>useState</code> / <code>useReducer</code>）</td><td>クライアント</td><td>いいね数、検索語、開閉状態</td></tr>
+          <tr><td>イベント（<code>onClick</code> / <code>onChange</code> など）</td><td>クライアント</td><td>ボタンのクリック、検索ボックスへの入力</td></tr>
+          <tr><td>ブラウザ API（<code>window</code> / <code>document</code> / <code>localStorage</code>）と <code>useEffect</code></td><td>クライアント</td><td>テーマの保存と読み込み</td></tr>
+          <tr><td>上のどれも不要（<code>async</code> / <code>await</code> でのデータ取得、表示だけの部分）</td><td>サーバー（既定のまま）</td><td><code>blog/page.tsx</code>、<code>AuthorList</code></td></tr>
+        </tbody>
+      </table>
+      <p>
+        ページ全体をクライアントコンポーネントにするのではなく、操作が必要な小さな部品だけを切り出して <code>"use client"</code> を付けます。
+        データの取得や表示だけの部分はサーバーに残しておけば、03 で作った <code>fetch</code> やキャッシュの仕組みをそのまま使えます。
+      </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>"use client"</code> はファイル単位で、import 先まで効く</p>
+              <p>
+                <code>"use client"</code> は、そのファイルを「サーバーとクライアントの境界」にする指定です。そのファイルが <code>import</code> しているモジュールも、まとめてクライアント向けの JavaScript に含まれます。
+                つまり、<code>"use client"</code> のファイルの中で <code>import</code> したコンポーネントは、それ自身に <code>"use client"</code> がなくてもクライアントで実行されます。
+                境界をツリーの上のほうに置くほど、クライアントに送る JavaScript が増え、サーバーコンポーネントとして書ける範囲が狭くなります。境界はできるだけ末端の小さな部品に置きます。
+              </p>
+            </div>
+          </div>
+
+
+      <p>レッスンを終えると、<code>src/</code> は次の構成になります（03 から変わらない部分は省略しています）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">src/</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">src/
+├── app/
+│   ├── (marketing)/ …          # 03 のまま
+│   ├── _components/
+│   │   └── Header/
+│   │       ├── Header.module.scss  # 変更
+│   │       ├── Header.tsx          # 変更
+│   │       └── index.ts
+│   ├── about/ …                # 03 のまま
+│   ├── api/ …                  # 03 のまま
+│   ├── blog/
+│   │   ├── [slug]/
+│   │   │   ├── page.module.scss
+│   │   │   └── page.tsx        # 変更
+│   │   ├── _components/
+│   │   │   ├── AuthorList/ …   # 03 のまま
+│   │   │   └── PostFilter/     # 新規
+│   │   │       ├── PostFilter.module.scss
+│   │   │       ├── PostFilter.tsx
+│   │   │       └── index.ts
+│   │   ├── error.tsx など …    # 03 のまま
+│   │   ├── page.module.scss    # 変更
+│   │   └── page.tsx            # 変更
+│   └── layout.tsx など …       # 03 のまま
+├── components/                 # 新規
+│   ├── Collapsible/
+│   │   ├── Collapsible.module.scss
+│   │   ├── Collapsible.tsx
+│   │   └── index.ts
+│   ├── LikeButton/
+│   │   ├── LikeButton.module.scss
+│   │   ├── LikeButton.tsx
+│   │   ├── LikeButtonReducer.tsx  # 比較用
+│   │   └── index.ts
+│   └── ThemeToggle/
+│       ├── ThemeToggle.module.scss
+│       ├── ThemeToggle.tsx
+│       └── index.ts
+├── features/ …                 # 03 のまま
+└── styles/
+    └── globals.scss            # 変更</code></pre>
+</div>
+
+      <p>
+        複数のページで再利用しうる部品（<code>LikeButton</code> / <code>Collapsible</code> / <code>ThemeToggle</code>）は、<code>src/components/&lt;Name&gt;/</code> に置きます。
+        一覧ページ専用の <code>PostFilter</code> は、03 の <code>AuthorList</code> と同じく <code>blog/_components/</code> に置きます。
+      </p>
+
+      <h2 id="step-by-step">手順</h2>
+      <p>作業はプロジェクトのディレクトリで行います。開発サーバー（<code>npm run dev</code>）を起動したまま進めます。</p>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">サーバーコンポーネントに useState を書いて失敗させる</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            まず、境界を越えるとどうなるかを体験します。<code>src/app/blog/page.tsx</code> は <code>async</code> 関数のサーバーコンポーネントです。
+            ここに、クリックなどで値を変えるためのフック <code>useState</code> を一時的に書き足します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/page.tsx（一時的な変更）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import Link from "next/link";</span><span class="diff-line diff-line--remove">- import { Suspense } from "react";</span><span class="diff-line diff-line--add">+ import { Suspense, useState } from "react";</span><span class="diff-line">  import { fetchPosts } from "@/features/posts/api/fetchPosts";</span><span class="diff-line">  import { fetchUsers } from "@/features/users/api/fetchUsers";</span><span class="diff-line">  import { AuthorList } from "./_components/AuthorList";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line"> </span><span class="diff-line">  export default async function BlogPage() {</span><span class="diff-line diff-line--add">+   const [count] = useState(0);</span><span class="diff-line">    // 投稿と著者を直列に await すると 2 回分の待ち時間がかかる。</span></pre>
+</div>
+
+          <p>保存した時点で、エディタには次のエラーが表示されます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">エディタのエラー表示</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">"useState" is not allowed in Server Components. [71001] (typescript)</span></pre>
+</div>
+
+          <p>開発サーバーを起動したまま、別のターミナルから <code>/blog</code> にアクセスします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（別のターミナル）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3000/blog</span><span class="terminal__line">500</span></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run dev 側）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"> ⨯ &lt;プロジェクト&gt;/src/app/blog/page.tsx:2:20</span><span class="terminal__line">Error: You're importing a module that depends on `useState` into a React Server Component module. This API is only available in Client Components. To fix, mark the file (or its parent) with the `"use client"` directive.</span><span class="terminal__line">  Learn more: https://nextjs.org/docs/app/api-reference/directives/use-client</span><span class="terminal__line">  1 | import Link from "next/link";</span><span class="terminal__line">&gt; 2 | import { Suspense, useState } from "react";</span><span class="terminal__line">  |                    ^^^^^^^^</span><span class="terminal__line">  3 | import { fetchPosts } from "@/features/posts/api/fetchPosts";</span><span class="terminal__line">  4 | import { fetchUsers } from "@/features/users/api/fetchUsers";</span><span class="terminal__line">  5 | import { AuthorList } from "./_components/AuthorList";</span><span class="terminal__line"></span><span class="terminal__line">Ecmascript file had an error</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line"> GET /blog 500 in 1215ms (next.js: 1169ms, application-code: 46ms)</span></pre>
+</div>
+
+          <p>
+            エラーの位置は <code>useState(0)</code> を呼んだ行ではなく、2 行目の <code>import</code> です。
+            <code>useState</code> はクライアントコンポーネントだけが使える API なので、サーバーコンポーネントのモジュールが <code>import</code> した時点で、Next.js がエラーにします。
+            メッセージの後半 <code>To fix, mark the file (or its parent) with the "use client" directive.</code> は、解決方法の案内です。「クライアントで動かしたいなら <code>"use client"</code> を付けよ」という意味です。
+          </p>
+          <p>
+            ただし、ここで <code>blog/page.tsx</code> に <code>"use client"</code> を付けるのは誤りです。このページは <code>async</code> 関数で <code>fetch</code> しているため、クライアントコンポーネントにはできません。
+            正しい直し方は、状態を持つ部分だけを別のファイルに切り出してクライアントコンポーネントにすることです。次のステップからその形で作ります。
+          </p>
+          <p>確認できたら、追加した 2 か所（<code>useState</code> の <code>import</code> と <code>const [count] = useState(0);</code>）を削除して元に戻します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>useState</code> を書いた状態で、<code>/blog</code> が <code>500</code> を返すことを確かめます。
+              開発サーバーのターミナルに <code>You&#39;re importing a module that depends on `useState` into a React Server Component module.</code> が表示されれば成功です。
+              元に戻したあと、同じ <code>curl</code> が <code>200</code> を返すことも確かめてください。
+            </p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">useState でいいねボタンを作る</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            記事の詳細ページに「いいね」ボタンを置きます。クリックのたびに数が増えるので、状態（<code>useState</code>）とイベント（<code>onClick</code>）が必要です。
+            冒頭の判断基準に照らすとクライアントコンポーネントになります。
+          </p>
+          <p>
+            このボタンは記事ページ以外でも再利用できる部品なので、<code>src/components/LikeButton/</code> に置きます。
+            <code>src/components/</code> はこのレッスンで初めて作るディレクトリです。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButton.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client";
+
+import { useState } from "react";
+import styles from "./LikeButton.module.scss";
+
+type LikeButtonProps = {
+  postId: number;
+  initialCount: number;
+};
+
+// "use client" を付けたクライアントコンポーネント。
+// サーバーコンポーネント（例: blog/[slug]/page.tsx）の JSX の中にそのまま置ける。
+export function LikeButton({ postId, initialCount }: LikeButtonProps) {
+  const [count, setCount] = useState(initialCount);
+
+  return (
+    &lt;button
+      type="button"
+      className={styles.button}
+      onClick={() =&gt; setCount((current) =&gt; current + 1)}
+      aria-label={`記事 ${postId} にいいねする`}
+    &gt;
+      👍 いいね {count}
+    &lt;/button&gt;
+  );
+}</code></pre>
+</div>
+
+          <p>
+            1 行目の <code>"use client"</code> が、このファイルをクライアントコンポーネントにする指定です。<code>import</code> より前、ファイルの先頭に書きます。
+            <code>useState(initialCount)</code> は「現在の値 <code>count</code>」と「値を更新する関数 <code>setCount</code>」の組を返します。
+            <code>setCount((current) =&gt; current + 1)</code> のように関数を渡すと、直前の値をもとに次の値を計算できます。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButton.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid #e5e5e5;
+  border-radius: 999px;
+  background: #fff;
+  color: #111;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+
+  &amp;:hover {
+    border-color: #0070f3;
+    color: #0070f3;
+  }
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/LikeButton/index.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export { LikeButton } from "./LikeButton";</code></pre>
+</div>
+
+          <p>詳細ページ（サーバーコンポーネント）から、この <code>LikeButton</code> を使います。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/[slug]/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import { notFound } from "next/navigation";</span><span class="diff-line">  import { fetchPost, fetchPosts } from "@/features/posts/api/fetchPosts";</span><span class="diff-line diff-line--add">+ import { LikeButton } from "@/components/LikeButton";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line">  …</span><span class="diff-line">    return (</span><span class="diff-line">      &lt;article&gt;</span><span class="diff-line">        &lt;h1 className={styles.title}&gt;{post.title}&lt;/h1&gt;</span><span class="diff-line">        &lt;p className={styles.body}&gt;{post.body}&lt;/p&gt;</span><span class="diff-line diff-line--add">+       {/*</span><span class="diff-line diff-line--add">+         LikeButton は "use client" コンポーネント。</span><span class="diff-line diff-line--add">+         サーバーコンポーネントである BlogPostPage の中に、他の要素と同じようにそのまま置ける。</span><span class="diff-line diff-line--add">+         post.id を初期値の計算に使っているだけで、実際のいいね数は API から取得していない</span><span class="diff-line diff-line--add">+         （このレッスンでは状態管理そのものが主題のため、ダミーの初期値を渡している）。</span><span class="diff-line diff-line--add">+       */}</span><span class="diff-line diff-line--add">+       &lt;LikeButton postId={post.id} initialCount={post.id * 3} /&gt;</span><span class="diff-line">      &lt;/article&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            サーバーコンポーネントの JSX の中に、クライアントコンポーネントを他の要素と同じように置けます。
+            <code>initialCount</code> には記事 ID から計算したダミーの値を渡しています。いいね数を API に保存したり、API から取得したりする仕組みはこのレッスンでは扱いません。
+          </p>
+          <p>ブラウザで <code>http://localhost:3000/blog/1</code> を開き、ボタンを数回クリックします。続いて、<code>curl</code> で同じページの HTML を取得してみます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（別のターミナル）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s http://localhost:3000/blog/1 -o /tmp/blog1.html -w "%{http_code}\n"</span><span class="terminal__line">200</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -o 'いいね[^&lt;]*' /tmp/blog1.html</span><span class="terminal__line">いいねする"&gt;👍 いいね</span></pre>
+</div>
+
+          <p>
+            <code>curl</code> はブラウザと違って JavaScript を実行しません。それでも、取得した HTML にはボタンのラベル（<code>aria-label</code> の「…にいいねする」と、表示文字列の「👍 いいね」）が含まれています。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">クライアントコンポーネントもサーバーで HTML が生成される</p>
+              <p>
+                「クライアントコンポーネント」という名前ですが、ブラウザだけで動くわけではありません。初回アクセス時にはサーバーでも一度実行され、その結果が HTML として返されます（SSR）。
+                ブラウザはその HTML をすぐに表示し、あとから届いた JavaScript がボタンにクリック処理を結び付けます。この「結び付け」をハイドレーションと呼びます。
+                <code>"use client"</code> が意味するのは「ブラウザ<strong>でも</strong>動く（ブラウザ向けの JavaScript に含める）」ことであり、「サーバーでは動かない」ことではありません。この性質は、ステップ 6 で重要になります。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              ブラウザで「👍 いいね 3」のボタンが表示され、クリックするたびに数が 1 ずつ増えれば成功です（<code>/blog/1</code> の初期値は <code>1 * 3 = 3</code>）。
+              ページを再読み込みすると初期値に戻ることも確かめましょう。状態はブラウザのメモリにしかないためです。
+              <code>curl</code> の結果に「いいね」が含まれていれば、SSR されていることも確認できています。
+            </p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">props のシリアライズ制約を確かめる（関数は渡せない）</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            サーバーコンポーネントからクライアントコンポーネントに渡す props は、サーバーからブラウザへ送られます。そのため、送れる形（シリアライズ可能な値）でなければなりません。
+            関数を渡すとどうなるかを、一時的な変更で確かめます。まず <code>LikeButton</code> に、いいねされたときに呼ぶ関数 <code>onLiked</code> を受け取る props を追加します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButton.tsx（一時的な変更）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  type LikeButtonProps = {</span><span class="diff-line">    postId: number;</span><span class="diff-line">    initialCount: number;</span><span class="diff-line diff-line--add">+   onLiked?: () =&gt; void;</span><span class="diff-line">  };</span></pre>
+</div>
+
+          <p>
+            保存すると、<code>LikeButton.tsx</code> の型に次の警告が表示されます。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">エディタの警告表示（LikeButton.tsx）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">Props must be serializable for components in the "use client" entry file. "onLiked" is a function</span><span class="terminal__line">that's not a Server Action. Rename "onLiked" either to "action" or have its name end with "Action"</span><span class="terminal__line">e.g. "onLikedAction" to indicate it is a Server Action. [71007] (typescript)</span></pre>
+</div>
+
+          <p>
+            <code>"use client"</code> のファイルがエクスポートするコンポーネントの props の型は、Next.js の TypeScript プラグインがチェックしています。
+            まだ <code>onLiked</code> をどこからも呼び出していない、型に追加しただけの時点で警告が出ることに注目してください。
+          </p>
+          <p>続けて、詳細ページから実際に関数を渡します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/[slug]/page.tsx（一時的な変更）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">-       &lt;LikeButton postId={post.id} initialCount={post.id * 3} /&gt;</span><span class="diff-line diff-line--add">+       &lt;LikeButton</span><span class="diff-line diff-line--add">+         postId={post.id}</span><span class="diff-line diff-line--add">+         initialCount={post.id * 3}</span><span class="diff-line diff-line--add">+         onLiked={() =&gt; console.log(`liked: ${post.id}`)}</span><span class="diff-line diff-line--add">+       /&gt;</span></pre>
+</div>
+
+          <p>
+            そのまま <code>http://localhost:3000/blog/1</code> にアクセスします。ステータスコードは <code>200</code> のままですが、開発サーバーのターミナルには次のエラーが出力されます。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run dev 側）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"> ⨯ Error: Event handlers cannot be passed to Client Component props.</span><span class="terminal__line">  &lt;... postId={1} initialCount={3} onLiked={function onLiked}&gt;</span><span class="terminal__line">                                           ^^^^^^^^^^^^^^^^^^</span><span class="terminal__line">If you need interactivity, consider converting part of this to a Client Component.</span><span class="terminal__line">    at ignore-listed frames {</span><span class="terminal__line">  digest: '4175015436'</span><span class="terminal__line">}</span></pre>
+</div>
+
+          <p>
+            <code>postId={1}</code> と <code>initialCount={3}</code> は問題なく、<code>onLiked={function onLiked}</code> の部分だけが指摘されています。
+            数値や文字列はデータとして送れますが、関数（サーバー上の変数を参照するクロージャ）はサーバーとブラウザの境界を越えて送れないためです。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">props で渡せるのはシリアライズ可能な値だけ</p>
+              <p>
+                サーバーコンポーネントからクライアントコンポーネントへ渡せるのは、文字列・数値・真偽値・プレーンなオブジェクトや配列など、データとして送れる値です。関数は渡せません。
+                「クリックされたら何かしたい」ときは、その処理自体をクライアントコンポーネントの中に書きます。
+                サーバー側で処理を実行したい場合は、エラーメッセージにも出てくる Server Actions を使います（このレッスンでは扱いません）。
+              </p>
+            </div>
+          </div>
+
+          <p>確認できたら、<code>LikeButton.tsx</code> の <code>onLiked</code> と、<code>[slug]/page.tsx</code> の呼び出し側の変更を元に戻します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              関数を渡した状態で、開発サーバーのターミナルに <code>Event handlers cannot be passed to Client Component props.</code> が表示されれば成功です。
+              元に戻したあと、<code>/blog/1</code> のいいねボタンがステップ 2 と同じように動くことを確かめてください。
+            </p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">PostFilter で「取得はサーバー、操作はクライアント」に分ける</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            記事一覧に検索ボックスを付け、入力した語による絞り込みをその場で行えるようにします。
+            ステップ 1 で見たとおり、<code>blog/page.tsx</code> 自体をクライアントコンポーネントにはできません。
+            そこで、データの取得は <code>page.tsx</code>（サーバー）に残し、一覧の描画と検索の操作だけを <code>PostFilter</code>（クライアント）に切り出します。
+            <code>PostFilter</code> は一覧ページ専用の部品なので、<code>blog/_components/</code> に置きます。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/blog/_components/PostFilter/PostFilter.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+import styles from "./PostFilter.module.scss";
+
+type PostListItem = {
+  slug: string;
+  title: string;
+  body: string;
+  authorName: string;
+};
+
+type PostFilterProps = {
+  posts: PostListItem[];
+};
+
+// データ取得（fetchPosts / fetchUsers）はサーバーである page.tsx が担当し、
+// この PostFilter は受け取った posts を検索語で絞り込んで表示するだけの役割を持つ。
+// 「データ取得はサーバー、操作はクライアント」という役割分担の例。
+export function PostFilter({ posts }: PostFilterProps) {
+  const [query, setQuery] = useState("");
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredPosts =
+    normalizedQuery === ""
+      ? posts
+      : posts.filter((post) =&gt;
+          `${post.title} ${post.body}`.toLowerCase().includes(normalizedQuery),
+        );
+
+  return (
+    &lt;div&gt;
+      &lt;input
+        type="search"
+        value={query}
+        onChange={(event) =&gt; setQuery(event.target.value)}
+        placeholder="記事を検索（タイトル・本文）"
+        className={styles.input}
+        aria-label="記事を検索"
+      /&gt;
+      &lt;p className={styles.count}&gt;
+        {filteredPosts.length} / {posts.length} 件
+      &lt;/p&gt;
+
+      &lt;ul className={styles.list}&gt;
+        {filteredPosts.map((post) =&gt; (
+          &lt;li key={post.slug} className={styles.item}&gt;
+            &lt;Link href={`/blog/${post.slug}`} className={styles.itemTitle}&gt;
+              {post.title}
+            &lt;/Link&gt;
+            &lt;p className={styles.itemAuthor}&gt;by {post.authorName}&lt;/p&gt;
+            &lt;p className={styles.itemBody}&gt;{post.body}&lt;/p&gt;
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+
+      {filteredPosts.length === 0 &amp;&amp; (
+        &lt;p className={styles.empty}&gt;「{query}」に一致する記事はありません。&lt;/p&gt;
+      )}
+    &lt;/div&gt;
+  );
+}</code></pre>
+</div>
+
+          <p>
+            <code>PostFilter</code> 自身は <code>fetch</code> を一度も呼びません。props で受け取った <code>posts</code> を、<code>query</code> の値で絞り込んで表示するだけです。
+            <code>filteredPosts</code> は状態として持たず、描画のたびに <code>posts</code> と <code>query</code> から計算しています。
+            ほかの状態から計算できる値は、<code>useState</code> を増やさずにこのような派生値として書くのが基本です。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/app/blog/_components/PostFilter/PostFilter.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.input {
+  width: 100%;
+  max-width: 320px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  font-size: 0.9375rem;
+}
+
+.count {
+  color: #888;
+  font-size: 0.8125rem;
+  margin-top: 0.5rem;
+}
+
+.list {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.item {
+  border-bottom: 1px solid #e5e5e5;
+  padding-bottom: 1rem;
+}
+
+.itemTitle {
+  font-weight: 700;
+  color: #0070f3;
+}
+
+.itemAuthor {
+  color: #888;
+  font-size: 0.875rem;
+  margin-top: 0.25rem;
+}
+
+.itemBody {
+  color: #666;
+  margin-top: 0.25rem;
+}
+
+.empty {
+  color: #888;
+  margin-top: 1rem;
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/blog/_components/PostFilter/index.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export { PostFilter } from "./PostFilter";</code></pre>
+</div>
+
+          <p>
+            <code>page.tsx</code> を書き換えます。一覧の描画は <code>PostFilter</code> に移すので、<code>Link</code> の <code>import</code> も不要になります。
+            次のステップでさらに変更するので、ここでは全文を示します。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/blog/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { Suspense } from "react";
+import { fetchPosts } from "@/features/posts/api/fetchPosts";
+import { fetchUsers } from "@/features/users/api/fetchUsers";
+import { AuthorList } from "./_components/AuthorList";
+import { PostFilter } from "./_components/PostFilter";
+import styles from "./page.module.scss";
+
+export default async function BlogPage() {
+  // 投稿と著者を直列に await すると 2 回分の待ち時間がかかる。
+  // Promise.all で同時に投げて、両方の完了を 1 回の待ち時間にまとめる。
+  const [posts, users] = await Promise.all([fetchPosts(), fetchUsers()]);
+
+  const authorNameById = new Map(users.map((user) =&gt; [user.id, user.name]));
+
+  // PostFilter（クライアントコンポーネント）に渡す props は、
+  // 文字列・数値などシリアライズ可能な値だけにする。著者名はここで解決してから渡す。
+  const postsWithAuthor = posts.map((post) =&gt; ({
+    slug: post.slug,
+    title: post.title,
+    body: post.body,
+    authorName: authorNameById.get(post.userId) ?? "unknown",
+  }));
+
+  return (
+    &lt;div&gt;
+      &lt;h1 className={styles.title}&gt;Blog&lt;/h1&gt;
+
+      {/*
+        データ取得（fetchPosts / fetchUsers）はここサーバーコンポーネントで行い、
+        一覧の描画と検索操作は PostFilter（クライアントコンポーネント）に委ねる。
+      */}
+      &lt;PostFilter posts={postsWithAuthor} /&gt;
+
+      {/*
+        AuthorList は fetchUsers() を内部で再度呼んでいるが、
+        同一レンダーパス中の同一 URL・オプションの GET fetch は Next.js が自動的にメモ化するため、
+        実際に発生する外部リクエストは 1 回だけになる。
+        Suspense でストリーミングされる境界であることを示すため、あえて別コンポーネントに切り出している。
+      */}
+      &lt;Suspense fallback={&lt;p className={styles.authorsLoading}&gt;投稿者一覧を読み込み中...&lt;/p&gt;}&gt;
+        &lt;AuthorList /&gt;
+      &lt;/Suspense&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+</div>
+
+          <p>
+            <code>postsWithAuthor</code> で、著者名を ID から名前に解決した「文字列だけのオブジェクト」の配列を作ってから渡しています。
+            ステップ 3 で確かめたとおり、クライアントコンポーネントに渡せるのはシリアライズ可能な値だけです。<code>Map</code> のまま渡すのではなく、描画に必要な値だけをサーバー側で用意してから渡します。
+          </p>
+          <p>一覧のスタイルは <code>PostFilter.module.scss</code> に移したので、<code>page.module.scss</code> には見出しと読み込み中の表示だけが残ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/app/blog/page.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+
+.authorsLoading {
+  color: #888;
+  margin-top: 2rem;
+}</code></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              ブラウザで <code>http://localhost:3000/blog</code> を開き、検索ボックスの下に「5 / 5 件」と表示されれば成功です。
+              検索ボックスに文字を入力すると、ページの再読み込みや API の再取得なしに一覧と件数がその場で変わります。一致する記事がなければ、件数が「0 / 5 件」になり、一致する記事がないことを知らせるメッセージが表示されます。
+            </p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">children パターンで Collapsible にサーバーコンポーネントを包む</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            一覧の下にある投稿者一覧（<code>AuthorList</code>）を、見出しのクリックで開閉できるようにします。
+            開閉の状態を持つ <code>Collapsible</code> はクライアントコンポーネントです。一方、中身の <code>AuthorList</code> は 03 で作った <code>async</code> のサーバーコンポーネントで、内部で <code>fetchUsers()</code> を呼んでいます。
+            クライアントコンポーネントの中にサーバーコンポーネントを置くには、<code>children</code> として渡します。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/Collapsible/Collapsible.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client";
+
+import { useState, type ReactNode } from "react";
+import styles from "./Collapsible.module.scss";
+
+type CollapsibleProps = {
+  title: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+};
+
+// "use client" コンポーネントでも children は受け取れる。
+// children として渡された JSX がサーバーコンポーネントであっても、
+// それを組み立てるのは親（page.tsx）の役目なので、この Collapsible 自体は
+// 中身がサーバーコンポーネントかクライアントコンポーネントかを知らなくてよい。
+export function Collapsible({ title, children, defaultOpen = false }: CollapsibleProps) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
+  return (
+    &lt;div className={styles.collapsible}&gt;
+      &lt;button
+        type="button"
+        className={styles.summary}
+        onClick={() =&gt; setIsOpen((current) =&gt; !current)}
+        aria-expanded={isOpen}
+      &gt;
+        &lt;span className={styles.icon} aria-hidden="true"&gt;
+          {isOpen ? "▾" : "▸"}
+        &lt;/span&gt;
+        {title}
+      &lt;/button&gt;
+      {isOpen &amp;&amp; &lt;div className={styles.body}&gt;{children}&lt;/div&gt;}
+    &lt;/div&gt;
+  );
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/components/Collapsible/Collapsible.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.collapsible {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e5e5e5;
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: inherit;
+  cursor: pointer;
+}
+
+.icon {
+  font-size: 0.75rem;
+  color: #888;
+}
+
+.body {
+  margin-top: 0.75rem;
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/Collapsible/index.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export { Collapsible } from "./Collapsible";</code></pre>
+</div>
+
+          <p><code>page.tsx</code> で、03 から使っている <code>&lt;Suspense&gt;</code> ごと <code>Collapsible</code> で包みます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import { Suspense } from "react";</span><span class="diff-line">  import { fetchPosts } from "@/features/posts/api/fetchPosts";</span><span class="diff-line">  import { fetchUsers } from "@/features/users/api/fetchUsers";</span><span class="diff-line diff-line--add">+ import { Collapsible } from "@/components/Collapsible";</span><span class="diff-line">  import { AuthorList } from "./_components/AuthorList";</span><span class="diff-line">  import { PostFilter } from "./_components/PostFilter";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line">  …</span><span class="diff-line">        {/*</span><span class="diff-line diff-line--add">+         Collapsible（クライアントコンポーネント）の children に、</span><span class="diff-line diff-line--add">+         async なサーバーコンポーネント（AuthorList）を渡している。</span><span class="diff-line diff-line--add">+         children の中身を組み立てるのは呼び出し側の page.tsx（サーバー）であり、</span><span class="diff-line diff-line--add">+         Collapsible 自身は中身がサーバー製かクライアント製かを意識しない。</span><span class="diff-line">          AuthorList は fetchUsers() を内部で再度呼んでいるが、</span><span class="diff-line">          同一レンダーパス中の同一 URL・オプションの GET fetch は Next.js が自動的にメモ化するため、</span><span class="diff-line">          実際に発生する外部リクエストは 1 回だけになる。</span><span class="diff-line">          Suspense でストリーミングされる境界であることを示すため、あえて別コンポーネントに切り出している。</span><span class="diff-line">        */}</span><span class="diff-line diff-line--remove">-       &lt;Suspense fallback={&lt;p className={styles.authorsLoading}&gt;投稿者一覧を読み込み中...&lt;/p&gt;}&gt;</span><span class="diff-line diff-line--remove">-         &lt;AuthorList /&gt;</span><span class="diff-line diff-line--remove">-       &lt;/Suspense&gt;</span><span class="diff-line diff-line--add">+       &lt;Collapsible title="著者一覧" defaultOpen&gt;</span><span class="diff-line diff-line--add">+         &lt;Suspense fallback={&lt;p className={styles.authorsLoading}&gt;投稿者一覧を読み込み中...&lt;/p&gt;}&gt;</span><span class="diff-line diff-line--add">+           &lt;AuthorList /&gt;</span><span class="diff-line diff-line--add">+         &lt;/Suspense&gt;</span><span class="diff-line diff-line--add">+       &lt;/Collapsible&gt;</span><span class="diff-line">      &lt;/div&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            <code>defaultOpen</code> を指定して、最初は開いた状態にしています。開いた状態の中身もサーバーで HTML になっていることを、<code>curl</code> で確かめるためです（閉じた状態では、中身が最初の HTML に含まれません）。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（別のターミナル）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s http://localhost:3000/blog -o /tmp/blog.html -w "%{http_code}\n"</span><span class="terminal__line">200</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -c '投稿者一覧' /tmp/blog.html</span><span class="terminal__line">3</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -o 'Leanne Graham' /tmp/blog.html | head -1</span><span class="terminal__line">Leanne Graham</span></pre>
+</div>
+
+          <p>
+            <code>Leanne Graham</code> は、JSONPlaceholder の 1 人目のユーザー名です。クライアントコンポーネント <code>Collapsible</code> の中に置いた <code>AuthorList</code> の結果が、最初の HTML に含まれています。
+            <code>AuthorList</code> はクライアントコンポーネントに変わったのではなく、サーバーコンポーネントのままサーバーで <code>fetchUsers()</code> を実行しています。
+          </p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">import するのではなく、children として渡す</p>
+              <p>
+                <code>"use client"</code> のファイルの中で <code>AuthorList</code> を <code>import</code> して使うと、<code>AuthorList</code> もクライアント側のモジュールとして扱われます。<code>async</code> のサーバーコンポーネントとしては動きません。
+                一方、<code>children</code> パターンでは、中身を組み立てるのは外側の <code>page.tsx</code>（サーバー）です。<code>Collapsible</code> は受け取った <code>children</code> を表示する位置を決めるだけで、中身の種類を知る必要がありません。
+                「サーバーコンポーネントの中身を、クライアントコンポーネントの操作で包みたい」ときの定番の書き方です。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              ブラウザで <code>/blog</code> を開き、「▾ 著者一覧」の見出しの下に投稿者一覧が表示されていれば成功です。
+              見出しをクリックすると「▸」に変わって一覧が閉じ、もう一度クリックすると開きます。<code>curl</code> の結果に <code>Leanne Graham</code> が含まれることも確かめてください。
+            </p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">useEffect と localStorage でテーマ切り替えを作る</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            ヘッダーに、ライトとダークを切り替えるボタンを付けます。選んだテーマはブラウザの <code>localStorage</code> に保存し、次に開いたときにも引き継ぎます。
+            <code>localStorage</code> はブラウザ API なので、クライアントコンポーネントで扱います。
+            このステップでは、よくある失敗を 3 つ順に踏んでから最終形にたどり着きます。
+          </p>
+
+          <p><strong>6-1. 見た目とヘッダーへの組み込み</strong></p>
+          <p>まず、ボタンのスタイルと re-export を用意します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/components/ThemeToggle/ThemeToggle.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.toggle {
+  border: 1px solid #e5e5e5;
+  border-radius: 999px;
+  background: none;
+  padding: 0.375rem 0.875rem;
+  font-size: 0.8125rem;
+  color: inherit;
+  cursor: pointer;
+
+  &amp;:hover {
+    border-color: #0070f3;
+    color: #0070f3;
+  }
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/ThemeToggle/index.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export { ThemeToggle } from "./ThemeToggle";</code></pre>
+</div>
+
+          <p>
+            テーマの切り替えは、<code>html</code> 要素に <code>data-theme</code> 属性を付けて行います。<code>globals.scss</code> に、属性の値ごとの色を追加します。
+            あわせて標準プロパティ <code>color-scheme</code> も設定します。これを指定しないと、フォームの入力欄やスクロールバーなどブラウザ標準の見た目が OS の設定のまま残り、<code>data-theme</code> と食い違うことがあります。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/styles/globals.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  @media (prefers-color-scheme: dark) {</span><span class="diff-line">    :root {</span><span class="diff-line">      --background: #0a0a0a;</span><span class="diff-line">      --foreground: #ededed;</span><span class="diff-line">    }</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ // ThemeToggle が html 要素に付与する data-theme 属性による、明示的な切り替え。</span><span class="diff-line diff-line--add">+ // OS 設定（prefers-color-scheme）より優先させるため、あとに書く。</span><span class="diff-line diff-line--add">+ :root[data-theme="dark"] {</span><span class="diff-line diff-line--add">+   --background: #0a0a0a;</span><span class="diff-line diff-line--add">+   --foreground: #ededed;</span><span class="diff-line diff-line--add">+   color-scheme: dark;</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ :root[data-theme="light"] {</span><span class="diff-line diff-line--add">+   --background: #ffffff;</span><span class="diff-line diff-line--add">+   --foreground: #171717;</span><span class="diff-line diff-line--add">+   color-scheme: light;</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+          <p>ヘッダーにボタンを組み込み、ナビゲーションのリンクとボタンを左右に並べます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/_components/Header/Header.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import Link from "next/link";</span><span class="diff-line">  import { usePathname } from "next/navigation";</span><span class="diff-line diff-line--add">+ import { ThemeToggle } from "@/components/ThemeToggle";</span><span class="diff-line">  import styles from "./Header.module.scss";</span><span class="diff-line">  …</span><span class="diff-line">          &lt;/ul&gt;</span><span class="diff-line diff-line--add">+         &lt;ThemeToggle /&gt;</span><span class="diff-line">        &lt;/nav&gt;</span><span class="diff-line">      &lt;/header&gt;</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/_components/Header/Header.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  .nav {</span><span class="diff-line">    max-width: 960px;</span><span class="diff-line">    margin: 0 auto;</span><span class="diff-line diff-line--add">+   display: flex;</span><span class="diff-line diff-line--add">+   align-items: center;</span><span class="diff-line diff-line--add">+   justify-content: space-between;</span><span class="diff-line">  }</span></pre>
+</div>
+
+
+          <p><strong>6-2. 失敗 1: レンダー中に window を読む</strong></p>
+          <p>保存済みのテーマを <code>useState</code> の初期値として直接読み込む、素直な書き方から始めます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/ThemeToggle/ThemeToggle.tsx（失敗 1）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client";
+
+import { useState } from "react";
+import styles from "./ThemeToggle.module.scss";
+
+type Theme = "light" | "dark";
+
+const STORAGE_KEY = "theme";
+
+export function ThemeToggle() {
+  // 保存済みのテーマを、初期値として直接読み込もうとしている（このあと失敗する）
+  const [theme, setTheme] = useState&lt;Theme&gt;(
+    () =&gt; (window.localStorage.getItem(STORAGE_KEY) as Theme | null) ?? "light",
+  );
+
+  const toggleTheme = () =&gt; {
+    const next: Theme = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    window.localStorage.setItem(STORAGE_KEY, next);
+  };
+
+  return (
+    &lt;button
+      type="button"
+      className={styles.toggle}
+      onClick={toggleTheme}
+      aria-pressed={theme === "dark"}
+    &gt;
+      {theme === "dark" ? "☀️ ライト" : "🌙 ダーク"}
+    &lt;/button&gt;
+  );
+}</code></pre>
+</div>
+
+          <p>保存して <code>http://localhost:3000/</code> にアクセスすると、ページが <code>500</code> になり、開発サーバーのターミナルに次のエラーが出ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run dev 側）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">⨯ ReferenceError: window is not defined</span><span class="terminal__line">    at &lt;unknown&gt; (src/components/ThemeToggle/ThemeToggle.tsx:13:73)</span><span class="terminal__line">    at ThemeToggle (src/components/ThemeToggle/ThemeToggle.tsx:12:37)</span><span class="terminal__line">  11 |   // 保存済みのテーマを、初期値として直接読み込もうとしている（このあと失敗する）</span><span class="terminal__line">  12 |   const [theme, setTheme] = useState&lt;Theme&gt;(</span><span class="terminal__line">&gt; 13 |     () =&gt; (window.localStorage.getItem(STORAGE_KEY) as Theme | null) ?? "light",</span><span class="terminal__line">     |                                                                         ^</span><span class="terminal__line">  14 |   );</span><span class="terminal__line"> GET / 500 in 1069ms (next.js: 835ms, application-code: 235ms)</span></pre>
+</div>
+
+          <p>注目するのは <code>ReferenceError: window is not defined</code> です。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">クライアントコンポーネントでも、レンダー中に window は使えない</p>
+              <p>
+                ステップ 2 の note のとおり、クライアントコンポーネントは初回アクセス時にサーバーでも実行されます。サーバー（Node.js）には <code>window</code> や <code>document</code> がありません。
+                そのため、コンポーネント本体の処理（<code>useState</code> の初期化子を含む）で無条件にこれらを触ると、サーバー側で <code>ReferenceError</code> になります。
+                一方、<code>toggleTheme</code> の中の <code>window.localStorage</code> は問題ありません。クリックされたときにブラウザでしか実行されないためです。
+              </p>
+            </div>
+          </div>
+
+
+          <p><strong>6-3. 失敗 2: typeof window で分岐するとハイドレーション不一致になる</strong></p>
+          <p>「サーバーに <code>window</code> がないなら、あるときだけ読めばよい」と考えて、<code>typeof window</code> で分岐させてみます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/ThemeToggle/ThemeToggle.tsx（失敗 2）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">    const [theme, setTheme] = useState&lt;Theme&gt;(</span><span class="diff-line diff-line--remove">-     () =&gt; (window.localStorage.getItem(STORAGE_KEY) as Theme | null) ?? "light",</span><span class="diff-line diff-line--add">+     () =&gt;</span><span class="diff-line diff-line--add">+       (typeof window !== "undefined"</span><span class="diff-line diff-line--add">+         ? (window.localStorage.getItem(STORAGE_KEY) as Theme | null)</span><span class="diff-line diff-line--add">+         : null) ?? "light",</span><span class="diff-line">    );</span></pre>
+</div>
+
+          <p>
+            これで <code>500</code> は出なくなります。ところが、保存済みのテーマが <code>dark</code> のときに問題が起きます。
+            ブラウザの開発者ツールのコンソールで <code>localStorage.setItem("theme", "dark")</code> を実行してからページを再読み込みすると、次のエラーが発生します（抜粋）。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">ブラウザのコンソール</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">Hydration failed because the server rendered text didn't match the client. As a result this tree will be regenerated on the client. This can happen if a SSR-ed Client Component used:</span><span class="terminal__line"></span><span class="terminal__line">- A server/client branch `if (typeof window !== 'undefined')`.</span><span class="terminal__line">- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.</span><span class="terminal__line">- Date formatting in a user's locale which doesn't match the server.</span><span class="terminal__line">- External changing data without sending a snapshot of it along with the HTML.</span><span class="terminal__line">- Invalid HTML tag nesting.</span><span class="terminal__line"></span><span class="terminal__line">It can also happen if the client has a browser extension installed which messes with the HTML before React loaded.</span><span class="terminal__line"></span><span class="terminal__line">https://react.dev/link/hydration-mismatch</span><span class="terminal__line"></span><span class="terminal__line">  ...</span><span class="terminal__line">                                &lt;ThemeToggle&gt;</span><span class="terminal__line">                                  &lt;button</span><span class="terminal__line">                                    type="button"</span><span class="terminal__line">                                    className="ThemeToggle-module-scss-module__8XrAWW__toggle"</span><span class="terminal__line">                                    onClick={function toggleTheme}</span><span class="terminal__line">+                                   aria-pressed={true}</span><span class="terminal__line">-                                   aria-pressed="false"</span><span class="terminal__line">                                  &gt;</span><span class="terminal__line">+                                   ☀️ ライト</span><span class="terminal__line">-                                   🌙 ダーク</span></pre>
+</div>
+
+          <p>
+            サーバーには <code>localStorage</code> がないので <code>light</code> として描画し、「🌙 ダーク」のボタンを HTML にします。
+            一方、ブラウザでの初回の描画では保存済みの <code>dark</code> を読むので「☀️ ライト」になります。
+            ハイドレーションは「サーバーの HTML とブラウザでの初回の描画結果が同じ」ことを前提にしているため、React がこの食い違いをエラーとして報告します。
+            差分の <code>+</code> がブラウザ側、<code>-</code> がサーバー側の値です。原因の候補の 1 つ目に、今回書いた <code>typeof window !== 'undefined'</code> の分岐そのものが挙がっています。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ハイドレーション不一致</p>
+              <p>
+                <code>typeof window</code> の分岐は <code>window is not defined</code> を避けられますが、サーバーとブラウザで初回の描画結果を変えてしまいます。
+                初回の描画では、サーバーとブラウザが同じ結果を出す必要があります。ブラウザにしかない値は、初回の描画が終わってから反映します。
+              </p>
+            </div>
+          </div>
+
+
+          <p><strong>6-4. 失敗 3: useEffect で反映すると ESLint に指摘される</strong></p>
+          <p>
+            初期値はサーバーと同じ <code>"light"</code> に固定し、<code>localStorage</code> の値は <code>useEffect</code> の中で読んで反映します。
+            <code>useEffect</code> に渡した関数は、画面への描画（とハイドレーション）が終わったあとに、ブラウザでだけ実行されます。第 2 引数の空配列 <code>[]</code> は「最初の 1 回だけ実行する」という指定です。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/ThemeToggle/ThemeToggle.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">- import { useState } from "react";</span><span class="diff-line diff-line--add">+ import { useEffect, useState } from "react";</span><span class="diff-line">  …</span><span class="diff-line">  export function ThemeToggle() {</span><span class="diff-line diff-line--remove">-   // 保存済みのテーマを、初期値として直接読み込もうとしている（このあと失敗する）</span><span class="diff-line diff-line--remove">-   const [theme, setTheme] = useState&lt;Theme&gt;(</span><span class="diff-line diff-line--remove">-     () =&gt;</span><span class="diff-line diff-line--remove">-       (typeof window !== "undefined"</span><span class="diff-line diff-line--remove">-         ? (window.localStorage.getItem(STORAGE_KEY) as Theme | null)</span><span class="diff-line diff-line--remove">-         : null) ?? "light",</span><span class="diff-line diff-line--remove">-   );</span><span class="diff-line diff-line--add">+   // サーバーで生成する HTML は必ず "light" として描画する。</span><span class="diff-line diff-line--add">+   const [theme, setTheme] = useState&lt;Theme&gt;("light");</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+   // マウント後（＝ブラウザで実行されるとき）に一度だけ localStorage を読み、</span><span class="diff-line diff-line--add">+   // 保存されていた値を document とステートに反映する。</span><span class="diff-line diff-line--add">+   useEffect(() =&gt; {</span><span class="diff-line diff-line--add">+     const stored = window.localStorage.getItem(STORAGE_KEY);</span><span class="diff-line diff-line--add">+     if (stored === "light" || stored === "dark") {</span><span class="diff-line diff-line--add">+       setTheme(stored);</span><span class="diff-line diff-line--add">+       document.documentElement.dataset.theme = stored;</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+   }, []);</span><span class="diff-line"> </span><span class="diff-line">    const toggleTheme = () =&gt; {</span></pre>
+</div>
+
+          <p>これでハイドレーションのエラーは出なくなります。ここで <code>npm run lint</code> を実行すると、次のエラーになります（抜粋）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line">.../src/components/ThemeToggle/ThemeToggle.tsx</span><span class="terminal__line">  19:7  error  Error: Calling setState synchronously within an effect can trigger cascading renders</span><span class="terminal__line">  ...</span><span class="terminal__line">  react-hooks/set-state-in-effect</span></pre>
+</div>
+
+
+          <p><strong>6-5. 最終形: 理由を書いてルールを無効にする</strong></p>
+          <p>
+            <code>react-hooks/set-state-in-effect</code> は、<code>useEffect</code> の中で同期的に <code>setState</code> を呼ぶ書き方を指摘するルールです。
+            今回の <code>setTheme(initial)</code> は、React の外にある <code>localStorage</code> の値をマウント後に取り込む処理です。6-2 と 6-3 で確かめたとおり、この処理は描画中には行えません。
+            そこで、理由をコメントに書いたうえで、この 1 行だけルールを無効にします。
+            あわせて、保存値が無ければ <code>window.matchMedia("(prefers-color-scheme: dark)")</code> で OS の配色設定を確認し、それを初期テーマとして使うようにしています。最終形の全文は次のとおりです。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/ThemeToggle/ThemeToggle.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client";
+
+import { useEffect, useState } from "react";
+import styles from "./ThemeToggle.module.scss";
+
+type Theme = "light" | "dark";
+
+const STORAGE_KEY = "theme";
+
+// サーバーで生成する HTML には localStorage の値を反映できないため、
+// 初期値は必ず light 側の見た目に合わせておき、実際の値は useEffect の中で読む。
+// useState(() =&gt; localStorage.getItem(...)) のように初期化子で読むと、
+// サーバーが返した HTML（light 前提）とクライアントの初回レンダー結果（保存済みの dark）が
+// 食い違い、ハイドレーションエラーになる。
+export function ThemeToggle() {
+  // サーバーで生成する HTML は必ず "light" として描画する。
+  const [theme, setTheme] = useState&lt;Theme&gt;("light");
+
+  // マウント後（＝ブラウザで実行されるとき）に一度だけ localStorage を読み、
+  // 保存されていた値を document とステートに反映する。
+  // 保存値が無い場合は、OS の配色設定（prefers-color-scheme）に従って初期テーマを決める。
+  useEffect(() =&gt; {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    const initial: Theme =
+      stored === "light" || stored === "dark"
+        ? stored
+        : window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+    // localStorage・matchMedia は React の外側にある状態なので、effect の中で読んで同期する必要がある。
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 外部ストレージとの同期のため意図的
+    setTheme(initial);
+    document.documentElement.dataset.theme = initial;
+  }, []);
+
+  const toggleTheme = () =&gt; {
+    const next: Theme = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    window.localStorage.setItem(STORAGE_KEY, next);
+  };
+
+  return (
+    &lt;button
+      type="button"
+      className={styles.toggle}
+      onClick={toggleTheme}
+      aria-pressed={theme === "dark"}
+    &gt;
+      {theme === "dark" ? "☀️ ライト" : "🌙 ダーク"}
+    &lt;/button&gt;
+  );
+}</code></pre>
+</div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">なぜこのルールがあるのか、ほかの書き方は</p>
+              <p>
+                <code>useEffect</code> の中で無条件に <code>setState</code> すると、「描画 → effect で状態を更新 → もう一度描画」と、描画が 1 回余分に起きます。
+                しかも多くの場合、その値は描画中に計算できる派生値です（ステップ 4 の <code>filteredPosts</code> のように）。このルールは、そうした「effect に押し込まなくてよい計算」に気づかせるためのものです。
+                <code>eslint-disable-next-line</code> で無効にするときは、<code>--</code> のあとに理由を書き、ほかの人が意図を読み取れるようにしておきます。
+              </p>
+              <p>
+                React が推奨するのは、外部ストレージと同期するための専用フック <code>useSyncExternalStore</code> を使う書き方です。これを使えば、このルールを無効にせずに書けます。
+                ただし購読の仕組みの理解が必要になるため、入門の範囲に収めるために、ここでは理由をコメントに書いたうえでルールを抑止する妥協をしています。
+              </p>
+            </div>
+          </div>
+
+          <p>もう一度 <code>npm run lint</code> を実行し、エラーが出ないことを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 04-client-components@0.1.0 lint</span><span class="terminal__line">&gt; eslint</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              ヘッダー右側の「🌙 ダーク」をクリックすると背景が暗くなり、ボタンが「☀️ ライト」に変わることを確かめます。
+              その状態でページを再読み込みすると、一瞬ライトで描画されてからダークに切り替わり（ちらつき）、最終的にダークで表示されれば成功です。
+              このちらつきは、テーマの反映を <code>useEffect</code>（マウント後）で行う、この方式の限界です。防ぐには <code>layout</code> の <code>head</code> にインラインスクリプトを置いて、React が動く前にテーマを決める必要があります（この項目の範囲外）。
+              OS の配色設定をダークにしたブラウザで、<code>localStorage</code> に保存せずに初めてアクセスした場合は、最初からダークで表示され、ボタンは「☀️ ライト」側の表示になることも確かめてください。
+              開発者ツールのコンソールにハイドレーションのエラーが出ていないこと、<code>npm run lint</code> がエラーなしで終わることも確認してください。
+            </p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">useReducer 版と比べる</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            状態を扱うフックには、<code>useState</code> のほかに <code>useReducer</code> があります。
+            ステップ 2 の <code>LikeButton</code> を <code>useReducer</code> で書き直した比較用のファイルを、同じフォルダに作ります。
+            見た目と動きは <code>LikeButton</code> と同じで、<code>LikeButton.module.scss</code> もそのまま使います。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButtonReducer.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client";
+
+import { useReducer } from "react";
+import styles from "./LikeButton.module.scss";
+
+type LikeButtonProps = {
+  postId: number;
+  initialCount: number;
+};
+
+type State = { count: number };
+type Action = { type: "increment" };
+
+function reducer(state: State, action: Action): State {
+  switch (action.type) {
+    case "increment":
+      return { count: state.count + 1 };
+    default:
+      return state;
+  }
+}
+
+// LikeButton（useState 版）と同じ見た目・同じ振る舞いを useReducer で書き直したもの。
+// このレッスンでは状態が「カウンター 1 個」しかないため useState で十分だが、
+// 状態の更新パターンが増えたときに useReducer へ移行する感覚を掴むための比較用コンポーネント。
+// 詳細ページ（[slug]/page.tsx）では引き続き LikeButton（useState 版）を使う。
+export function LikeButtonReducer({ postId, initialCount }: LikeButtonProps) {
+  const [state, dispatch] = useReducer(reducer, { count: initialCount });
+
+  return (
+    &lt;button
+      type="button"
+      className={styles.button}
+      onClick={() =&gt; dispatch({ type: "increment" })}
+      aria-label={`記事 ${postId} にいいねする`}
+    &gt;
+      👍 いいね {state.count}
+    &lt;/button&gt;
+  );
+}</code></pre>
+</div>
+
+          <p>2 つの書き方を並べると、状態を更新する処理の置き場所が違います。</p>
+          <table>
+            <thead>
+              <tr><th>観点</th><th><code>useState</code>（<code>LikeButton</code>）</th><th><code>useReducer</code>（<code>LikeButtonReducer</code>）</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>状態の初期化</td><td><code>useState(initialCount)</code></td><td><code>useReducer(reducer, { count: initialCount })</code></td></tr>
+              <tr><td>更新の書き方</td><td><code>setCount((current) =&gt; current + 1)</code></td><td><code>dispatch({ type: "increment" })</code></td></tr>
+              <tr><td>「次の状態」を決める処理の場所</td><td>イベントハンドラーの中</td><td>コンポーネントの外の <code>reducer</code> 関数に集約</td></tr>
+              <tr><td>向いている場面</td><td>更新の種類が 1〜2 個の単純な状態</td><td>更新の種類が多い、または複数の値をまとめて更新する状態</td></tr>
+            </tbody>
+          </table>
+          <p>
+            今の「いいね」は「1 増やす」だけなので、<code>useState</code> のほうが短く読みやすく書けます。
+            ところが、「いいねを取り消す」「リセットする」のように更新の種類が増えると、<code>useState</code> ではイベントハンドラーごとに更新の処理が散らばります。
+            <code>useReducer</code> なら、「現在の状態」と「何が起きたか（action）」から次の状態を決める処理を、<code>reducer</code> の <code>switch</code> 1 か所に集められます。
+            <code>reducer</code> は React に依存しない普通の関数なので、単独でテストしやすいという利点もあります。
+          </p>
+          <p>
+            このファイルは比較のためのもので、詳細ページ（<code>[slug]/page.tsx</code>）では引き続き <code>LikeButton</code> を使います。
+            <code>index.ts</code> にも追加しません。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>LikeButtonReducer.tsx</code> を作成したあと、<code>npm run lint</code> がエラーなしで終われば成功です。
+              動きを見比べたい場合は、<code>[slug]/page.tsx</code> の <code>import</code> を一時的に次の 1 行に差し替えます。
+              <code>import { LikeButtonReducer as LikeButton } from "@/components/LikeButton/LikeButtonReducer";</code>
+              同じ見た目で、同じように数が増えることを確かめられます。確かめたら元に戻してください。
+            </p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <h2 id="build">本番ビルドと lint で最終確認する</h2>
+      <p>
+        開発サーバーを止めて、<code>npm run build</code> と <code>npm run lint</code> を実行します。どちらもエラーが出ずに終われば完成です（01 で扱った「workspace root」の警告は省略しています）。
+      </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run build）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line"></span><span class="terminal__line">  Creating an optimized production build ...</span><span class="terminal__line">✓ Compiled successfully in 1578ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 776ms ...</span><span class="terminal__line">  Collecting page data using 10 workers ...</span><span class="terminal__line">✓ Generating static pages using 10 workers (13/13) in 757ms</span><span class="terminal__line">  Finalizing page optimization ...</span><span class="terminal__line"></span><span class="terminal__line">Route (app)            Revalidate  Expire</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">├ ○ /_not-found</span><span class="terminal__line">├ ○ /about</span><span class="terminal__line">├ ƒ /api/posts</span><span class="terminal__line">├ ○ /blog                      1m      1y</span><span class="terminal__line">├   /blog/[slug]</span><span class="terminal__line">│ ├ ● /blog/1                  1m      1y</span><span class="terminal__line">│ ├ ● /blog/2                  1m      1y</span><span class="terminal__line">│ ├ ● /blog/3                  1m      1y</span><span class="terminal__line">│ └ ● [+2 more paths]</span><span class="terminal__line">└ ○ /contact</span><span class="terminal__line"></span><span class="terminal__line">○  (Static)   prerendered as static content</span><span class="terminal__line">●  (SSG)      prerendered as static HTML (uses generateStaticParams)</span><span class="terminal__line">ƒ  (Dynamic)  server-rendered on demand</span></pre>
+</div>
+
+      <p>
+        <code>Route (app)</code> の一覧は 03 と同じです。クライアントコンポーネントを 4 つ追加しても、各ページの種別（<code>○ Static</code> / <code>● SSG</code> / <code>ƒ Dynamic</code>）とキャッシュの設定は変わりません。
+        クライアントコンポーネントもビルド時にサーバーで HTML になり、静的なページに含まれるためです。
+      </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run lint）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 04-client-components@0.1.0 lint</span><span class="terminal__line">&gt; eslint</span></pre>
+</div>
+
+      <p><code>npm run lint</code> の実行結果に、<code>package.json</code> で直した名前 <code>04-client-components</code> が表示されていることも確かめておきましょう。</p>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">サーバーコンポーネントで <code>useState</code> を <code>import</code> するとエラーになることを確かめ、<code>page.tsx</code> 全体に <code>"use client"</code> を付けてはいけない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>LikeButton</code> のクリックで数が増え、<code>curl</code> で取得した HTML にもボタンが含まれることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">サーバーコンポーネントからクライアントコンポーネントに関数を props で渡せない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>PostFilter</code> が <code>fetch</code> を呼ばずに絞り込みを実現していること、<code>filteredPosts</code> を状態にしない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>Collapsible</code> の <code>children</code> に渡した <code>AuthorList</code> がサーバーコンポーネントのまま動く理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>window is not defined</code> とハイドレーション不一致の 2 つのエラーを再現し、<code>useEffect</code> で解決できる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>ThemeToggle</code> の <code>eslint-disable-next-line</code> が何のルールを、なぜ無効にしているかを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">（発展）<code>LikeButtonReducer</code> の <code>reducer</code> に「いいねを取り消す」<code>decrement</code> を追加するとしたら、どこをどう変えるか考えた</label>
+        </li>
+      </ul>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        状態・イベント・ブラウザ API が必要な部分だけを、<code>"use client"</code> のクライアントコンポーネントに切り出しました。
+        そのうえで、<code>useState</code> / <code>useEffect</code> / <code>useReducer</code> を使い、操作に反応する UI を作りました。
+        props はシリアライズ可能な値だけを渡せること、<code>children</code> でサーバーコンポーネントを包めること、クライアントコンポーネントも初回はサーバーで HTML になることも確かめました。
+        次の項目では、Storybook を導入し、このレッスンで作った部品をコンポーネント単位で確認できるようにします。
+      </p>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">完成コード</p>
+              <p>このレッスンの完成コードは、ブランチ <code>nextjs/04-client-components</code> の <code>nextjs/04-client-components/</code> ディレクトリにあります。</p>
+            </div>
+          </div>
+
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../03-server-components/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">03: サーバーコンポーネントとデータ取得</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">05: Storybook でのコンポーネントカタログ構築</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
