@@ -2,6 +2,39 @@
 
 Next.js（TypeScript + App Router）を使ったフロントエンド開発を学ぶトラックです。Storybook を使ったコンポーネントカタログの構築も、このトラックの項目として扱います。
 
+## プロジェクト構成
+
+- `src/app/` はルーティング専用（`page.tsx` / `layout.tsx` / `loading.tsx` など）。ルートグループ `(group)/` とルート専用部品の `_components/` を使う。
+- 再利用する部品は `src/components/<Name>/` に 1 コンポーネント = 1 フォルダ（`<Name>.tsx` / `.module.scss` / `.stories.tsx` / `.test.tsx` / `index.ts`）でまとめる。
+- 機能単位のまとまりは `src/features/<feature>/` に `components` / `hooks` / `api` を同居させる。
+- 共通 SCSS は `src/styles/`（`globals.scss` / `_variables.scss` / `_mixins.scss`）に集約する。
+
+```
+src/
+  app/                    # ルーティング専用
+    (marketing)/          # ルートグループ
+    _components/          # ルート専用の部品
+    layout.tsx
+    page.tsx
+    page.module.scss
+  components/
+    Button/
+      Button.tsx
+      Button.module.scss
+      Button.stories.tsx
+      Button.test.tsx
+      index.ts
+  features/
+    todo/
+      components/ hooks/ api/
+  styles/
+    globals.scss
+    _variables.scss
+    _mixins.scss
+```
+
+詳細は CLAUDE.md の「Next.js プロジェクトの構成規約」を参照してください。
+
 ## カリキュラム表
 
 | 番号 | タイトル | 到達目標 | 所要時間 | 状態 |

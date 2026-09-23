@@ -79,6 +79,39 @@ handson/
 - Android: Kotlin + Jetpack Compose + Navigation 3 + Room 3 + Hilt を使用する。サードパーティライブラリ（Retrofit 等）は使わず、公式パッケージのみで構成する。
 - iOS: SwiftUI + `@Observable` + Swift Concurrency + SwiftData + Swift Testing を使用する。UIKit / Core Data / Combine は旧世代の技術として扱い、原則使用しない。
 
+## Next.js プロジェクトの構成規約
+
+- `src/app/` はルーティング専用（`page.tsx` / `layout.tsx` / `loading.tsx` など）とする。ルートグループ `(group)/` と、そのルート専用の部品を置く `_components/`（先頭 `_` でルート化を防ぐ）を使う。
+- 再利用する部品は `src/components/<Name>/` に 1 コンポーネント = 1 フォルダで置く。`<Name>.tsx`、`<Name>.module.scss`、`<Name>.stories.tsx`（Storybook 導入後）、`<Name>.test.tsx`（テスト導入後）、`index.ts`（re-export）を同居させる。
+- 機能単位のまとまりは `src/features/<feature>/` に `components` / `hooks` / `api` を同居させる。
+- 共通 SCSS は `src/styles/` に集約する: `globals.scss`、`_variables.scss`、`_mixins.scss`。`next.config.ts` の `sassOptions.includePaths: ['./src/styles']` と `additionalData` で `@use "variables" as *;` を自動プレリュードにし、各 `module.scss` から相対パスを書かないようにする（この設定は 06 スタイリングの項目で導入する。01〜05 は `globals.scss` のみを使う）。
+- ページ専用のスタイルは `page.module.scss` を `page.tsx` と同じ場所に置いてよい。
+- エディタ表示はリポジトリ直下の `.vscode/settings.json` の file nesting で `.module.scss` / `.stories.tsx` / `.test.tsx` を `.tsx` の下にネストする。
+
+```
+src/
+  app/                    # ルーティング専用
+    (marketing)/          # ルートグループ
+    _components/          # ルート専用の部品
+    layout.tsx
+    page.tsx
+    page.module.scss
+  components/
+    Button/
+      Button.tsx
+      Button.module.scss
+      Button.stories.tsx
+      Button.test.tsx
+      index.ts
+  features/
+    todo/
+      components/ hooks/ api/
+  styles/
+    globals.scss
+    _variables.scss
+    _mixins.scss
+```
+
 ## ブランチ運用
 
 - `main` には `document/` 配下の教材 HTML を全て統合する。`document/` は静的サイトとして単独で配信できる状態を常に保つ。
