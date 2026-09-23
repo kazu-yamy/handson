@@ -1,0 +1,24 @@
+.authors {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e5e5e5;
+}
+
+.authorsTitle {
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.authorsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.authorsItem {
+  color: #666;
+  font-size: 0.875rem;
+}

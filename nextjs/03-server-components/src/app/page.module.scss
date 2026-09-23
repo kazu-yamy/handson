@@ -1,0 +1,24 @@
+.main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.title {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.version {
+  color: #666;
+}
+
+.link {
+  margin-top: 0.5rem;
+  color: #0070f3;
+  text-decoration: underline;
+}
