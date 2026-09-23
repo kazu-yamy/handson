@@ -50,13 +50,13 @@ handson/
 1. `document/template/lesson.html` をコピーして新しいレッスンのディレクトリ（`document/<track>/<NN>-<slug>/`）を作り、そこから書き始める。
 2. 共通 CSS（`assets/css/main.css`）・共通 JS（`assets/js/main.js`）は相対パスで参照する。
 3. 自前の `<style>` タグは原則書かない。スタイルが足りない場合は `document/assets/scss/` を拡張し、`npm run build:css` でビルドして `document/assets/css/main.css` に反映する。
-4. 完成したら `document/index.html` のカタログと、該当トラックの `document/<track>/README.md` のカリキュラム表（項目の追記・状態の更新）を反映する。
+4. 完成したら `document/index.html` のカタログと、該当トラックの `document/<track>/README.md` のカリキュラム表に項目を追記する。
 
 ## 教材の構成単位
 
 - 教材は トラック > 項目（レッスン） > ステップ の 3 階層で構成する。1 つの HTML に複数の項目を詰め込まない。
 - 項目 = 1 つの到達目標を持つ 30〜60 分の単位。`document/<track>/<NN>-<slug>/index.html` に 1 項目 1 ファイル、1 ブランチで作成する。
-- トラックの `README.md` は「カリキュラム表」として、項目の一覧（番号・タイトル・到達目標 1 行・所要時間・状態: 準備中/作成済み）を Markdown テーブルで先に定義する。教材を書き始める前にこの表に項目を追加し、書き終えたら状態を更新する。
+- トラックの `README.md` は「カリキュラム表」として、項目の一覧（番号・タイトル・到達目標 1 行・所要時間）を Markdown テーブルで先に定義する。教材を書き始める前にこの表に項目を追加する。進捗は Obsidian vault の `Projects/handson/progress.md` で管理する。教材を main にマージしたら、そのノートの該当項目を更新する。README のカリキュラム表とカタログには状態を書かない。カタログには作成済みの項目だけを載せる。
 - 項目の中は `section.step` で 3〜8 個のステップに分け、各ステップは「やること → コード → 確認ポイント」の順で書く。1 ステップが長くなる場合は項目を分割する。
 - 項目間の依存（前提となる項目）はページヘッダーの `.lesson-meta` に明記し、`.lesson-nav` で前後の項目へリンクする。
 - 大きな題材（例: Axum で API サーバーを作る）は「セットアップ」「ルーティング」「JSON」「DB 接続」…のように項目に分解し、各項目単独でも動く完成状態（`<track>/<NN>-<slug>/`）を残す。
