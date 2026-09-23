@@ -31,14 +31,18 @@ handson/
       cloudflare/
     android/          # Kotlin + Jetpack Compose
     ios/              # Swift + SwiftUI
-  work/                   # 学習者が実際に書くプロジェクト（項目のブランチ上でのみ存在、main には統合しない）
-    <track>/<NN>-<slug>/
+  nextjs/<NN>-<slug>/     # 学習者が実際に書くプロジェクト（項目のブランチ上でのみ存在、main には統合しない）
+  axum/<NN>-<slug>/
+  tauri/<NN>-<slug>/
+  android/<NN>-<slug>/
+  ios/<NN>-<slug>/
+  infra/<cloud>/<NN>-<slug>/
 ```
 
 - 各トラック（`nextjs` / `axum` / `tauri` / `infra` / `android` / `ios`）直下に `README.md` を置き、トラックの概要とカリキュラム表（収録予定・済みの項目一覧）を書く。書式は「教材の構成単位」を参照。
 - 1 項目（レッスン） = `document/<track>/<NN>-<slug>/index.html`（`infra` のみ `document/infra/<cloud>/<NN>-<slug>/index.html`）
   - 例: `document/nextjs/01-setup/index.html`、`document/nextjs/05-storybook/index.html`、`document/axum/01-hello-axum/index.html`、`document/infra/aws/01-vpc/index.html`
-- 学習者が実際に手を動かして書くプロジェクトのコードは、`document/` ではなく `work/<track>/<NN>-<slug>/` に置く（詳細は「ブランチ運用」を参照）。教材内で完成コードを参照したい場合は、対応するブランチ名を教材ページに明記する。
+- 学習者が実際に手を動かして書くプロジェクトのコードは、`document/` ではなくリポジトリ直下のトラック別フォルダ `<track>/<NN>-<slug>/`（`infra` のみ `infra/<cloud>/<NN>-<slug>/`）に置く（詳細は「ブランチ運用」を参照）。教材内で完成コードを参照したい場合は、対応するブランチ名を教材ページに明記する。
 - レッスンの HTML から共通 CSS/JS への参照は相対パスで書く（例: `../../assets/css/main.css`、`infra/<cloud>/` 配下は `../../../assets/css/main.css`）。
 
 ## 教材作成の手順
@@ -55,7 +59,7 @@ handson/
 - トラックの `README.md` は「カリキュラム表」として、項目の一覧（番号・タイトル・到達目標 1 行・所要時間・状態: 準備中/作成済み）を Markdown テーブルで先に定義する。教材を書き始める前にこの表に項目を追加し、書き終えたら状態を更新する。
 - 項目の中は `section.step` で 3〜8 個のステップに分け、各ステップは「やること → コード → 確認ポイント」の順で書く。1 ステップが長くなる場合は項目を分割する。
 - 項目間の依存（前提となる項目）はページヘッダーの `.lesson-meta` に明記し、`.lesson-nav` で前後の項目へリンクする。
-- 大きな題材（例: Axum で API サーバーを作る）は「セットアップ」「ルーティング」「JSON」「DB 接続」…のように項目に分解し、各項目単独でも動く完成状態（`work/<track>/<NN>-<slug>/`）を残す。
+- 大きな題材（例: Axum で API サーバーを作る）は「セットアップ」「ルーティング」「JSON」「DB 接続」…のように項目に分解し、各項目単独でも動く完成状態（`<track>/<NN>-<slug>/`）を残す。
 
 ## 教材の書き方
 
@@ -80,8 +84,8 @@ handson/
 - `main` には `document/` 配下の教材 HTML を全て統合する。`document/` は静的サイトとして単独で配信できる状態を常に保つ。
 - 教材の項目（レッスン）は 1 項目 = 1 ブランチで作成する。ブランチ名は `<track>/<NN>-<slug>`。
   - 例: `nextjs/01-setup`、`nextjs/05-storybook`、`axum/01-hello-axum`、`infra/aws/01-vpc`
-- 項目のブランチでは、ハンズオンで学習者が作るプロジェクト（コード）をリポジトリ直下の `work/<track>/<NN>-<slug>/` に作成し、教材 HTML を `document/<track>/<NN>-<slug>/index.html` に書く。
-- `main` への PR に含めるのは `document/` 配下の変更（レッスン HTML、カタログ、トラック README、必要なら `document/assets/`）のみ。`work/` 配下のコードはブランチ上に残し、main には統合しない。教材内で完成コードを参照したい場合は、ブランチ名を教材ページに明記する。
+- 項目のブランチでは、ハンズオンで学習者が作るプロジェクト（コード）をリポジトリ直下のトラック別フォルダ `<track>/<NN>-<slug>/`（`infra` のみ `infra/<cloud>/<NN>-<slug>/`）に作成し、教材 HTML を `document/<track>/<NN>-<slug>/index.html` に書く。
+- `main` への PR に含めるのは `document/` 配下の変更（レッスン HTML、カタログ、トラック README、必要なら `document/assets/`）のみ。トラック別フォルダ配下のコードはブランチ上に残し、main には統合しない。教材内で完成コードを参照したい場合は、ブランチ名を教材ページに明記する。
 - 完成したら `main` に PR を出してマージする。コミットメッセージは日本語の 1 行要約 + 本文とする。
 
 ## コンポーネントのクラス名一覧

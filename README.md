@@ -16,7 +16,7 @@ Claude Code にハンズオン教材を作らせるためのリポジトリで�
   - `infra/` : Terraform + 各クラウド（Google Cloud / AWS / Azure / Cloudflare）
   - `android/` : Kotlin + Jetpack Compose
   - `ios/` : Swift + SwiftUI
-- `work/` : 項目のブランチ上でのみ使う、学習者が実際に書くプロジェクトの置き場（main には統合しない）
+- `<track>/<NN>-<slug>/`（例: `nextjs/01-setup/`）: 項目のブランチ上でのみ使う、学習者が実際に書くプロジェクトの置き場（main には統合しない）
 
 ## セットアップ
 

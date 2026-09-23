@@ -4,25 +4,28 @@
 # Node
 node_modules/
 
-# work/ 配下（学習者向けブランチで作成するプロジェクトのビルド生成物）
-# work/ 自体は無視しない
-work/**/node_modules/
-work/**/.next/
-work/**/out/
-work/**/target/
-work/**/.terraform/
-work/**/*.tfstate
-work/**/*.tfstate.*
-work/**/.terraform.lock.hcl
+# 各トラック直下（項目ブランチで作成する学習者向けプロジェクト）のビルド生成物
+# document/ 配下には影響しない
+**/node_modules/
+**/.next/
+**/out/
+**/target/
+**/.terraform/
+*.tfstate
+*.tfstate.*
+**/.terraform.lock.hcl
 
 # Android
-work/**/build/
-work/**/.gradle/
-work/**/local.properties
-work/**/*.iml
+**/build/
+**/.gradle/
+**/local.properties
+**/*.iml
 
 # iOS（Package.resolved は依存解決の再現性のため残す）
-work/**/xcuserdata/
-work/**/DerivedData/
-work/**/*.xcworkspace/xcuserdata/
-work/**/.build/
+**/xcuserdata/
+**/DerivedData/
+**/*.xcworkspace/xcuserdata/
+**/.build/
+
+# 環境変数
+**/.env*
