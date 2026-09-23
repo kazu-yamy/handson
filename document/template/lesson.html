@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson 3: ルーティングとデータ取得 | Next.js/Storybook ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../index.html">Next.js / Storybook コース</a></li>
+          <li><a href="./lesson-02.html">Lesson 2: コンポーネント設計</a></li>
+          <li aria-current="page">Lesson 3</li>
+        </ol>
+        <h1 class="lesson-title">ルーティングとデータ取得</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 中級</li>
+          <li class="lesson-meta__item">📋 前提知識: Lesson 1〜2, React の基礎</li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>App Router のファイルベースルーティングの仕組みを理解する</li>
+          <li>サーバーコンポーネントでのデータ取得パターンを実装する</li>
+          <li>ローディング UI とエラーハンドリングを適切に配置する</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        このレッスンでは Next.js の App Router を使ったルーティングと、サーバーコンポーネントでの
+        データ取得の基本パターンを学びます。<code>app/</code> ディレクトリ配下のファイル構成が
+        そのまま URL 構造に対応する点を確認しながら進めます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">Note</p>
+          <p>このレッスンは Node.js 20 以降がインストールされている前提で進めます。バージョンは <code>node -v</code> で確認してください。</p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">プロジェクトを作成する</h3>
+        </div>
+        <div class="step__body">
+          <p>まず新しい Next.js プロジェクトを作成します。ターミナルで以下のコマンドを実行してください。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npx create-next-app@latest my-app --typescript</span><span class="terminal__line">✔ Would you like to use ESLint?  … Yes</span><span class="terminal__line">✔ Would you like to use App Router?  … Yes</span><span class="terminal__line">Success! Created my-app at ./my-app</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>my-app</code> ディレクトリが作成され、<code>app/page.tsx</code> が存在していることを確認してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">一覧ページを実装する</h3>
+        </div>
+        <div class="step__body">
+          <p><code>app/posts/page.tsx</code> を作成し、サーバーコンポーネントでデータを取得します。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">app/posts/page.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">export default async function PostsPage() {
+  const res = await fetch("https://api.example.com/posts", {
+    next: { revalidate: 60 },
+  });
+  const posts: Post[] = await res.json();
+
+  return (
+    &lt;ul&gt;
+      {posts.map((post) =&gt; (
+        &lt;li key={post.id}&gt;{post.title}&lt;/li&gt;
+      ))}
+    &lt;/ul&gt;
+  );
+}</code></pre>
+          </div>
+
+          <p>次に、変更前のコードとの差分を確認しておきましょう。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">app/posts/page.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- const posts = await getStaticPosts();</span><span class="diff-line diff-line--add">+ const res = await fetch("https://api.example.com/posts", {</span><span class="diff-line diff-line--add">+   next: { revalidate: 60 },</span><span class="diff-line diff-line--add">+ });</span><span class="diff-line diff-line--add">+ const posts: Post[] = await res.json();</span></pre>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">Tip</p>
+              <p><code>revalidate</code> を指定すると ISR（Incremental Static Regeneration）としてキャッシュされ、指定秒数ごとに再生成されます。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run dev</code> を実行し、<code>/posts</code> にアクセスして一覧が表示されることを確認してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">ローディングとエラーの状態を扱う</h3>
+        </div>
+        <div class="step__body">
+          <p>App Router では <code>loading.tsx</code> と <code>error.tsx</code> を同じディレクトリに置くだけで、状態ごとの UI を自動的に切り替えられます。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Warning</p>
+              <p><code>error.tsx</code> は Client Component である必要があります。ファイルの先頭に <code>"use client"</code> を忘れずに記述してください。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--danger">
+            <span class="callout__icon" aria-hidden="true">🚫</span>
+            <div class="callout__body">
+              <p class="callout__title">Danger</p>
+              <p>本番環境で <code>fetch</code> の <code>cache: "no-store"</code> を多用すると、意図せず全ページが動的レンダリングになりサーバー負荷が急増します。挙動を必ず確認してください。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">解答例を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+                <div class="code-block__header">
+                  <span class="code-block__lang">TypeScript</span>
+                  <span class="code-block__filename">app/posts/error.tsx</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><code class="language-typescript">"use client";
+
+export default function Error({ error, reset }: {
+  error: Error;
+  reset: () =&gt; void;
+}) {
+  return (
+    &lt;div&gt;
+      &lt;p&gt;読み込みに失敗しました: {error.message}&lt;/p&gt;
+      &lt;button onClick={() =&gt; reset()}&gt;再試行&lt;/button&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+              </div>
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>意図的に API URL を間違えて、エラー画面と「再試行」ボタンが表示されることを確認してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">ファイルベースルーティングで <code>/posts</code> ページを作成した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">サーバーコンポーネントで <code>fetch</code> を使いデータを取得した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>loading.tsx</code> と <code>error.tsx</code> を実装し、動作を確認した</label>
+        </li>
+      </ul>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        App Router のファイルベースルーティングと、サーバーコンポーネントでのデータ取得の基本を扱いました。
+        次のレッスンでは、クライアントコンポーネントとの使い分けと状態管理について学びます。
+      </p>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="./lesson-02.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">Lesson 2: コンポーネント設計</span>
+        </a>
+        <a class="lesson-nav__link lesson-nav__link--next" href="./lesson-04.html">
+          <span class="lesson-nav__direction">次のレッスン →</span>
+          <span class="lesson-nav__title">Lesson 4: 状態管理とクライアントコンポーネント</span>
+        </a>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../assets/js/main.js"></script>
+</body>
+</html>

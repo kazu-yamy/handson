@@ -1,0 +1,265 @@
+// ============================================================
+// Layout
+// サイト共通ヘッダー + サイドバー目次(TOC) + 本文の 2 カラム。
+// 狭幅では 1 カラム（サイドバーは折りたたみトグル）。
+// ============================================================
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  height: var(--header-height);
+  padding: 0 var(--space-5);
+  background-color: var(--color-bg-raised);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.site-header__brand {
+  font-weight: 700;
+  font-size: var(--fs-md);
+  text-decoration: none;
+  color: var(--color-text);
+
+  &:hover {
+    color: var(--color-text);
+  }
+}
+
+.site-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+// 狭幅でサイドバーを開閉するボタン（デスクトップでは非表示）
+.toc-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-raised);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background-color: var(--color-bg-raised);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+
+  &:hover {
+    border-color: var(--color-border-strong);
+  }
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+// サイドバー（目次）が無いページ（カタログなど）用の 1 カラム版
+.layout--full {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.layout__sidebar {
+  position: sticky;
+  top: var(--header-height);
+  align-self: start;
+  height: calc(100vh - var(--header-height));
+  overflow-y: auto;
+  padding: var(--space-6) var(--space-4);
+  border-right: 1px solid var(--color-border);
+  background-color: var(--color-bg-sidebar);
+}
+
+.layout__content {
+  min-width: 0;
+  padding: var(--space-7) var(--space-6) var(--space-8);
+}
+
+.lesson-content {
+  max-width: var(--content-max-width);
+}
+
+// --- 目次 (TOC) ---------------------------------------------------
+
+.toc__title {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--color-text-subtle);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin: 0 0 var(--space-3);
+}
+
+.toc__list,
+.toc__list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.toc__list ul {
+  padding-left: var(--space-4);
+}
+
+.toc__list li {
+  margin: 0;
+}
+
+.toc__link {
+  display: block;
+  padding: var(--space-1) 0;
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  padding-left: var(--space-3);
+
+  &:hover {
+    color: var(--color-text);
+  }
+
+  &.is-active {
+    color: var(--color-accent);
+    border-left-color: var(--color-accent);
+    font-weight: 700;
+  }
+}
+
+// --- ページヘッダー -------------------------------------------------
+
+.page-header {
+  margin-bottom: var(--space-7);
+}
+
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  li:not(:last-child)::after {
+    content: "/";
+    color: var(--color-text-subtle);
+  }
+
+  a {
+    color: var(--color-text-muted);
+    text-decoration: none;
+
+    &:hover {
+      color: var(--color-link);
+      text-decoration: underline;
+    }
+  }
+}
+
+.lesson-title {
+  font-size: var(--fs-2xl);
+  line-height: var(--lh-tight);
+  font-weight: 800;
+  margin: 0 0 var(--space-4);
+}
+
+.lesson-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.lesson-meta__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  background-color: var(--color-bg-alt);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+}
+
+// --- レスポンシブ ----------------------------------------------------
+
+@media (max-width: 960px) {
+  .layout {
+    display: block;
+  }
+
+  .toc-toggle {
+    display: inline-flex;
+  }
+
+  .layout__sidebar {
+    position: fixed;
+    inset: var(--header-height) 0 0 0;
+    z-index: 40;
+    width: 100%;
+    height: auto;
+    max-height: calc(100vh - var(--header-height));
+    transform: translateY(-8px);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity var(--transition-base), transform var(--transition-base);
+    box-shadow: var(--shadow-md);
+  }
+
+  .layout__sidebar.is-open {
+    transform: translateY(0);
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
+
+  .layout__content {
+    padding: var(--space-6) var(--space-4) var(--space-7);
+  }
+}
+
+@media (max-width: 600px) {
+  .site-header {
+    padding: 0 var(--space-3);
+  }
+
+  .lesson-title {
+    font-size: var(--fs-xl);
+  }
+
+  .layout__content {
+    padding: var(--space-5) var(--space-3) var(--space-6);
+  }
+}

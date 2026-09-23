@@ -1,0 +1,247 @@
+// ============================================================
+// コードブロック / ターミナル出力 / diff / hljs シンタックスハイライト
+// ============================================================
+
+.code-block {
+  margin: 0 0 var(--space-5);
+  border: 1px solid var(--color-code-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background-color: var(--color-code-bg);
+}
+
+.code-block__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background-color: var(--color-code-header-bg);
+  border-bottom: 1px solid var(--color-code-border);
+  font-size: var(--fs-sm);
+}
+
+.code-block__lang {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.75rem;
+  color: var(--color-text-subtle);
+}
+
+.code-block__filename {
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-block__spacer {
+  flex: 1 1 auto;
+}
+
+.code-block__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  background-color: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+
+  &:hover {
+    color: var(--color-text);
+    background-color: var(--color-bg-alt);
+  }
+
+  &.is-copied {
+    color: var(--color-tip-border);
+    border-color: var(--color-tip-border);
+  }
+}
+
+.code-block pre {
+  margin: 0;
+  padding: var(--space-4);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.code-block code,
+.code-block pre {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--color-code-text);
+  background: transparent;
+}
+
+// --- diff（追加/削除行の強調）--------------------------------------
+
+.code-block--diff pre {
+  padding: var(--space-2) 0;
+}
+
+.diff-line {
+  display: block;
+  padding: 0 var(--space-4);
+  border-left: 3px solid transparent;
+  white-space: pre;
+}
+
+.diff-line--add {
+  background-color: var(--color-diff-add-bg);
+  border-left-color: var(--color-diff-add-border);
+}
+
+.diff-line--remove {
+  background-color: var(--color-diff-remove-bg);
+  border-left-color: var(--color-diff-remove-border);
+}
+
+// --- ターミナル出力（コードブロックと見た目を区別）------------------------
+
+.terminal {
+  margin: 0 0 var(--space-5);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background-color: var(--color-terminal-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+.terminal__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background-color: var(--color-terminal-header-bg);
+}
+
+.terminal__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: #4b5563;
+
+  &:nth-child(1) {
+    background-color: #ef4444;
+  }
+
+  &:nth-child(2) {
+    background-color: #eab308;
+  }
+
+  &:nth-child(3) {
+    background-color: #22c55e;
+  }
+}
+
+.terminal__title {
+  margin-left: var(--space-2);
+  font-size: var(--fs-sm);
+  font-family: var(--font-mono);
+  color: #9aa4b2;
+}
+
+.terminal__body {
+  margin: 0;
+  padding: var(--space-4);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--color-terminal-text);
+}
+
+.terminal__line {
+  display: block;
+  white-space: pre;
+}
+
+.terminal__prompt {
+  color: var(--color-terminal-prompt);
+  user-select: none;
+}
+
+// ============================================================
+// highlight.js トークン配色（テーマ CSS は使わず自前で定義）
+// ============================================================
+
+.hljs {
+  background: var(--hljs-bg);
+  color: var(--hljs-text);
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--hljs-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-meta .hljs-keyword {
+  color: var(--hljs-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute {
+  color: var(--hljs-string);
+}
+
+.hljs-number,
+.hljs-deletion {
+  color: var(--hljs-number);
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.class_,
+.hljs-section {
+  color: var(--hljs-title);
+}
+
+.hljs-title.function_,
+.hljs-built_in {
+  color: var(--hljs-function);
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--hljs-variable);
+}
+
+.hljs-attr,
+.hljs-params {
+  color: var(--hljs-attr);
+}
+
+.hljs-tag {
+  color: var(--hljs-tag);
+}
+
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--hljs-symbol);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 700;
+}

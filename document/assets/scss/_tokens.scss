@@ -1,0 +1,255 @@
+// ============================================================
+// Design tokens
+// 色・余白・フォントなどを CSS カスタムプロパティとして出力する。
+// ライト/ダークは :root (ライト既定) → prefers-color-scheme → data-theme で上書き。
+// ============================================================
+
+:root {
+  // --- フォント -------------------------------------------------
+  --font-sans: "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Hiragino Sans",
+    "Yu Gothic", sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, Menlo, monospace;
+
+  --fs-root: 16px;
+  --fs-sm: 0.875rem;
+  --fs-base: 1rem;
+  --fs-md: 1.125rem;
+  --fs-lg: 1.375rem;
+  --fs-xl: 1.75rem;
+  --fs-2xl: 2.125rem;
+
+  --lh-base: 1.8;
+  --lh-tight: 1.4;
+
+  // --- 余白 -------------------------------------------------------
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  // --- レイアウト ---------------------------------------------------
+  --sidebar-width: 280px;
+  --content-max-width: 800px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --header-height: 56px;
+
+  // --- シャドウ -----------------------------------------------------
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+
+  // --- トランジション -------------------------------------------------
+  --transition-fast: 0.15s ease;
+  --transition-base: 0.25s ease;
+
+  // ============================================================
+  // 配色（ライトテーマ既定値）
+  // ============================================================
+  --color-bg: #ffffff;
+  --color-bg-alt: #f6f7f9;
+  --color-bg-raised: #ffffff;
+  --color-bg-sidebar: #f8f9fb;
+  --color-border: #e2e5ea;
+  --color-border-strong: #cbd1db;
+
+  --color-text: #1c2128;
+  --color-text-muted: #5b6472;
+  --color-text-subtle: #838d9a;
+  --color-link: #1a5fb4;
+  --color-link-hover: #0f4a91;
+
+  --color-accent: #2f6fed;
+  --color-accent-contrast: #ffffff;
+
+  // ステップ番号
+  --color-step-bg: #2f6fed;
+  --color-step-text: #ffffff;
+
+  // コールアウト
+  --color-note-bg: #eef4ff;
+  --color-note-border: #3b82f6;
+  --color-note-text: #1e3a8a;
+
+  --color-tip-bg: #eefbf3;
+  --color-tip-border: #22c55e;
+  --color-tip-text: #14532d;
+
+  --color-warning-bg: #fff9eb;
+  --color-warning-border: #eab308;
+  --color-warning-text: #713f12;
+
+  --color-danger-bg: #fef2f2;
+  --color-danger-border: #ef4444;
+  --color-danger-text: #7f1d1d;
+
+  // コードブロック（ライト）
+  --color-code-bg: #f6f7f9;
+  --color-code-header-bg: #eceef2;
+  --color-code-text: #1c2128;
+  --color-code-border: #e2e5ea;
+  --color-diff-add-bg: rgba(34, 197, 94, 0.14);
+  --color-diff-add-border: #22c55e;
+  --color-diff-remove-bg: rgba(239, 68, 68, 0.14);
+  --color-diff-remove-border: #ef4444;
+
+  // ターミナル（常にダーク基調）
+  --color-terminal-bg: #1c1f26;
+  --color-terminal-header-bg: #14161b;
+  --color-terminal-text: #e6e8ee;
+  --color-terminal-prompt: #4ade80;
+
+  // hljs（ライト）
+  --hljs-bg: transparent;
+  --hljs-text: #1c2128;
+  --hljs-comment: #6b7280;
+  --hljs-keyword: #b3499d;
+  --hljs-string: #22863a;
+  --hljs-number: #b35900;
+  --hljs-function: #1a5fb4;
+  --hljs-variable: #ab2f5e;
+  --hljs-attr: #af7500;
+  --hljs-tag: #22863a;
+  --hljs-title: #6f42c1;
+  --hljs-symbol: #b35900;
+}
+
+// ============================================================
+// ダークテーマ: OS 設定に追従（data-theme 未指定時）
+// ============================================================
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #14161b;
+    --color-bg-alt: #1a1d24;
+    --color-bg-raised: #1d2028;
+    --color-bg-sidebar: #191c22;
+    --color-border: #2c313c;
+    --color-border-strong: #3a4150;
+
+    --color-text: #e6e8ee;
+    --color-text-muted: #a3abba;
+    --color-text-subtle: #7a8390;
+    --color-link: #7cb0ff;
+    --color-link-hover: #a6c8ff;
+
+    --color-accent: #5b8def;
+    --color-accent-contrast: #0b1120;
+
+    --color-step-bg: #5b8def;
+    --color-step-text: #0b1120;
+
+    --color-note-bg: #17233d;
+    --color-note-border: #4d8bff;
+    --color-note-text: #bcd4ff;
+
+    --color-tip-bg: #123a24;
+    --color-tip-border: #34d399;
+    --color-tip-text: #b7f0d1;
+
+    --color-warning-bg: #3a2f0c;
+    --color-warning-border: #facc15;
+    --color-warning-text: #fde9a8;
+
+    --color-danger-bg: #3a1414;
+    --color-danger-border: #f87171;
+    --color-danger-text: #fecaca;
+
+    --color-code-bg: #1a1d24;
+    --color-code-header-bg: #20242c;
+    --color-code-text: #e6e8ee;
+    --color-code-border: #2c313c;
+    --color-diff-add-bg: rgba(52, 211, 153, 0.14);
+    --color-diff-add-border: #34d399;
+    --color-diff-remove-bg: rgba(248, 113, 113, 0.16);
+    --color-diff-remove-border: #f87171;
+
+    --color-terminal-bg: #0c0e12;
+    --color-terminal-header-bg: #08090c;
+    --color-terminal-text: #e6e8ee;
+    --color-terminal-prompt: #4ade80;
+
+    --hljs-bg: transparent;
+    --hljs-text: #e6e8ee;
+    --hljs-comment: #8b93a3;
+    --hljs-keyword: #f2a6de;
+    --hljs-string: #8ee08e;
+    --hljs-number: #f5b87a;
+    --hljs-function: #7cb0ff;
+    --hljs-variable: #f397b0;
+    --hljs-attr: #f0c674;
+    --hljs-tag: #8ee08e;
+    --hljs-title: #c9a3ff;
+    --hljs-symbol: #f5b87a;
+  }
+}
+
+// ============================================================
+// ダークテーマ: トグルボタンによる明示指定
+// ============================================================
+:root[data-theme="dark"] {
+  --color-bg: #14161b;
+  --color-bg-alt: #1a1d24;
+  --color-bg-raised: #1d2028;
+  --color-bg-sidebar: #191c22;
+  --color-border: #2c313c;
+  --color-border-strong: #3a4150;
+
+  --color-text: #e6e8ee;
+  --color-text-muted: #a3abba;
+  --color-text-subtle: #7a8390;
+  --color-link: #7cb0ff;
+  --color-link-hover: #a6c8ff;
+
+  --color-accent: #5b8def;
+  --color-accent-contrast: #0b1120;
+
+  --color-step-bg: #5b8def;
+  --color-step-text: #0b1120;
+
+  --color-note-bg: #17233d;
+  --color-note-border: #4d8bff;
+  --color-note-text: #bcd4ff;
+
+  --color-tip-bg: #123a24;
+  --color-tip-border: #34d399;
+  --color-tip-text: #b7f0d1;
+
+  --color-warning-bg: #3a2f0c;
+  --color-warning-border: #facc15;
+  --color-warning-text: #fde9a8;
+
+  --color-danger-bg: #3a1414;
+  --color-danger-border: #f87171;
+  --color-danger-text: #fecaca;
+
+  --color-code-bg: #1a1d24;
+  --color-code-header-bg: #20242c;
+  --color-code-text: #e6e8ee;
+  --color-code-border: #2c313c;
+  --color-diff-add-bg: rgba(52, 211, 153, 0.14);
+  --color-diff-add-border: #34d399;
+  --color-diff-remove-bg: rgba(248, 113, 113, 0.16);
+  --color-diff-remove-border: #f87171;
+
+  --color-terminal-bg: #0c0e12;
+  --color-terminal-header-bg: #08090c;
+  --color-terminal-text: #e6e8ee;
+  --color-terminal-prompt: #4ade80;
+
+  --hljs-bg: transparent;
+  --hljs-text: #e6e8ee;
+  --hljs-comment: #8b93a3;
+  --hljs-keyword: #f2a6de;
+  --hljs-string: #8ee08e;
+  --hljs-number: #f5b87a;
+  --hljs-function: #7cb0ff;
+  --hljs-variable: #f397b0;
+  --hljs-attr: #f0c674;
+  --hljs-tag: #8ee08e;
+  --hljs-title: #c9a3ff;
+  --hljs-symbol: #f5b87a;
+}

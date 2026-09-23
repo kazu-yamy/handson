@@ -1,0 +1,28 @@
+# OS
+.DS_Store
+
+# Node
+node_modules/
+
+# work/ 配下（学習者向けブランチで作成するプロジェクトのビルド生成物）
+# work/ 自体は無視しない
+work/**/node_modules/
+work/**/.next/
+work/**/out/
+work/**/target/
+work/**/.terraform/
+work/**/*.tfstate
+work/**/*.tfstate.*
+work/**/.terraform.lock.hcl
+
+# Android
+work/**/build/
+work/**/.gradle/
+work/**/local.properties
+work/**/*.iml
+
+# iOS（Package.resolved は依存解決の再現性のため残す）
+work/**/xcuserdata/
+work/**/DerivedData/
+work/**/*.xcworkspace/xcuserdata/
+work/**/.build/

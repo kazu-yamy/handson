@@ -1,0 +1,11 @@
+{
+  "name": "handson",
+  "private": true,
+  "scripts": {
+    "build:css": "sass document/assets/scss/main.scss document/assets/css/main.css --style=expanded --no-source-map",
+    "watch:css": "sass document/assets/scss/main.scss document/assets/css/main.css --style=expanded --no-source-map --watch"
+  },
+  "devDependencies": {
+    "sass": "^1.105.0"
+  }
+}
