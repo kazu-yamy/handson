@@ -213,6 +213,17 @@
 └── tsconfig.json</code></pre>
           </div>
 
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">このトラックでのディレクトリの使い分け</p>
+              <p>
+                このトラックでは <code>src/app/</code> をルーティング専用にし、再利用する部品は <code>src/components/</code>、共通 SCSS は <code>src/styles/</code> に置く構成をとります。
+                詳細はトラックの README（<a href="../README.md">nextjs/README.md</a>）の「プロジェクト構成」を参照してください。今回のレッスンでは、このあと <code>src/styles/</code> を作成します。
+              </p>
+            </div>
+          </div>
+
           <p>主なファイルの役割は次のとおりです。</p>
 
           <ul>
@@ -295,7 +306,10 @@
             <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd 01-setup</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm install sass</span><span class="terminal__line"></span><span class="terminal__line">added 8 packages, and audited 354 packages in 778ms</span><span class="terminal__line">found 0 vulnerabilities</span></pre>
           </div>
 
-          <p>次に、2 つの CSS ファイルの拡張子を <code>.scss</code> に変えます（このコマンドは何も出力しません）。<code>globals.scss</code> の中身は変更しません。</p>
+          <p>
+            次に、共通スタイルの置き場所を <code>src/styles/</code> に変え、拡張子も <code>.scss</code> に変えます（このコマンドは何も出力しません）。
+            <code>page.module.css</code> は <code>page.tsx</code> と同じ場所のまま、拡張子だけ変えます。中身はどちらも変更しません。
+          </p>
 
           <div class="terminal">
             <div class="terminal__header">
@@ -304,7 +318,19 @@
               <span class="terminal__dot"></span>
               <span class="terminal__title">Terminal</span>
             </div>
-            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mv src/app/globals.css src/app/globals.scss</span><span class="terminal__line"><span class="terminal__prompt">$</span> mv src/app/page.module.css src/app/page.module.scss</span></pre>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p src/styles</span><span class="terminal__line"><span class="terminal__prompt">$</span> mv src/app/globals.css src/styles/globals.scss</span><span class="terminal__line"><span class="terminal__prompt">$</span> mv src/app/page.module.css src/app/page.module.scss</span></pre>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">なぜ src/styles/ に移すのか</p>
+              <p>
+                このトラックでは、複数のページやコンポーネントから参照する共通 SCSS（<code>globals.scss</code> など）を <code>src/styles/</code> に集約する規約にしています。
+                <code>src/app/</code> はルーティング専用の場所として空けておくためです。
+                参照には <code>@/</code> という import エイリアスを使います。これは <code>tsconfig.json</code> の <code>"paths": { "@/*": ["./src/*"] }</code> によって <code>@/*</code> が <code>./src/*</code> を指すよう設定されているためで、<code>create-next-app</code> 実行時に <code>--import-alias "@/*"</code> を指定したことで生成されています。
+              </p>
+            </div>
           </div>
 
           <div class="callout callout--note">
@@ -315,7 +341,7 @@
             </div>
           </div>
 
-          <p><code>layout.tsx</code> で読み込んでいるファイル名を書き換えます。</p>
+          <p><code>layout.tsx</code> で読み込んでいるファイルのパスを、移動先に合わせて <code>@/</code> エイリアス経由の指定に書き換えます。</p>
 
           <div class="code-block code-block--diff">
             <div class="code-block__header">
@@ -324,7 +350,7 @@
               <span class="code-block__spacer"></span>
               <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
             </div>
-            <pre><span class="diff-line diff-line--remove">- import "./globals.css";</span><span class="diff-line diff-line--add">+ import "./globals.scss";</span></pre>
+            <pre><span class="diff-line diff-line--remove">- import "./globals.css";</span><span class="diff-line diff-line--add">+ import "@/styles/globals.scss";</span></pre>
           </div>
 
           <p><code>page.module.scss</code> は、中身を全て次の内容に置き換えます。ページ中央に見出しとバージョン表記を並べるだけの最小限のスタイルです。</p>
@@ -477,7 +503,7 @@ export default function Home() {
         </li>
         <li class="checklist__item">
           <input type="checkbox" id="check-5" class="checklist__input">
-          <label for="check-5" class="checklist__label"><code>sass</code> を導入し、<code>globals.scss</code> と <code>page.module.scss</code> に置き換えた</label>
+          <label for="check-5" class="checklist__label"><code>sass</code> を導入し、<code>src/styles/globals.scss</code> と <code>page.module.scss</code> に置き換えた</label>
         </li>
         <li class="checklist__item">
           <input type="checkbox" id="check-6" class="checklist__input">
