@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02: App Router の基礎とファイルベースルーティング | Next.js ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Next.js</li>
+          <li aria-current="page">02</li>
+        </ol>
+        <h1 class="lesson-title">App Router の基礎とファイルベースルーティング</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 01 を終え、Next.js で複数ページのアプリを作り始めたい人</li>
+          <li class="lesson-meta__item">📋 前提: React のコンポーネントと JSX の基本が分かること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../01-setup/index.html">01: 環境構築とプロジェクト作成</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>src/app/</code> のフォルダ構成と URL の対応（ファイルベースルーティング）を理解する</li>
+          <li><code>page.tsx</code> と <code>layout.tsx</code> でページと共通レイアウトを作り、<code>Link</code> でページ間を移動する</li>
+          <li>ネストしたレイアウトと動的ルート <code>[slug]</code> で、一覧と詳細のページを作る</li>
+          <li><code>not-found.tsx</code> と <code>loading.tsx</code> で、404 と読み込み中の表示を用意する</li>
+          <li>ルートグループ <code>(group)</code> とプライベートフォルダ <code>_folder</code> の役割を説明できる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        App Router では、<code>src/app/</code> 配下のフォルダ構成がそのまま URL になります。これを「ファイルベースルーティング」と呼びます。
+        このレッスンでは、01 で作ったトップページに About・Blog・Contact のページを追加し、共通ヘッダー、ブログ用のサイドバー付きレイアウト、記事ごとの詳細ページまでを作ります。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">出発点</p>
+          <p>
+            01 で作ったプロジェクトをそのまま使って続けます。ディレクトリ名は <code>01-setup</code> のままで構いません。
+            教材中のコマンド出力は完成コードのディレクトリ名 <code>02-app-router</code> で表示していますが、手元では <code>01-setup@0.1.0</code> のように表示されます。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>Node.js 24.21.0 / npm 11.19.0 / Next.js 16.3.6 / React 19.2.8 / sass 1.105.0 で動作を確認しています（執筆時点: 2026年9月）。</p>
+        </div>
+      </div>
+
+      <h3 id="conventions">App Router のファイル規約</h3>
+      <p>このレッスンで使うファイル名とフォルダ名の規約を先に一覧しておきます。各ステップで 1 つずつ実際に作っていきます。</p>
+
+      <table>
+        <thead>
+          <tr><th>ファイル / フォルダ</th><th>役割</th><th>このレッスンでの例</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>page.tsx</code></td><td>そのフォルダの URL で表示される画面。これがあるフォルダだけが URL として公開される</td><td><code>about/page.tsx</code> → <code>/about</code></td></tr>
+          <tr><td><code>layout.tsx</code></td><td>同じ階層以下の全ページを包む共通レイアウト。ページを移動しても再レンダリングされずに残る</td><td><code>blog/layout.tsx</code>（サイドバー）</td></tr>
+          <tr><td><code>loading.tsx</code></td><td>同じ階層以下のページを読み込んでいる間に表示する画面</td><td><code>blog/loading.tsx</code></td></tr>
+          <tr><td><code>not-found.tsx</code></td><td><code>notFound()</code> を呼んだときや、存在しない URL にアクセスしたときの画面</td><td><code>app/not-found.tsx</code></td></tr>
+          <tr><td><code>[slug]/</code></td><td>動的ルート。URL の一部を <code>params</code> として受け取る</td><td><code>blog/[slug]/page.tsx</code> → <code>/blog/app-router-basics</code></td></tr>
+          <tr><td><code>(group)/</code></td><td>ルートグループ。フォルダを整理するためのもので、URL には現れない</td><td><code>(marketing)/contact/page.tsx</code> → <code>/contact</code></td></tr>
+          <tr><td><code>_folder/</code></td><td>プライベートフォルダ。ルーティングの対象から外れ、中に何を置いても URL にならない</td><td><code>_components/</code>、<code>blog/_data/</code></td></tr>
+        </tbody>
+      </table>
+
+      <p>レッスンを終えると、<code>src/app/</code> は次の構成になります。</p>
+
+      <div class="code-block">
+        <div class="code-block__header">
+          <span class="code-block__lang">Text</span>
+          <span class="code-block__filename">src/app/</span>
+          <span class="code-block__spacer"></span>
+          <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+        </div>
+        <pre><code class="language-plaintext">src/app/
+├── (marketing)/
+│   └── contact/
+│       ├── page.module.scss
+│       └── page.tsx          # /contact
+├── _components/
+│   └── Header/
+│       ├── Header.module.scss
+│       ├── Header.tsx
+│       └── index.ts
+├── about/
+│   ├── page.module.scss
+│   └── page.tsx              # /about
+├── blog/
+│   ├── [slug]/
+│   │   ├── page.module.scss
+│   │   └── page.tsx          # /blog/:slug
+│   ├── _data/
+│   │   └── posts.ts
+│   ├── layout.module.scss
+│   ├── layout.tsx
+│   ├── loading.module.scss
+│   ├── loading.tsx
+│   ├── page.module.scss
+│   └── page.tsx              # /blog
+├── favicon.ico
+├── layout.tsx
+├── not-found.module.scss
+├── not-found.tsx
+├── page.module.scss
+└── page.tsx                  # /</code></pre>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+      <p>作業はプロジェクトのディレクトリで行います。開発サーバー（<code>npm run dev</code>）を起動したままにしておくと、保存するたびにブラウザで結果を確かめられます。</p>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">静的ルート /about を作り、Link でつなぐ</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>src/app/about/</code> フォルダを作り、その中に <code>page.tsx</code> を置きます。これだけで <code>/about</code> という URL のページになります。
+            ルーティングの設定ファイルを書く必要はありません。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/about/page.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">import styles from "./page.module.scss";
+
+export default function AboutPage() {
+  return (
+    &lt;main className={styles.main}&gt;
+      &lt;h1 className={styles.title}&gt;About&lt;/h1&gt;
+      &lt;p&gt;このページは about/page.tsx が /about に対応することを確かめるためのページです。&lt;/p&gt;
+    &lt;/main&gt;
+  );
+}</code></pre>
+          </div>
+
+          <p>ページ専用のスタイルは、<code>page.tsx</code> と同じ場所の <code>page.module.scss</code> に書きます。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">SCSS</span>
+              <span class="code-block__filename">src/app/about/page.module.scss</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-scss">.main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 2rem;
+}
+
+.title {
+  font-size: 2rem;
+  font-weight: 700;
+}</code></pre>
+          </div>
+
+          <p>
+            次に、トップページから About ページへのリンクを追加します。Next.js でページ間を移動するときは、<code>&lt;a&gt;</code> ではなく <code>next/link</code> の <code>Link</code> コンポーネントを使います。
+            <code>Link</code> はページ全体を読み込み直さずに画面を切り替え、画面内に表示されたリンク先を事前に読み込みます。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/app/page.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--add">+ import Link from "next/link";</span><span class="diff-line">  import { version } from "next/package.json";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line"> </span><span class="diff-line">  export default function Home() {</span><span class="diff-line">    return (</span><span class="diff-line">      &lt;main className={styles.main}&gt;</span><span class="diff-line">        &lt;h1 className={styles.title}&gt;Hello, Next.js!&lt;/h1&gt;</span><span class="diff-line">        &lt;p className={styles.version}&gt;Next.js v{version}&lt;/p&gt;</span><span class="diff-line diff-line--add">+       &lt;Link href="/about" className={styles.link}&gt;</span><span class="diff-line diff-line--add">+         About ページへ</span><span class="diff-line diff-line--add">+       &lt;/Link&gt;</span><span class="diff-line">      &lt;/main&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+          </div>
+
+          <p><code>page.module.scss</code> の末尾に、リンク用の <code>.link</code> を追加します。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/app/page.module.scss</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  .version {</span><span class="diff-line">    color: #666;</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ .link {</span><span class="diff-line diff-line--add">+   margin-top: 0.5rem;</span><span class="diff-line diff-line--add">+   color: #0070f3;</span><span class="diff-line diff-line--add">+   text-decoration: underline;</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ブラウザでトップページの「About ページへ」をクリックし、URL が <code>/about</code> に変わって見出し「About」が表示されれば成功です。ターミナルからは次のように確かめられます。</p>
+            <div class="terminal">
+              <div class="terminal__header">
+                <span class="terminal__dot"></span>
+                <span class="terminal__dot"></span>
+                <span class="terminal__dot"></span>
+                <span class="terminal__title">Terminal</span>
+              </div>
+              <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s localhost:3000/about | grep -o '&lt;h1[^&gt;]*&gt;[^&lt;]*&lt;/h1&gt;'</span><span class="terminal__line">&lt;h1 class="page-module-scss-module__KR6iIa__title"&gt;About&lt;/h1&gt;</span></pre>
+            </div>
+            <p><code>class</code> の値は CSS Modules が自動で付ける名前です。環境によって変わります。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">共通ヘッダーを作り、ルートレイアウトに組み込む</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            全ページに表示するナビゲーション（Header）を作ります。このヘッダーはアプリのルートでしか使わない部品なので、構成規約に従って <code>src/app/_components/Header/</code> に置きます。
+            先頭に <code>_</code> が付いたフォルダはプライベートフォルダで、ルーティングの対象になりません。
+            また、構成規約では 1 コンポーネントを 1 フォルダにまとめます。本体（<code>Header.tsx</code>）、スタイル（<code>Header.module.scss</code>）、re-export 用の <code>index.ts</code> を同じフォルダに置きます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/_components/Header/Header.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import styles from "./Header.module.scss";
+
+const NAV_ITEMS = [
+  { href: "/", label: "Home" },
+  { href: "/about", label: "About" },
+  { href: "/blog", label: "Blog" },
+] as const;
+
+export function Header() {
+  const pathname = usePathname();
+
+  return (
+    &lt;header className={styles.header}&gt;
+      &lt;nav className={styles.nav}&gt;
+        &lt;ul className={styles.list}&gt;
+          {NAV_ITEMS.map((item) =&gt; {
+            const isActive =
+              item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+
+            return (
+              &lt;li key={item.href}&gt;
+                &lt;Link
+                  href={item.href}
+                  className={isActive ? `${styles.link} ${styles.linkActive}` : styles.link}
+                  aria-current={isActive ? "page" : undefined}
+                &gt;
+                  {item.label}
+                &lt;/Link&gt;
+              &lt;/li&gt;
+            );
+          })}
+        &lt;/ul&gt;
+      &lt;/nav&gt;
+    &lt;/header&gt;
+  );
+}</code></pre>
+          </div>
+
+          <p>
+            App Router のコンポーネントは、既定ではサーバー側が描画する「サーバーコンポーネント」です。
+            現在の URL を取得する <code>usePathname</code> は、ブラウザ側でしか動かないフックです。そこでファイルの先頭に <code>"use client"</code> を書き、このコンポーネントを「クライアントコンポーネント」にしています。
+            取得したパスと各リンクの <code>href</code> を比べ、現在いるページのリンクを強調します。<code>/</code> だけは完全一致、それ以外は前方一致で判定しているため、<code>/blog/app-router-basics</code> を開いているときも「Blog」が強調されます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">SCSS</span>
+              <span class="code-block__filename">src/app/_components/Header/Header.module.scss</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-scss">.header {
+  border-bottom: 1px solid #e5e5e5;
+  padding: 1rem 2rem;
+}
+
+.nav {
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.list {
+  display: flex;
+  gap: 1.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.link {
+  color: #666;
+  text-decoration: none;
+  font-weight: 500;
+
+  &amp;:hover {
+    color: #111;
+  }
+}
+
+.linkActive {
+  color: #0070f3;
+}</code></pre>
+          </div>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/_components/Header/index.ts</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">export { Header } from "./Header";</code></pre>
+          </div>
+
+          <p>最後に、ルートレイアウトに <code>&lt;Header /&gt;</code> を組み込みます。ルートレイアウトは全ページを包むので、どのページにもヘッダーが表示されるようになります。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/app/layout.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  import type { Metadata } from "next";</span><span class="diff-line">  import { Geist, Geist_Mono } from "next/font/google";</span><span class="diff-line diff-line--add">+ import { Header } from "./_components/Header";</span><span class="diff-line">  import "@/styles/globals.scss";</span><span class="diff-line"> </span><span class="diff-line">  // ...（フォント定義と metadata は変更なし）</span><span class="diff-line"> </span><span class="diff-line">  export default function RootLayout({ children }: LayoutProps&lt;"/"&gt;) {</span><span class="diff-line">    return (</span><span class="diff-line">      &lt;html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}&gt;</span><span class="diff-line diff-line--remove">-       &lt;body&gt;{children}&lt;/body&gt;</span><span class="diff-line diff-line--add">+       &lt;body&gt;</span><span class="diff-line diff-line--add">+         &lt;Header /&gt;</span><span class="diff-line diff-line--add">+         {children}</span><span class="diff-line diff-line--add">+       &lt;/body&gt;</span><span class="diff-line">      &lt;/html&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>"use client"</code> を付ける範囲は最小限に</p>
+              <p>
+                <code>layout.tsx</code> 自体に <code>"use client"</code> を付けると、その配下もクライアント側で動くコンポーネントとして扱われ、サーバーコンポーネントの利点が失われます。
+                ここでは <code>usePathname</code> が必要な <code>Header</code> だけを切り出して、クライアントコンポーネントにしました。<code>layout.tsx</code> はサーバーコンポーネントのまま <code>&lt;Header /&gt;</code> を呼び出しています。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>トップページと <code>/about</code> の上部に「Home / About / Blog」のナビゲーションが表示され、開いているページのリンクだけが青色になれば成功です。「Blog」は次のステップで作るので、この時点でクリックすると 404 ページが表示されます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">ネストしたレイアウトで /blog を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ブログの記事データを用意します。本来はデータベースや API から取得するところですが、このレッスンでは配列で代用します。
+            データ用のファイルもプライベートフォルダ <code>_data/</code> に置くので、URL にはなりません。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/blog/_data/posts.ts</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">export type Post = {
+  slug: string;
+  title: string;
+  body: string;
+};
+
+// サイドバー（layout.tsx）用の一覧はここから直接参照する（遅延なし）。
+// loading.tsx の動作を見せるための遅延は getPosts / getPost にのみ入れる。
+export const POSTS: Post[] = [
+  {
+    slug: "app-router-basics",
+    title: "App Router の基礎",
+    body: "src/app/ 配下のフォルダ構成がそのまま URL になります。page.tsx がそのルートの画面です。",
+  },
+  {
+    slug: "nested-layouts",
+    title: "ネストしたレイアウト",
+    body: "layout.tsx は同じ階層以下の全ページに適用されます。ルートレイアウトと組み合わせて共通 UI を組み立てます。",
+  },
+  {
+    slug: "dynamic-routes",
+    title: "動的ルート",
+    body: "[slug] のようにフォルダ名を角括弧で囲むと、URL の一部を受け取れる動的ルートになります。",
+  },
+];
+
+function delay(ms: number) {
+  return new Promise((resolve) =&gt; setTimeout(resolve, ms));
+}
+
+export async function getPosts(): Promise&lt;Post[]&gt; {
+  await delay(1000);
+  return POSTS;
+}
+
+export async function getPost(slug: string): Promise&lt;Post | undefined&gt; {
+  await delay(1000);
+  return POSTS.find((post) =&gt; post.slug === slug);
+}</code></pre>
+          </div>
+
+          <p>
+            <code>getPosts</code> と <code>getPost</code> には、ステップ 5 で読み込み中の表示を体験するため、わざと 1 秒の遅延を入れています。
+            一方、<code>POSTS</code> 配列はレイアウトのサイドバーから遅延なしで直接参照します（理由はステップ 5 のコールアウトで説明します）。
+          </p>
+
+          <p>
+            次に、<code>/blog</code> 以下の全ページに共通するレイアウトを <code>blog/layout.tsx</code> に書きます。
+            <code>layout.tsx</code> は入れ子になり、<code>/blog</code> 配下のページは「ルートレイアウト（ヘッダー）→ ブログのレイアウト（サイドバー）→ ページ」の順に包まれます。
+            <code>children</code> の位置に各ページの内容が入ります。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/blog/layout.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">import Link from "next/link";
+import { POSTS } from "./_data/posts";
+import styles from "./layout.module.scss";
+
+export default function BlogLayout({ children }: LayoutProps&lt;"/blog"&gt;) {
+  return (
+    &lt;div className={styles.layout}&gt;
+      &lt;aside className={styles.sidebar}&gt;
+        &lt;p className={styles.sidebarTitle}&gt;記事一覧&lt;/p&gt;
+        &lt;ul className={styles.sidebarList}&gt;
+          {POSTS.map((post) =&gt; (
+            &lt;li key={post.slug}&gt;
+              &lt;Link href={`/blog/${post.slug}`}&gt;{post.title}&lt;/Link&gt;
+            &lt;/li&gt;
+          ))}
+        &lt;/ul&gt;
+      &lt;/aside&gt;
+      &lt;div className={styles.content}&gt;{children}&lt;/div&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+          </div>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">SCSS</span>
+              <span class="code-block__filename">src/app/blog/layout.module.scss</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-scss">.layout {
+  display: flex;
+  gap: 2rem;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.sidebar {
+  flex: 0 0 200px;
+}
+
+.sidebarTitle {
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.sidebarList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+}</code></pre>
+          </div>
+
+          <p>
+            続いて、記事一覧のページ <code>blog/page.tsx</code> を作ります。コンポーネントを <code>async</code> 関数にすると、サーバーコンポーネントの中で直接 <code>await</code> してデータを取得できます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/blog/page.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">import Link from "next/link";
+import { getPosts } from "./_data/posts";
+import styles from "./page.module.scss";
+
+export default async function BlogPage() {
+  const posts = await getPosts();
+
+  return (
+    &lt;div&gt;
+      &lt;h1 className={styles.title}&gt;Blog&lt;/h1&gt;
+      &lt;ul className={styles.list}&gt;
+        {posts.map((post) =&gt; (
+          &lt;li key={post.slug} className={styles.item}&gt;
+            &lt;Link href={`/blog/${post.slug}`} className={styles.itemTitle}&gt;
+              {post.title}
+            &lt;/Link&gt;
+            &lt;p className={styles.itemBody}&gt;{post.body}&lt;/p&gt;
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+          </div>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">SCSS</span>
+              <span class="code-block__filename">src/app/blog/page.module.scss</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-scss">.title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.item {
+  border-bottom: 1px solid #e5e5e5;
+  padding-bottom: 1rem;
+}
+
+.itemTitle {
+  font-weight: 700;
+  color: #0070f3;
+}
+
+.itemBody {
+  color: #666;
+  margin-top: 0.25rem;
+}</code></pre>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>LayoutProps</code> / <code>PageProps</code> 型に赤線が出る場合</p>
+              <p>
+                <code>LayoutProps&lt;"/blog"&gt;</code> のような型ヘルパーは、<code>next dev</code> や <code>next build</code> の実行時に Next.js が自動生成します。生成先は <code>.next/types/routes.d.ts</code> です。
+                新しいフォルダを作った直後は生成が追いつかず、エディタに <code>Type '"/blog"' does not satisfy the constraint '"/"'</code> のような赤線が出ることがあります。ビルドや実行には影響しません。
+                開発サーバーが動いていれば、しばらくすると消えます。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ヘッダーの「Blog」をクリックし、約 1 秒待ってから、左に「記事一覧」のサイドバー、右に 3 件の記事が並べば成功です。この時点では記事の詳細ページがないので、記事のリンクをクリックすると 404 になります。</p>
+            <div class="terminal">
+              <div class="terminal__header">
+                <span class="terminal__dot"></span>
+                <span class="terminal__dot"></span>
+                <span class="terminal__dot"></span>
+                <span class="terminal__title">Terminal</span>
+              </div>
+              <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s localhost:3000/blog | grep -o '&lt;h1[^&gt;]*&gt;[^&lt;]*&lt;/h1&gt;'</span><span class="terminal__line">&lt;h1 class="page-module-scss-module__EK8plG__title"&gt;Blog&lt;/h1&gt;</span></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">動的ルート [slug] で記事の詳細ページを作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            記事ごとの URL（<code>/blog/app-router-basics</code> など）を 1 つのファイルで扱うため、フォルダ名を角括弧で囲んだ <code>blog/[slug]/</code> を作ります。
+            角括弧の中の名前（<code>slug</code>）が、URL から受け取る値の名前になります。
+            ターミナルでフォルダを作るときは、角括弧がシェルに解釈されないよう <code>mkdir -p "src/app/blog/[slug]"</code> のように引用符で囲んでください。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/blog/[slug]/page.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">import { notFound } from "next/navigation";
+import { POSTS, getPost } from "../_data/posts";
+import styles from "./page.module.scss";
+
+export function generateStaticParams() {
+  return POSTS.map((post) =&gt; ({ slug: post.slug }));
+}
+
+export default async function BlogPostPage({
+  params,
+}: PageProps&lt;"/blog/[slug]"&gt;) {
+  const { slug } = await params;
+  const post = await getPost(slug);
+
+  if (!post) {
+    notFound();
+  }
+
+  return (
+    &lt;article&gt;
+      &lt;h1 className={styles.title}&gt;{post.title}&lt;/h1&gt;
+      &lt;p className={styles.body}&gt;{post.body}&lt;/p&gt;
+    &lt;/article&gt;
+  );
+}</code></pre>
+          </div>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">SCSS</span>
+              <span class="code-block__filename">src/app/blog/[slug]/page.module.scss</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-scss">.title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+
+.body {
+  color: #333;
+  line-height: 1.7;
+}</code></pre>
+          </div>
+
+          <p>このファイルのポイントは次の 3 つです。</p>
+          <ul>
+            <li><strong><code>params</code> は Promise</strong>: Next.js 16 では、URL から受け取った値は <code>Promise&lt;{ slug: string }&gt;</code> として渡されます。<code>const { slug } = await params;</code> のように <code>await</code> してから使います。型は手書きせず、<code>PageProps&lt;"/blog/[slug]"&gt;</code> を使うと、ルートの文字列とファイルの配置がずれたときに型エラーで気付けます。</li>
+            <li><strong><code>generateStaticParams</code></strong>: ビルド時に生成しておく <code>slug</code> の一覧を返す関数です。ここでは <code>POSTS</code> の 3 件を返しているので、3 つの記事ページが事前に HTML として生成されます（最後の「本番ビルドでルート一覧を確認する」で確かめます）。</li>
+            <li><strong><code>notFound()</code></strong>: 該当する記事がないときに呼ぶと、処理をそこで打ち切って 404 用の画面を表示します。<code>notFound()</code> の後ろでは <code>post</code> が <code>undefined</code> でないことを TypeScript が理解するため、<code>post.title</code> をそのまま書けます。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>サイドバーの記事タイトルをクリックして、その記事の見出しと本文が表示されれば成功です。サイドバーはそのまま残り、右側だけが切り替わることにも注目してください。</p>
+            <div class="terminal">
+              <div class="terminal__header">
+                <span class="terminal__dot"></span>
+                <span class="terminal__dot"></span>
+                <span class="terminal__dot"></span>
+                <span class="terminal__title">Terminal</span>
+              </div>
+              <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s localhost:3000/blog/app-router-basics | grep -o '&lt;h1[^&gt;]*&gt;[^&lt;]*&lt;/h1&gt;'</span><span class="terminal__line">&lt;h1 class="page-module-scss-module__iH0fbq__title"&gt;App Router の基礎&lt;/h1&gt;</span></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">not-found.tsx と loading.tsx を追加する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>notFound()</code> を呼んだときや、存在しない URL を開いたときの画面を <code>src/app/not-found.tsx</code> に作ります。
+            <code>app/</code> 直下に置くと、アプリ全体の 404 画面になります。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/not-found.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">import Link from "next/link";
+import styles from "./not-found.module.scss";
+
+export default function NotFound() {
+  return (
+    &lt;div className={styles.main}&gt;
+      &lt;h1 className={styles.title}&gt;404 - Not Found&lt;/h1&gt;
+      &lt;p&gt;お探しのページは見つかりませんでした。&lt;/p&gt;
+      &lt;Link href="/" className={styles.link}&gt;
+        トップページへ戻る
+      &lt;/Link&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+          </div>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">SCSS</span>
+              <span class="code-block__filename">src/app/not-found.module.scss</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-scss">.main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60dvh;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.title {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.link {
+  color: #0070f3;
+  text-decoration: underline;
+}</code></pre>
+          </div>
+
+          <p>
+            次に、<code>/blog</code> 配下の読み込み中の表示を <code>blog/loading.tsx</code> に作ります。
+            <code>loading.tsx</code> を置くと、同じ階層以下のページがデータを待っている間、その内容が代わりに表示されます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/blog/loading.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">import styles from "./loading.module.scss";
+
+export default function BlogLoading() {
+  return &lt;p className={styles.loading}&gt;記事を読み込み中...&lt;/p&gt;;
+}</code></pre>
+          </div>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">SCSS</span>
+              <span class="code-block__filename">src/app/blog/loading.module.scss</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-scss">.loading {
+  color: #666;
+}</code></pre>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>layout.tsx</code> は <code>loading.tsx</code> の対象外</p>
+              <p>
+                <code>loading.tsx</code> が包むのは、同じ階層の <code>page.tsx</code> とその配下だけです。同じ階層の <code>layout.tsx</code> は包まれません。
+                もしサイドバーを遅延ありの <code>getPosts()</code> で作ると、<code>loading.tsx</code> が表示される前にレイアウト自体の描画で 1 秒待たされてしまいます。
+                そのため、サイドバーは遅延なしの <code>POSTS</code> を直接参照し、遅延はページ側の <code>getPosts</code> / <code>getPost</code> にだけ入れています。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>notFound()</code> でも HTTP ステータスが 200 のままになる</p>
+              <p>
+                <code>/blog/nonexistent</code> のように存在しない記事を開くと、画面には 404 ページが表示されますが、HTTP ステータスコードは <strong>200</strong> が返ります。
+                祖先のフォルダに <code>loading.tsx</code> があるルートは、レスポンスを少しずつ送る「ストリーミング」で返されます。ストリーミングの場合、Next.js は 200 を返す仕様です（公式ドキュメントの <code>not-found.js</code> の API リファレンスに記載があります）。
+                <code>npm run dev</code> でも、<code>npm run build</code> 後の <code>npm run start</code> でも同じ結果になります。
+              </p>
+              <p>
+                そのため、ステータスコードだけで 404 になったかを判定しないでください。HTTP ステータスが 200 になるのは <code>npm run dev</code> でも本番ビルド後の <code>npm run start</code> でも共通ですが、確認方法は異なります。<code>npm run dev</code> ではページのソースに <code>&lt;meta name="next-error" content="not-found"/&gt;</code> が含まれているかで判定し、<code>npm run start</code> ではこの meta タグが出力されないため、検索エンジン向けの <code>&lt;meta name="robots" content="noindex"/&gt;</code> が含まれているかで判定します。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ヘッダーの「Home」から「Blog」に移動すると、ヘッダーとサイドバーが表示され、右側に「記事を読み込み中...」が約 1 秒表示されてから記事一覧に切り替わります。ブラウザで <code>http://localhost:3000/blog/nonexistent</code> を開くと「404 - Not Found」が表示されます。ステータスコードは上の注意のとおり 200 です。</p>
+            <div class="terminal">
+              <div class="terminal__header">
+                <span class="terminal__dot"></span>
+                <span class="terminal__dot"></span>
+                <span class="terminal__dot"></span>
+                <span class="terminal__title">Terminal</span>
+              </div>
+              <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/blog/nonexistent</span><span class="terminal__line">200</span></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">ルートグループ (marketing) で /contact を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            フォルダ名を丸括弧で囲むと「ルートグループ」になり、フォルダの整理には使えますが URL には現れません。
+            <code>src/app/(marketing)/contact/page.tsx</code> を作ると、URL は <code>/marketing/contact</code> ではなく <code>/contact</code> になります。
+            ターミナルでフォルダを作るときは、括弧がシェルに解釈されないよう <code>mkdir -p "src/app/(marketing)/contact"</code> のように引用符で囲んでください。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/(marketing)/contact/page.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">import styles from "./page.module.scss";
+
+export default function ContactPage() {
+  return (
+    &lt;main className={styles.main}&gt;
+      &lt;h1 className={styles.title}&gt;Contact&lt;/h1&gt;
+      &lt;p&gt;
+        このページは &lt;code&gt;src/app/(marketing)/contact/page.tsx&lt;/code&gt; にありますが、
+        URL は &lt;code&gt;/(marketing)&lt;/code&gt; を含まない &lt;code&gt;/contact&lt;/code&gt; になります。
+      &lt;/p&gt;
+    &lt;/main&gt;
+  );
+}</code></pre>
+          </div>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">SCSS</span>
+              <span class="code-block__filename">src/app/(marketing)/contact/page.module.scss</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-scss">.main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 2rem;
+}
+
+.title {
+  font-size: 2rem;
+  font-weight: 700;
+}</code></pre>
+          </div>
+
+          <p>
+            今回はグループが 1 つだけですが、ページが増えてきたときに「宣伝用のページ」「管理画面」のように分類したり、グループごとに別の <code>layout.tsx</code> を持たせたりするのに使います。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ブラウザで <code>http://localhost:3000/contact</code> を開き、見出し「Contact」が表示されれば成功です。</p>
+            <div class="terminal">
+              <div class="terminal__header">
+                <span class="terminal__dot"></span>
+                <span class="terminal__dot"></span>
+                <span class="terminal__dot"></span>
+                <span class="terminal__title">Terminal</span>
+              </div>
+              <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s localhost:3000/contact | grep -o '&lt;h1[^&gt;]*&gt;[^&lt;]*&lt;/h1&gt;'</span><span class="terminal__line">&lt;h1 class="page-module-scss-module__m-0fUa__title"&gt;Contact&lt;/h1&gt;</span></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="build">本番ビルドでルート一覧を確認する</h2>
+      <p>開発サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めてから、本番ビルドを実行します。出力は要点のみを抜粋しています（01 で扱った「workspace root」の警告は省略）。</p>
+
+      <div class="terminal">
+        <div class="terminal__header">
+          <span class="terminal__dot"></span>
+          <span class="terminal__dot"></span>
+          <span class="terminal__dot"></span>
+          <span class="terminal__title">Terminal</span>
+        </div>
+        <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line"></span><span class="terminal__line">&gt; 02-app-router@0.1.0 build</span><span class="terminal__line">&gt; next build</span><span class="terminal__line"></span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line"></span><span class="terminal__line">✓ Running next.config.ts took 12ms</span><span class="terminal__line">  Creating an optimized production build ...</span><span class="terminal__line">✓ Compiled successfully in 1537ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 651ms ...</span><span class="terminal__line">  Collecting page data using 9 workers ...</span><span class="terminal__line">✓ Generating static pages using 9 workers (10/10) in 1234ms</span><span class="terminal__line">  Finalizing page optimization ...</span><span class="terminal__line"></span><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">├ ○ /_not-found</span><span class="terminal__line">├ ○ /about</span><span class="terminal__line">├ ○ /blog</span><span class="terminal__line">├   /blog/[slug]</span><span class="terminal__line">│ ├ ● /blog/app-router-basics</span><span class="terminal__line">│ ├ ● /blog/nested-layouts</span><span class="terminal__line">│ └ ● /blog/dynamic-routes</span><span class="terminal__line">└ ○ /contact</span><span class="terminal__line"></span><span class="terminal__line">○  (Static)  prerendered as static content</span><span class="terminal__line">●  (SSG)     prerendered as static HTML (uses generateStaticParams)</span></pre>
+      </div>
+
+      <p><code>Route (app)</code> の一覧は、次のように読みます。</p>
+      <ul>
+        <li><code>○ (Static)</code>: ビルド時に静的な HTML として生成されたページです。<code>/</code>・<code>/about</code>・<code>/blog</code>・<code>/contact</code> が該当します。</li>
+        <li><code>● (SSG)</code>: <code>generateStaticParams</code> が返した値ごとに、ビルド時に HTML が生成されたページです。<code>/blog/[slug]</code> の下に、実際に生成された 3 件の URL が並んでいます。</li>
+        <li><code>/contact</code> は <code>(marketing)</code> を含まない URL で表示されています。ルートグループが URL に現れないことを、ここでも確かめられます。</li>
+        <li><code>/_not-found</code> は、<code>not-found.tsx</code> から生成された 404 用のページです。</li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>generateStaticParams</code> にない slug はどうなるか</p>
+          <p><code>/blog/nonexistent</code> のように <code>generateStaticParams</code> が返していない slug は、ビルド時には生成されません。最初のアクセス時にサーバーで描画されます。</p>
+        </div>
+      </div>
+
+      <p>続けて <code>npm run lint</code> を実行し、エラーや警告が出ないことも確認しておきましょう。</p>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>about/page.tsx</code> を作ると <code>/about</code> になる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>Link</code> でページ間を移動し、ヘッダーで現在のページが強調されることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>"use client"</code> を <code>Header</code> だけに付けた理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>/blog</code> 配下で、ルートレイアウトとブログのレイアウトが入れ子になっていることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>params</code> を <code>await</code> して <code>slug</code> を取り出し、記事の詳細ページを表示した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">「記事を読み込み中...」の表示と、存在しない記事での 404 ページの表示を確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>(marketing)</code> と <code>_components</code> が URL に現れない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>npm run build</code> の <code>Route (app)</code> で <code>○</code> と <code>●</code> の違いを読み取れた</label>
+        </li>
+      </ul>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>page.tsx</code> と <code>layout.tsx</code> を中心に、動的ルート・404・読み込み中の表示・ルートグループ・プライベートフォルダまで、App Router の基本的なファイル規約をひと通り使いました。
+        次の項目では、サーバーコンポーネントで <code>fetch</code> を使ったデータ取得を学びます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>nextjs/02-app-router</code> の <code>nextjs/02-app-router/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../01-setup/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">01: 環境構築とプロジェクト作成</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">03: サーバーコンポーネントとデータ取得</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
