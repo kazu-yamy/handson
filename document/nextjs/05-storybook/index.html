@@ -1,0 +1,1177 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05: Storybook でのコンポーネントカタログ構築 | Next.js ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Next.js</li>
+          <li aria-current="page">05</li>
+        </ol>
+        <h1 class="lesson-title">Storybook でのコンポーネントカタログ構築</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 04 を終え、作った部品をページから切り離して開発・確認したい人</li>
+          <li class="lesson-meta__item">📋 前提: React のコンポーネントと props、TypeScript の型の基本が分かること</li>
+          <li class="lesson-meta__item">🌐 ネットワーク: npm パッケージと Playwright 用ブラウザ（Chromium）のダウンロードが必要</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../04-client-components/index.html">04: クライアントコンポーネントと状態管理</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>Next.js（App Router）のプロジェクトに Storybook を導入し、起動・静的ビルドできる</li>
+          <li>CSF3（<code>Meta</code> / <code>StoryObj</code> / <code>args</code>）でストーリーを書き、Controls と Docs で確認できる</li>
+          <li><code>fn()</code> と Actions でコールバックの呼び出しを、<code>argTypes</code> で Controls の入力部品を調整できる</li>
+          <li><code>children</code> を受け取る部品や、<code>usePathname</code> を使う部品のストーリーを書ける</li>
+          <li><code>play</code> 関数でインタラクションテストを書き、Vitest でコマンドから実行できる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        04 までは、部品の見た目や動きをアプリのページに組み込んでから確かめていました。この方法では、「いいね 10 の状態」「一覧が開いた状態」のように、特定の状態を見るたびにページを操作する必要があります。
+        このレッスンでは Storybook を導入し、04 までに作った <code>LikeButton</code> / <code>Collapsible</code> / <code>Header</code> をページから切り離して表示できるようにします。
+      </p>
+
+      <h3 id="what-is-storybook">Storybook とは</h3>
+      <p>
+        Storybook は、UI の部品（コンポーネント）をアプリ本体から切り離して表示・開発するためのツールです。
+        部品の「ある状態」を 1 つの<strong>ストーリー</strong>として書いておくと、ブラウザ上の一覧（コンポーネントカタログ）からいつでもその状態を開けます。
+      </p>
+      <table>
+        <thead>
+          <tr><th>うれしいこと</th><th>内容</th><th>このレッスンでの例</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>コンポーネント単位の開発</td><td>ページやデータ取得を用意しなくても、部品だけを表示して作業できる</td><td><code>Header</code> をルーティングなしで表示する</td></tr>
+          <tr><td>状態の網羅</td><td>props の組み合わせごとの見た目を並べて確認できる。Controls で props をその場で変えられる</td><td>いいね 0 / 10、一覧の開閉</td></tr>
+          <tr><td>ドキュメント</td><td>props の一覧とストーリーのプレビューをまとめたページを自動生成できる</td><td><code>tags: ["autodocs"]</code></td></tr>
+          <tr><td>テスト</td><td>操作と検証をストーリーに書き、コマンドから一括実行できる</td><td><code>play</code> 関数と Vitest</td></tr>
+        </tbody>
+      </table>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">出発点</p>
+              <p>
+                04 で使ったプロジェクトをそのまま使って続けます。04 の完成状態（いいねボタン・記事の検索・投稿者一覧の開閉・テーマ切り替えのあるブログ）がこのレッスンのスタート地点です。
+                作業を始める前に、<code>package.json</code> の <code>name</code> を <code>05-storybook</code> に直しておきます。
+              </p>
+            </div>
+          </div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line diff-line--remove">-   "name": "04-client-components",</span><span class="diff-line diff-line--add">+   "name": "05-storybook",</span><span class="diff-line">    "version": "0.1.0",</span></pre>
+</div>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">使用バージョン</p>
+              <p>
+                Storybook 10.6.0（フレームワークは <code>@storybook/nextjs-vite</code>）で動作を確認しています。
+                そのほかは 04 と同じ構成です（Node.js 24.21.0 / npm 11.19.0 / Next.js 16.3.6 / React 19.2.8 / sass 1.105.0）。執筆時点は 2026年9月です。
+                <code>@storybook/nextjs-vite</code> は、Next.js のプロジェクト向けの Storybook を Vite（高速なビルドツール）の上で動かすパッケージです。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ダウンロード量に注意</p>
+              <p>
+                <code>storybook init</code> は Storybook 本体やテスト用のパッケージ（Vitest、Playwright など）を約 200 個追加します。さらに、Playwright がテストに使うブラウザ（Chromium）の本体もダウンロードします。
+                安定したネットワークと、ディスクの空き容量に余裕のある環境で実行してください。
+              </p>
+            </div>
+          </div>
+
+
+      <p>レッスンを終えると、プロジェクトには次のファイルが加わります（04 から変わらない部分は省略しています）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">nextjs/05-storybook/</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">.storybook/
+  main.ts                 # Storybook 本体の設定（stories の場所、アドオン、フレームワーク）
+  preview.tsx             # 全ストーリー共通の設定（グローバル CSS など）
+vitest.config.ts          # ストーリーを Vitest のテストとして実行する設定
+vitest.shims.d.ts
+src/
+  app/
+    _components/
+      Header/
+        Header.tsx
+        Header.stories.tsx        # 追加
+  components/
+    Collapsible/
+      Collapsible.tsx
+      Collapsible.stories.tsx     # 追加
+    LikeButton/
+      LikeButton.tsx              # onLiked を追加
+      LikeButton.stories.tsx      # 追加</code></pre>
+</div>
+
+
+      <h2 id="step-by-step">手順</h2>
+      <p>作業はプロジェクトのディレクトリで行います。Next.js の開発サーバー（ポート 3000）は使わないので、起動している場合は止めておいてかまいません。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">Storybook の起動と停止</p>
+              <p>
+                <code>npm run storybook</code> は、ポート 6006 で Storybook の開発サーバーを起動します。ポート番号は、<code>storybook init</code> が <code>package.json</code> に書き込んだ <code>-p 6006</code> で決まります。
+                Next.js の開発サーバー（ポート 3000）とはぶつかりませんが、Storybook を 2 つ同時に起動するとポートが競合します。確認が終わるたびに <kbd>Ctrl</kbd> + <kbd>C</kbd> で停止してください。
+                バックグラウンドで起動した場合は <code>pkill -f "storybook dev -p 6006"</code> で止められます。
+                ストーリーファイルを保存すると表示は自動で更新されるため、ステップ 3〜7 は起動したままでも進められます。
+              </p>
+            </div>
+          </div>
+
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">Storybook を導入して起動する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            プロジェクトのディレクトリで <code>storybook init</code> を実行します。<code>--yes</code> を付けると、確認の質問にすべて既定値で答えて最後まで進みます。
+            Next.js のプロジェクトであることは自動で検出され、フレームワークとして <code>@storybook/nextjs-vite</code> が選ばれます。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npx storybook@latest init --yes</span><span class="terminal__line">npm warn exec The following package was not found and will be installed: storybook@10.6.0</span><span class="terminal__line">┌  Initializing Storybook</span><span class="terminal__line">│</span><span class="terminal__line">●  Package manager: npm</span><span class="terminal__line">│</span><span class="terminal__line">●  Adding Storybook version 10.6.0 to your project</span><span class="terminal__line">│</span><span class="terminal__line">◇  Framework detected: nextjs-vite</span><span class="terminal__line">（中略）</span><span class="terminal__line">│  - Configuring ESLint plugin</span><span class="terminal__line">│  - Configuring main.ts</span><span class="terminal__line">│  - Configuring preview.ts</span><span class="terminal__line">│  - Adding Storybook command to package.json</span><span class="terminal__line">│  - Copying framework templates</span><span class="terminal__line">│</span><span class="terminal__line">│  Storybook configuration generated</span><span class="terminal__line">│</span><span class="terminal__line">│  Adding devDependencies:</span><span class="terminal__line">│  - storybook@^10.6.0</span><span class="terminal__line">│  - @storybook/nextjs-vite@^10.6.0</span><span class="terminal__line">（中略）</span><span class="terminal__line">│  Dependencies installed</span><span class="terminal__line">│</span><span class="terminal__line">│  Configuring @chromatic-com/storybook...</span><span class="terminal__line">│</span><span class="terminal__line">▲  Could not resolve the postinstall hook of @chromatic-com/storybook,</span><span class="terminal__line">│  skipping its configuration. Run `npx storybook add</span><span class="terminal__line">│  @chromatic-com/storybook` to set it up manually.</span><span class="terminal__line">（中略）</span><span class="terminal__line">◇  Creating a Vitest config file:</span><span class="terminal__line">│</span><span class="terminal__line">│  /Users/kazuki/Work/handson/nextjs/05-storybook/vitest.config.ts</span><span class="terminal__line">（中略）</span><span class="terminal__line">│  Addons configured successfully</span><span class="terminal__line">│</span><span class="terminal__line">│  ✅ @chromatic-com/storybook</span><span class="terminal__line">│  ✅ @storybook/addon-vitest</span><span class="terminal__line">│  ✅ @storybook/addon-a11y</span><span class="terminal__line">│  ✅ @storybook/addon-docs</span><span class="terminal__line">│  ✅ @storybook/addon-mcp</span><span class="terminal__line">│</span><span class="terminal__line">│  Installing Playwright browser binaries (press "c" to abort)</span><span class="terminal__line">│</span><span class="terminal__line">│  Playwright browser binaries installed successfully</span><span class="terminal__line">（中略）</span><span class="terminal__line">│  To run Storybook, run npm run storybook. CTRL+C to stop.</span></pre>
+</div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">Tip: バージョンを固定する</p>
+              <p>
+                執筆時点では <code>storybook@latest</code> は 10.6.0 に解決されました。Storybook 11 以降では手順が変わる可能性があるため、この教材と同じ結果にしたい場合は <code>npx storybook@10.6.0 init --yes</code> のようにバージョンを固定して実行してください。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            出力は長いため、要点だけを載せています。途中に <code>Could not resolve the postinstall hook</code> という警告が出ます。対象は <code>@chromatic-com/storybook</code> / <code>@storybook/addon-docs</code> / <code>@storybook/addon-mcp</code> の 3 つです。
+            ただし、パッケージは追加され、<code>.storybook/main.ts</code> の <code>addons</code> にも登録されます。このレッスンの範囲では問題なく動くので、そのまま進みます。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">実行環境によって出力の一部は変わります</p>
+              <p>
+                <code>--yes</code> を付けると AI エージェント向けの機能が既定で選ばれるため、人が実行しても出力の末尾に「Storybook was successfully installed…」「Official documentation reference: …llms.txt」「To finalize setting up with AI, paste this prompt…: Run npx storybook skills setup…」が表示されます。
+                一方、冒頭の「This command is running via an AI agent…」という案内、末尾の「Storybook is installed but is not entirely set up yet…」というメッセージ、および <code>debug-storybook.log</code> の生成は、AI エージェント（<code>CLAUDECODE</code> 環境変数）から実行したときだけ出ます。
+                この教材の出力例はエージェント実行時のものなので、その部分は上の出力からは省いています。
+              </p>
+            </div>
+          </div>
+
+          <p><code>package.json</code> には、次のスクリプトと <code>devDependencies</code> が追加されます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">    "scripts": {</span><span class="diff-line">      "dev": "next dev",</span><span class="diff-line">      "build": "next build",</span><span class="diff-line">      "start": "next start",</span><span class="diff-line diff-line--remove">-     "lint": "eslint"</span><span class="diff-line diff-line--add">+     "lint": "eslint",</span><span class="diff-line diff-line--add">+     "storybook": "storybook dev -p 6006",</span><span class="diff-line diff-line--add">+     "build-storybook": "storybook build"</span><span class="diff-line">    },</span><span class="diff-line">  ...</span><span class="diff-line">    "devDependencies": {</span><span class="diff-line">      "@types/node": "^20",</span><span class="diff-line">      "@types/react": "^19",</span><span class="diff-line">      "@types/react-dom": "^19",</span><span class="diff-line">      "eslint": "^9",</span><span class="diff-line">      "eslint-config-next": "16.3.6",</span><span class="diff-line diff-line--remove">-     "typescript": "^5"</span><span class="diff-line diff-line--add">+     "typescript": "^5",</span><span class="diff-line diff-line--add">+     "storybook": "^10.6.0",</span><span class="diff-line diff-line--add">+     "@storybook/nextjs-vite": "^10.6.0",</span><span class="diff-line diff-line--add">+     "@chromatic-com/storybook": "latest",</span><span class="diff-line diff-line--add">+     "@storybook/addon-vitest": "^10.6.0",</span><span class="diff-line diff-line--add">+     "@storybook/addon-a11y": "^10.6.0",</span><span class="diff-line diff-line--add">+     "@storybook/addon-docs": "^10.6.0",</span><span class="diff-line diff-line--add">+     "@storybook/addon-mcp": "^10.6.0",</span><span class="diff-line diff-line--add">+     "vite": "latest",</span><span class="diff-line diff-line--add">+     "eslint-plugin-storybook": "^10.6.0",</span><span class="diff-line diff-line--add">+     "vitest": "latest",</span><span class="diff-line diff-line--add">+     "playwright": "latest",</span><span class="diff-line diff-line--add">+     "@vitest/browser-playwright": "latest",</span><span class="diff-line diff-line--add">+     "@vitest/coverage-v8": "latest"</span><span class="diff-line">    }</span></pre>
+</div>
+
+          <p>設定ファイルとして、<code>.storybook/</code> ディレクトリに次の 2 つが作られます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">.storybook/main.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import type { StorybookConfig } from '@storybook/nextjs-vite';
+
+const config: StorybookConfig = {
+  "stories": [
+    "../src/**/*.mdx",
+    "../src/**/*.stories.@(js|jsx|mjs|ts|tsx)"
+  ],
+  "addons": [
+    "@chromatic-com/storybook",
+    "@storybook/addon-vitest",
+    "@storybook/addon-a11y",
+    "@storybook/addon-docs",
+    "@storybook/addon-mcp"
+  ],
+  "framework": "@storybook/nextjs-vite",
+  "staticDirs": [
+    "../public"
+  ]
+};
+export default config;</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TSX</span>
+    <span class="code-block__filename">.storybook/preview.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import type { Preview } from '@storybook/nextjs-vite'
+
+const preview: Preview = {
+  parameters: {
+    controls: {
+      matchers: {
+       color: /(background|color)$/i,
+       date: /Date$/i,
+      },
+    },
+
+    a11y: {
+      // 'todo' - show a11y violations in the test UI only
+      // 'error' - fail CI on a11y violations
+      // 'off' - skip a11y checks entirely
+      test: 'todo'
+    }
+  },
+};
+
+export default preview;</code></pre>
+</div>
+
+          <p>
+            <code>main.ts</code> は Storybook 本体の設定で、ストーリーファイルの場所（<code>stories</code>）、アドオン（<code>addons</code>）、フレームワーク（<code>framework</code>）を指定します。
+            <code>preview.tsx</code> は全ストーリーに共通する設定です。拡張子は <code>.ts</code> ではなく <code>.tsx</code> で作られます（出力には <code>Configuring preview.ts</code> と表示されますが、実際のファイル名は <code>preview.tsx</code> です）。
+            このほか、<code>vitest.config.ts</code> / <code>vitest.shims.d.ts</code>（ステップ 7 で使います）とサンプル一式の <code>src/stories/</code> も作られます。
+            また、<code>eslint.config.mjs</code> には <code>eslint-plugin-storybook</code> の設定が、<code>.gitignore</code> には Storybook のログとビルド結果の除外が追記されます。
+          </p>
+          <p>起動して、ブラウザで表示できることを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run storybook</span><span class="terminal__line"></span><span class="terminal__line">&gt; 05-storybook@0.1.0 storybook</span><span class="terminal__line">&gt; storybook dev -p 6006</span><span class="terminal__line"></span><span class="terminal__line">┌  storybook v10.6.0</span><span class="terminal__line">│</span><span class="terminal__line">●  Starting...</span><span class="terminal__line">│ ╭──────────────────────────────────────────────────────╮</span><span class="terminal__line">│ │   Storybook ready!                                   │</span><span class="terminal__line">│ │                                                      │</span><span class="terminal__line">│ │   - Local:                http://localhost:6006/     │</span><span class="terminal__line">│ │   - On your network:      http://192.168.1.4:6006/   │</span><span class="terminal__line">│ │                                                      │</span><span class="terminal__line">│ ╰──────────────────────────────────────────────────────╯</span></pre>
+</div>
+
+          <p>別のターミナルから、次のコマンドで応答を確認できます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（別ターミナル）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w "%{http_code}\n" localhost:6006</span><span class="terminal__line">200</span></pre>
+</div>
+
+          <p>確認できたら、Storybook を起動したターミナルで <kbd>Ctrl</kbd> + <kbd>C</kbd> を押して停止します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              ブラウザで <code>http://localhost:6006/</code> を開き、Storybook の画面が表示されれば成功です。
+              この時点では左のサイドバーに、サンプルとして作られたストーリー（<code>Button</code> / <code>Header</code> / <code>Page</code> など）が並びます。
+            </p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">サンプルを削除して設定を整理する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            サンプルの <code>src/stories/</code> はこのプロジェクトでは使わないので削除します。
+            ストーリーは、構成規約どおりコンポーネントと同じフォルダに置いていきます。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -rf src/stories</span></pre>
+</div>
+
+          <p>
+            次に、<code>main.ts</code> の <code>stories</code> を TypeScript のストーリーファイルだけに絞ります。
+            このレッスンでは MDX（Markdown に JSX を書ける形式）のドキュメントは書かず、JavaScript のファイルもないためです。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">.storybook/main.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">    "stories": [</span><span class="diff-line diff-line--remove">-     "../src/**/*.mdx",</span><span class="diff-line diff-line--remove">-     "../src/**/*.stories.@(js|jsx|mjs|ts|tsx)"</span><span class="diff-line diff-line--add">+     "../src/**/*.stories.@(ts|tsx)"</span><span class="diff-line">    ],</span></pre>
+</div>
+
+          <p>
+            <code>preview.tsx</code> には、アプリ本体の <code>src/app/layout.tsx</code> と同じグローバルスタイルを読み込む 1 行を追加します。
+            Storybook はアプリの <code>layout.tsx</code> を通らずにコンポーネントを単独で表示するため、ここで読み込まないと <code>globals.scss</code> のスタイルが当たりません。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">.storybook/preview.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import type { Preview } from '@storybook/nextjs-vite'</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ // アプリ本体（src/app/layout.tsx）と同じグローバルスタイルを Storybook にも当てる。</span><span class="diff-line diff-line--add">+ import '@/styles/globals.scss'</span><span class="diff-line"> </span><span class="diff-line">  const preview: Preview = {</span></pre>
+</div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">SCSS と <code>@/</code> のパスエイリアスは追加設定なしで動く</p>
+              <p>
+                <code>@storybook/nextjs-vite</code> は Vite をベースにしています。Vite は <code>.scss</code> の Sass コンパイルと、<code>*.module.scss</code> の CSS Modules 変換を標準でサポートしています。
+                また、<code>tsconfig.json</code> の <code>paths</code>（<code>"@/*": ["./src/*"]</code>）も解決されるため、<code>import '@/styles/globals.scss'</code> はそのまま通ります。
+                グローバル CSS は <code>preview.tsx</code> で 1 回読み込めば十分で、各コンポーネントの <code>.module.scss</code> には何もする必要はありません。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>npm run storybook</code> で起動し直し、ビルドエラーが出なければ成功です。
+              まだストーリーを 1 つも書いていないため、<code>No story files found</code> という警告が出ますが、この時点ではそれで正しい状態です。確認したら停止します。
+            </p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">LikeButton の最初のストーリーを書く</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            04 で作った <code>LikeButton</code> のストーリーを書きます。ストーリーファイルは <code>LikeButton.tsx</code> と同じフォルダに <code>LikeButton.stories.tsx</code> として作ります。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TSX</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButton.stories.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import type { Meta, StoryObj } from "@storybook/nextjs-vite";
+import { LikeButton } from "./LikeButton";
+
+const meta = {
+  title: "Components/LikeButton",
+  component: LikeButton,
+  tags: ["autodocs"],
+} satisfies Meta&lt;typeof LikeButton&gt;;
+
+export default meta;
+type Story = StoryObj&lt;typeof meta&gt;;
+
+export const Default: Story = {
+  args: {
+    postId: 1,
+    initialCount: 0,
+  },
+};
+
+export const WithInitialCount: Story = {
+  args: {
+    postId: 1,
+    initialCount: 10,
+  },
+};</code></pre>
+</div>
+
+          <p>
+            この書き方を CSF3（Component Story Format 3）と呼びます。ファイルは「<code>default export</code> の <code>meta</code>」と「名前付き <code>export</code> のストーリー」でできています。
+          </p>
+          <table>
+            <thead>
+              <tr><th>要素</th><th>役割</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>meta</code>（<code>default export</code>）</td><td>このファイルのストーリーすべてに共通する設定。<code>component</code> で対象のコンポーネントを指定する</td></tr>
+              <tr><td><code>title</code></td><td>サイドバーでの位置。<code>/</code> で階層を区切る（<code>Components/LikeButton</code> → Components の下の LikeButton）</td></tr>
+              <tr><td><code>tags: ["autodocs"]</code></td><td>このコンポーネントのドキュメントページ（Docs）を自動生成する</td></tr>
+              <tr><td><code>satisfies Meta&lt;typeof LikeButton&gt;</code></td><td><code>meta</code> の形を型でチェックしつつ、<code>meta</code> 自身の型は推論させる。<code>StoryObj&lt;typeof meta&gt;</code> がそれを使う</td></tr>
+              <tr><td>名前付き <code>export</code>（<code>Default</code> など）</td><td>1 つのストーリー = コンポーネントの 1 つの状態。<code>export</code> 名がストーリー名になる</td></tr>
+              <tr><td><code>args</code></td><td>そのストーリーでコンポーネントに渡す props</td></tr>
+            </tbody>
+          </table>
+          <p>
+            <code>Default</code> は「いいね 0」の状態、<code>WithInitialCount</code> は「いいね 10」から始まる状態です。
+            このように、アプリの画面では作りにくい状態も、<code>args</code> を変えたストーリーとして並べておけます。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">ストーリーファイルはコンポーネントと同じフォルダに置く</p>
+              <p>
+                構成規約では、<code>src/components/&lt;Name&gt;/</code> に <code>&lt;Name&gt;.tsx</code> / <code>&lt;Name&gt;.module.scss</code> / <code>&lt;Name&gt;.stories.tsx</code> を同居させます。
+                リポジトリ直下の <code>.vscode/settings.json</code> では file nesting を設定しています。そのため、VS Code のエクスプローラーでは <code>LikeButton.stories.tsx</code> が <code>LikeButton.tsx</code> の下に折りたたまれて表示されます。
+                ファイルが増えても、フォルダの見た目は散らかりません。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run storybook</code> で起動し、ブラウザで次の順に操作します。</p>
+            <ol>
+              <li>左のサイドバーで <strong>Components</strong> &gt; <strong>LikeButton</strong> を開き、<code>Default</code> と <code>WithInitialCount</code> が並んでいることを確認する。</li>
+              <li><code>Default</code> を選び、中央のプレビューに「👍 いいね 0」のボタンが表示されることを確認する。ボタンをクリックすると数が増える。</li>
+              <li><code>WithInitialCount</code> を選び、「👍 いいね 10」から始まることを確認する。</li>
+              <li>アドオンパネル（プレビューの下）の <strong>Controls</strong> タブを開き、<code>postId</code> と <code>initialCount</code> の入力欄が並んでいることを確認する。</li>
+              <li>サイドバーの <strong>LikeButton</strong> 直下にある <strong>Docs</strong> を開き、props の一覧表（名前・型）と各ストーリーのプレビューが 1 ページにまとまっていることを確認する。</li>
+            </ol>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>initialCount</code> を Controls で変えても表示が変わらないとき</p>
+              <p>
+                <code>LikeButton</code> は <code>initialCount</code> を <code>useState</code> の初期値としてだけ使っています。React の <code>useState</code> は初回の描画でしか初期値を読まないため、表示は「いいね 0」のまま変わりません（<code>useState</code> の初期値だけに使われるため）。
+                ツールバーの「Reload story」ボタン（ストーリーの再読み込み）を押すと「いいね 10」になります。別のストーリーに移ってから戻っても反映されます。
+              </p>
+            </div>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>fn()</code> で Actions を記録し、<code>argTypes</code> で Controls を調整する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            ボタンをクリックしたときに「コンポーネントの外に何が通知されたか」を Storybook 上で見えるようにします。
+            まず <code>LikeButton</code> に、いいねした後の数を受け取るコールバック <code>onLiked</code> を追加します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButton.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  type LikeButtonProps = {</span><span class="diff-line">    postId: number;</span><span class="diff-line">    initialCount: number;</span><span class="diff-line diff-line--add">+   onLiked?: (count: number) =&gt; void;</span><span class="diff-line">  };</span><span class="diff-line"> </span><span class="diff-line">  // "use client" を付けたクライアントコンポーネント。</span><span class="diff-line">  // サーバーコンポーネント（例: blog/[slug]/page.tsx）の JSX の中にそのまま置ける。</span><span class="diff-line diff-line--remove">- export function LikeButton({ postId, initialCount }: LikeButtonProps) {</span><span class="diff-line diff-line--add">+ //</span><span class="diff-line diff-line--add">+ // onLiked は Storybook の Actions パネルで動作を可視化するために用意したコールバックで、</span><span class="diff-line diff-line--add">+ // 04 の教材で確認したとおり、サーバーコンポーネントからこの props に関数を渡すことはできない</span><span class="diff-line diff-line--add">+ // （渡すと "Event handlers cannot be passed to Client Component props." になる）。</span><span class="diff-line diff-line--add">+ // そのためアプリ本体（blog/[slug]/page.tsx）では onLiked を渡していない。</span><span class="diff-line diff-line--add">+ export function LikeButton({ postId, initialCount, onLiked }: LikeButtonProps) {</span><span class="diff-line">    const [count, setCount] = useState(initialCount);</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+   const handleClick = () =&gt; {</span><span class="diff-line diff-line--add">+     const next = count + 1;</span><span class="diff-line diff-line--add">+     setCount(next);</span><span class="diff-line diff-line--add">+     onLiked?.(next);</span><span class="diff-line diff-line--add">+   };</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">    return (</span><span class="diff-line">      &lt;button</span><span class="diff-line">        type="button"</span><span class="diff-line">        className={styles.button}</span><span class="diff-line diff-line--remove">-       onClick={() =&gt; setCount((current) =&gt; current + 1)}</span><span class="diff-line diff-line--add">+       onClick={handleClick}</span><span class="diff-line">        aria-label={`記事 ${postId} にいいねする`}</span><span class="diff-line">      &gt;</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">コールバックは <code>setCount</code> の updater 関数の外で呼ぶ</p>
+              <p>
+                <code>setCount((current) =&gt; { ...; onLiked?.(next); return next; })</code> のように updater 関数の中で <code>onLiked</code> を呼ぶと、React の StrictMode では開発時に updater が 2 回呼ばれるため、<code>onLiked</code> も 2 回呼ばれてしまいます（updater は副作用のない純粋関数であるべきです）。
+                Next.js の App Router は開発時に StrictMode が既定で有効なので、この問題はアプリ側で起こります。Storybook 上では 1 回しか呼ばれないため気づきにくく、注意が必要です。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            <code>onLiked</code> は省略可能（<code>?</code>）にしているので、アプリ本体の <code>blog/[slug]/page.tsx</code> は変更不要です。
+            04 で確認したとおり、サーバーコンポーネントからクライアントコンポーネントへ関数は渡せないため、アプリ側では今後も <code>onLiked</code> を渡しません。
+          </p>
+          <p>次に、ストーリーの <code>meta</code> に <code>argTypes</code> と <code>args</code> を追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButton.stories.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import type { Meta, StoryObj } from "@storybook/nextjs-vite";</span><span class="diff-line diff-line--add">+ import { fn } from "storybook/test";</span><span class="diff-line">  import { LikeButton } from "./LikeButton";</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">    component: LikeButton,</span><span class="diff-line">    tags: ["autodocs"],</span><span class="diff-line diff-line--add">+   argTypes: {</span><span class="diff-line diff-line--add">+     initialCount: {</span><span class="diff-line diff-line--add">+       control: { type: "number", min: 0 },</span><span class="diff-line diff-line--add">+     },</span><span class="diff-line diff-line--add">+   },</span><span class="diff-line diff-line--add">+   args: {</span><span class="diff-line diff-line--add">+     // fn() で渡すと、クリックのたびに呼び出しが Storybook の Actions パネルに記録される。</span><span class="diff-line diff-line--add">+     onLiked: fn(),</span><span class="diff-line diff-line--add">+   },</span><span class="diff-line">  } satisfies Meta&lt;typeof LikeButton&gt;;</span><span class="diff-line"> </span></pre>
+</div>
+
+          <ul>
+            <li><code>fn()</code>（<code>storybook/test</code> から <code>import</code>）は、呼び出しを記録するモック関数を作ります。<code>meta.args</code> に置いたので、このファイルの全ストーリーに渡ります。</li>
+            <li><code>argTypes</code> は Controls パネルの入力部品を調整します。ここでは <code>initialCount</code> を、0 未満にならない数値入力にしています。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">エディタに <code>[71007]</code> の警告が出るが、ビルドには影響しない</p>
+              <p>
+                <code>"use client"</code> のファイルの props に関数型（<code>onLiked</code>）を追加すると、VS Code などのエディタに 04 のステップ 3 と同じ警告が出ます。
+                「Props must be serializable for components in the "use client" entry file.」（コード 71007）という警告です。
+                これは Next.js の TypeScript プラグイン（エディタ上の言語サーバー）だけが出す注意で、<code>npm run build</code> の型チェックでは警告やエラーになりません。
+                サーバーコンポーネントからこの props に関数を渡さない限り実害はないので、Storybook の Actions で使う用途に限ってこのままにします。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>Storybook を開き直して、次の順に操作します。</p>
+            <ol>
+              <li><strong>Components</strong> &gt; <strong>LikeButton</strong> &gt; <code>Default</code> を開く。</li>
+              <li>プレビューのボタンをクリックし、アドオンパネルの <strong>Actions</strong> タブに <code>onLiked</code> の呼び出しが引数 <code>1</code> とともに記録されることを確認する。もう一度クリックすると <code>2</code> が記録される。</li>
+              <li><strong>Controls</strong> タブの <code>initialCount</code> が、増減ボタン付きの数値入力になっていることを確認する（<code>min: 0</code> により 0 より小さくできない）。</li>
+            </ol>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">children を受け取る Collapsible のストーリーを書く</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            04 で作った <code>Collapsible</code> は、<code>children</code> に中身の JSX を受け取る開閉パネルです。
+            <code>children</code> は必須の props なので、ストーリーでも何かを渡す必要があります。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TSX</span>
+    <span class="code-block__filename">src/components/Collapsible/Collapsible.stories.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import type { Meta, StoryObj } from "@storybook/nextjs-vite";
+import { Collapsible } from "./Collapsible";
+
+// children に JSX を渡す例で共通して使うダミーの中身。
+// Collapsible は Next.js のアプリ内では children としてサーバーコンポーネント（AuthorList）を
+// 受け取るが、Storybook 上では Collapsible 自身の開閉の振る舞いを確認したいだけなので、
+// 代わりに簡単な静的 JSX を渡している。
+const sampleChildren = (
+  &lt;ul&gt;
+    &lt;li&gt;Leanne Graham&lt;/li&gt;
+    &lt;li&gt;Ervin Howell&lt;/li&gt;
+    &lt;li&gt;Clementine Bauch&lt;/li&gt;
+  &lt;/ul&gt;
+);
+
+const meta = {
+  title: "Components/Collapsible",
+  component: Collapsible,
+  tags: ["autodocs"],
+  args: {
+    children: sampleChildren,
+  },
+} satisfies Meta&lt;typeof Collapsible&gt;;
+
+export default meta;
+type Story = StoryObj&lt;typeof meta&gt;;
+
+export const Default: Story = {
+  args: {
+    title: "著者一覧",
+  },
+  // render 関数の引数 args から children を受け取り、そのまま Collapsible に渡す。
+  render: (args) =&gt; &lt;Collapsible {...args} /&gt;,
+};
+
+// defaultOpen で最初から開いた状態を確認する。
+export const Open: Story = {
+  args: {
+    title: "著者一覧",
+    defaultOpen: true,
+  },
+  render: (args) =&gt; &lt;Collapsible {...args} /&gt;,
+};</code></pre>
+</div>
+
+          <ul>
+            <li><code>meta.args.children</code> に、全ストーリー共通のダミーの <code>&lt;ul&gt;</code> を持たせています。</li>
+            <li><code>render</code> 関数は、ストーリーの描画方法を自分で書くための関数です。引数の <code>args</code>（<code>children</code> を含む）をそのまま <code>&lt;Collapsible {...args} /&gt;</code> に展開しています。</li>
+            <li><code>Open</code> では、既存の props <code>defaultOpen</code> に <code>true</code> を渡し、最初から開いた状態を確認します。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>children</code> を <code>meta.args</code> に置かないと型エラーになる</p>
+              <p>
+                <code>StoryObj&lt;typeof meta&gt;</code> の <code>args</code> の型は、<code>component</code> に指定したコンポーネントの props から作られます。<code>Collapsible</code> は <code>children</code> が必須です。そのため、<code>args</code> のどこかで <code>children</code> を渡していないと <code>Property 'children' is missing</code> という型エラーになります。
+                <code>render</code> の中で JSX を直接書いて渡すだけでは、この型エラーは消えません。
+                <code>meta.args</code> に既定値を置いておけば、各ストーリーは <code>title</code> や <code>defaultOpen</code> だけを書けば済みます。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">サーバーコンポーネントの中身はダミーで置き換える</p>
+              <p>
+                アプリの <code>blog/page.tsx</code> では、<code>Collapsible</code> の <code>children</code> にサーバーコンポーネントの <code>AuthorList</code> を渡していました。<code>AuthorList</code> は <code>fetch</code> を行う <code>async</code> コンポーネントです。
+                Storybook で確かめたいのは <code>Collapsible</code> 自身の開閉の振る舞いなので、中身は静的な JSX で代用しています。
+                「開閉の振る舞い」と「著者一覧のデータ取得」は、別々に確認する対象として切り分けます。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <ol>
+              <li>サイドバーの <strong>Components</strong> &gt; <strong>Collapsible</strong> に <code>Default</code> と <code>Open</code> が並んでいることを確認する。</li>
+              <li><code>Default</code> を開くと、先頭の三角が <code>▸</code> のタイトル行だけが表示される。クリックすると <code>▾</code> に変わり、Leanne Graham / Ervin Howell / Clementine Bauch の一覧が開く。</li>
+              <li><code>Open</code> を開くと、最初から <code>▾</code> で一覧が見えている。</li>
+              <li><strong>Controls</strong> タブで <code>title</code> の文字列を書き換えると、タイトル行の表示がその場で変わる。</li>
+            </ol>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>usePathname</code> を使う Header のストーリーを書く</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            02 で作った <code>Header</code> は、<code>next/navigation</code> の <code>usePathname()</code> で現在のパスを取得し、該当するリンクを強調します。
+            Storybook にはアプリのルーティングがないため、<code>usePathname()</code> が返す値をストーリーの側で指定します。
+            ファイルは <code>Header.tsx</code> と同じ <code>src/app/_components/Header/</code> に作ります。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TSX</span>
+    <span class="code-block__filename">src/app/_components/Header/Header.stories.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import type { Meta, StoryObj } from "@storybook/nextjs-vite";
+import { Header } from "./Header";
+
+const meta = {
+  title: "App/Header",
+  component: Header,
+  tags: ["autodocs"],
+  parameters: {
+    // Header は next/navigation の usePathname を使うため、
+    // @storybook/nextjs-vite の Next.js 用モックで App Router の状態を再現する。
+    nextjs: {
+      appDirectory: true,
+    },
+    layout: "fullscreen",
+  },
+} satisfies Meta&lt;typeof Header&gt;;
+
+export default meta;
+type Story = StoryObj&lt;typeof meta&gt;;
+
+// pathname を "/" にして、Home が現在ページとして強調されることを確認する。
+export const Home: Story = {
+  parameters: {
+    nextjs: {
+      navigation: {
+        pathname: "/",
+      },
+    },
+  },
+};
+
+// pathname を "/blog" にして、Blog が現在ページとして強調されることを確認する。
+export const Blog: Story = {
+  parameters: {
+    nextjs: {
+      navigation: {
+        pathname: "/blog",
+      },
+    },
+  },
+};</code></pre>
+</div>
+
+          <ul>
+            <li>
+              <code>parameters.nextjs.appDirectory: true</code> は「App Router のコンポーネントとして扱う」という指定です。
+              これにより、<code>next/navigation</code>（App Router 用）のフックが Storybook 用のモックに差し替わります。<code>meta</code> に書いたので、このファイルの全ストーリーに効きます。
+            </li>
+            <li>
+              各ストーリーの <code>parameters.nextjs.navigation.pathname</code> に書いた値が、そのまま <code>usePathname()</code> の戻り値になります。
+              自前でモックを書く必要はありません。
+            </li>
+            <li><code>layout: "fullscreen"</code> は、プレビューの余白をなくして画面幅いっぱいに表示する指定です。ヘッダーのように横幅いっぱいに広がる部品に向いています。</li>
+            <li><code>title</code> は <code>App/Header</code> とし、再利用部品（<code>Components/</code>）ではなくアプリ専用の部品であることがサイドバーで分かるようにしています。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>ThemeToggle</code> は追加設定なしで動く</p>
+              <p>
+                <code>Header</code> の中の <code>ThemeToggle</code> は、04 のとおり <code>useEffect</code> の中でだけ <code>localStorage</code> / <code>matchMedia</code> を読みます。
+                Storybook はブラウザで動くので <code>window</code> が常にあり、<code>window is not defined</code> は起きません。
+                同じ理由で、Storybook 上では <code>"use client"</code> の有無を意識する必要はなく、どのコンポーネントも普通の React コンポーネントとして描画されます。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <ol>
+              <li>サイドバーの <strong>App</strong> &gt; <strong>Header</strong> に <code>Home</code> と <code>Blog</code> が並んでいることを確認する。</li>
+              <li><code>Home</code> を開くと、ナビゲーションの <code>Home</code> リンクだけが強調色（アクティブ状態のスタイル）になっている。</li>
+              <li><code>Blog</code> を開くと、強調が <code>Blog</code> リンクに移る。ページ遷移は起きておらず、<code>usePathname()</code> の戻り値だけが差し替わっている。</li>
+              <li>右側のテーマ切り替えボタン（🌙 ダーク）をクリックすると、プレビュー内のテーマ色が切り替わる。</li>
+            </ol>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>play</code> 関数でインタラクションテストを書き、コマンドで実行する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            ここまでのストーリーは、状態を「目で見て」確かめるものでした。<code>play</code> 関数を使うと、ストーリーを表示したあとに行う操作と、その結果の検証をコードで書けます。
+            <code>LikeButton.stories.tsx</code> に、クリックで数が増えることを検証するストーリーを追加します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButton.stories.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import type { Meta, StoryObj } from "@storybook/nextjs-vite";</span><span class="diff-line diff-line--remove">- import { fn } from "storybook/test";</span><span class="diff-line diff-line--add">+ import { expect, fn, userEvent, within } from "storybook/test";</span><span class="diff-line">  import { LikeButton } from "./LikeButton";</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">    },</span><span class="diff-line">  };</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ // play 関数でボタンをクリックし、カウントが増えることと onLiked が呼ばれることを検証する。</span><span class="diff-line diff-line--add">+ export const ClickIncrementsCount: Story = {</span><span class="diff-line diff-line--add">+   args: {</span><span class="diff-line diff-line--add">+     postId: 1,</span><span class="diff-line diff-line--add">+     initialCount: 0,</span><span class="diff-line diff-line--add">+   },</span><span class="diff-line diff-line--add">+   play: async ({ canvasElement, args }) =&gt; {</span><span class="diff-line diff-line--add">+     const canvas = within(canvasElement);</span><span class="diff-line diff-line--add">+     const button = canvas.getByRole("button");</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     await expect(button).toHaveTextContent("👍 いいね 0");</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     await userEvent.click(button);</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     await expect(button).toHaveTextContent("👍 いいね 1");</span><span class="diff-line diff-line--add">+     await expect(args.onLiked).toHaveBeenCalledWith(1);</span><span class="diff-line diff-line--add">+     await expect(args.onLiked).toHaveBeenCalledTimes(1);</span><span class="diff-line diff-line--add">+   },</span><span class="diff-line diff-line--add">+ };</span></pre>
+</div>
+
+          <ul>
+            <li><code>within(canvasElement)</code> で、プレビューの中から要素を探す準備をします。<code>getByRole("button")</code> はボタンの役割を持つ要素を取得します。</li>
+            <li><code>userEvent.click</code> で、実際のユーザーと同じようにクリックします。</li>
+            <li><code>expect</code> で、表示が「👍 いいね 0」から「👍 いいね 1」に変わったこと、ステップ 4 の <code>fn()</code> で作った <code>onLiked</code> が <code>1</code> を引数に呼ばれたことを検証します。<code>toHaveBeenCalledTimes(1)</code> を使うと、二重呼び出しも検出できます。</li>
+          </ul>
+          <p>
+            <code>storybook init</code> は、ストーリーを Vitest のテストとして実行するアドオン <code>@storybook/addon-vitest</code> も設定しています。設定ファイルは次のとおりです。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">vitest.config.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { defineConfig } from 'vitest/config';
+
+import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
+
+import { playwright } from '@vitest/browser-playwright';
+
+const dirname =
+  typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
+
+// More info at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon
+export default defineConfig({
+  test: {
+    projects: [
+      {
+        extends: true,
+        plugins: [
+          // The plugin will run tests for the stories defined in your Storybook config
+          // See options at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon#storybooktest
+          storybookTest({ configDir: path.join(dirname, '.storybook') }),
+        ],
+        test: {
+          name: 'storybook',
+          browser: {
+            enabled: true,
+            headless: true,
+            provider: playwright({}),
+            instances: [{ browser: 'chromium' }],
+          },
+        },
+      },
+    ],
+  },
+});</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">vitest.shims.d.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">/// &lt;reference types="@vitest/browser-playwright" /&gt;</code></pre>
+</div>
+
+          <p>
+            <code>storybookTest</code> プラグインが <code>.storybook/</code> の設定を読み、全ストーリーをテストに変換します。
+            テストはヘッドレス（画面を表示しない）の Chromium の中で、Playwright を使って実行されます。
+            次のコマンドで、<code>storybook</code> という名前のテストプロジェクトを 1 回だけ実行します。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npx vitest run --project=storybook</span><span class="terminal__line"></span><span class="terminal__line"> RUN  v4.1.11 /Users/kazuki/Work/handson/nextjs/05-storybook</span><span class="terminal__line"></span><span class="terminal__line"> Test Files  3 passed (3)</span><span class="terminal__line">      Tests  7 passed (7)</span><span class="terminal__line">   Start at  23:37:48</span><span class="terminal__line">   Duration  2.64s (transform 0ms, setup 2.94s, import 234ms, tests 1.24s, environment 0ms)</span></pre>
+</div>
+
+          <p>
+            ストーリーファイル 3 つ（<code>LikeButton</code> 3 件、<code>Collapsible</code> 2 件、<code>Header</code> 2 件）の合計 7 件がテストとして実行され、すべて成功しています。
+            <code>play</code> 関数を持たないストーリーも「エラーを出さずに描画できるか」を確かめるテストになるため、ストーリーを書くだけで最低限の動作確認が自動化されます。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">実行時に出る Vite の警告</p>
+              <p>実行すると、結果の前に次の警告が 3 回表示されます。テストの結果には影響しないため、このレッスンでは無視します（上の出力からは省いています）。</p>
+              <pre><code class="language-plaintext">(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - ESM syntax in a file loaded as CommonJS (vitest.config.ts:1:1). Use a `.mjs` extension or set `"type": "module"` in the closest package.json
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.</code></pre>
+            </div>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Playwright のブラウザが必要</p>
+              <p>
+                このテストは Playwright の Chromium の上で動きます。<code>storybook init</code> は Chromium 本体のダウンロードまで済ませるため、このレッスンの手順どおりなら追加の作業はありません。
+                別の環境（CI や、<code>node_modules</code> だけを入れ直した環境）で実行する場合は、先に <code>npx playwright install</code> でブラウザをダウンロードする必要があります。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <ol>
+              <li><code>npx vitest run --project=storybook</code> の結果が <code>Tests  7 passed (7)</code> になる。</li>
+              <li>Storybook で <strong>Components</strong> &gt; <strong>LikeButton</strong> &gt; <code>ClickIncrementsCount</code> を開き、アドオンパネルの <strong>Interactions</strong> タブを開く。<code>play</code> 関数の各行（<code>userEvent.click</code> や <code>expect(...)</code>）が緑のチェック付きで並んでいる。</li>
+              <li>試しに <code>toHaveTextContent("👍 いいね 1")</code> を <code>"👍 いいね 2"</code> に変えると、Interactions タブの該当行が赤くなり、コマンドのテストも失敗する。確認したら元に戻す。</li>
+            </ol>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">静的ビルドして、lint の対象から除外する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            Storybook は、開発サーバーなしで開ける静的サイトとしてビルドできます。ビルド結果をそのまま配信すれば、チームの誰でもブラウザでコンポーネントカタログを見られます。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build-storybook</span><span class="terminal__line">（中略）</span><span class="terminal__line">▲ Vite [MODULE_LEVEL_DIRECTIVE] The semantics of the module level directive "use client" in</span><span class="terminal__line">  "src/components/ThemeToggle/ThemeToggle.tsx" may not be preserved when bundling.</span><span class="terminal__line">（同様の警告が node_modules 内の Next.js 自身のファイルに対しても複数出る）</span><span class="terminal__line">（中略）</span><span class="terminal__line">│  Vite ✓ built in 928ms</span><span class="terminal__line">│</span><span class="terminal__line">◇  Output directory:</span><span class="terminal__line">│  /Users/kazuki/Work/handson/nextjs/05-storybook/storybook-static</span><span class="terminal__line">│</span><span class="terminal__line">└  Storybook build completed successfully</span></pre>
+</div>
+
+          <p>
+            <code>storybook-static/</code> ディレクトリに <code>index.html</code> と <code>assets/</code> などが出力されます。
+            <code>.gitignore</code> には、<code>storybook init</code> が次の 2 行をすでに追記しているため、ビルド結果とログはコミットの対象になりません。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">.gitignore（末尾）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">*storybook.log
+storybook-static</code></pre>
+</div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>"use client"</code> に関する <code>MODULE_LEVEL_DIRECTIVE</code> の警告は無視してよい</p>
+              <p>
+                Vite（内部のバンドラー）は、React Server Components 向けの <code>"use client"</code> の意味を解釈せずにまとめてバンドルするため、この警告を出します。
+                Storybook はすべてをブラウザで動かすので、境界の情報が失われても困りません。ビルドは成功しているので、そのまま進みます。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            ここで <code>npm run lint</code> を実行すると、<code>storybook-static/</code> 内の圧縮済み JavaScript まで ESLint がチェックしてしまいます。
+            執筆時には 495 件のエラーと 13000 件を超える警告が出ました。<code>eslint.config.mjs</code> の <code>globalIgnores</code> に <code>storybook-static/**</code> を追加します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">eslint.config.mjs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">    globalIgnores([</span><span class="diff-line">      // Default ignores of eslint-config-next:</span><span class="diff-line">      ".next/**",</span><span class="diff-line">      "out/**",</span><span class="diff-line">      "build/**",</span><span class="diff-line">      "next-env.d.ts",</span><span class="diff-line diff-line--add">+     "storybook-static/**",</span><span class="diff-line">    ]),</span><span class="diff-line">    ...storybook.configs["flat/recommended"]</span><span class="diff-line">  ]);</span></pre>
+</div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>storybook init</code> は ESLint の除外設定までは追加しない</p>
+              <p>
+                <code>storybook init</code> は <code>eslint.config.mjs</code> に <code>eslint-plugin-storybook</code> の設定を追加します。追加されるのは <code>import</code> と <code>...storybook.configs["flat/recommended"]</code> の行です。しかし、<code>globalIgnores</code> に <code>storybook-static/**</code> は追加しません。
+                <code>npm run build-storybook</code> を一度でも実行したら、lint の前にこの除外設定があることを確かめてください。
+              </p>
+            </div>
+          </div>
+
+          <p>最後に、Next.js アプリ本体のビルドと lint が、Storybook の導入後も通ることを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run lint）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 05-storybook@0.1.0 lint</span><span class="terminal__line">&gt; eslint</span></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（npm run build）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line"></span><span class="terminal__line">&gt; 05-storybook@0.1.0 build</span><span class="terminal__line">&gt; next build</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Generating static pages using 10 workers (13/13) in 1108ms</span><span class="terminal__line">（後略）</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>npm run lint</code> が何も出力せずに終わり、<code>npm run build</code> が 04 と同じく 13 ページを生成して終われば成功です。
+              <code>eslint-plugin-storybook</code> のルールに対する違反も出ません。ストーリーファイルは Next.js のビルドには含まれず、アプリ本体の出力は 04 から変わりません。
+            </p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>npm run storybook</code> で Storybook を起動し、<code>http://localhost:6006/</code> でコンポーネントカタログを開けた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>preview.tsx</code> で <code>globals.scss</code> を読み込む理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>meta</code> / ストーリー / <code>args</code> / <code>tags: ["autodocs"]</code> の役割を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>LikeButton</code> をクリックし、Actions タブに <code>onLiked</code> の呼び出しが記録されることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>Collapsible</code> のストーリーで <code>children</code> を <code>meta.args</code> に置く理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>parameters.nextjs.navigation.pathname</code> を変えて、<code>Header</code> の強調されるリンクが変わることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>npx vitest run --project=storybook</code> で 7 件のテストが成功し、<code>play</code> のないストーリーもテストになる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>npm run build-storybook</code> の後に <code>npm run lint</code> が通るよう、<code>globalIgnores</code> を設定した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">（発展）<code>Header</code> に <code>pathname</code> を <code>"/about"</code> にした <code>About</code> ストーリーを追加し、テストが 8 件になることを確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        Storybook を導入し、04 までに作った 3 つの部品をページから切り離して表示できるようにしました。
+        ストーリーで状態を並べ、Controls で props を、Actions でコールバックの呼び出しを確かめ、Docs でドキュメントを自動生成しました。
+        さらに <code>play</code> 関数で操作と検証を書き、Vitest でコマンドから実行できるようにしました。
+        次の項目では、SCSS の変数とミックスインを整理し、スタイリングとレイアウトを実装します。
+      </p>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">完成コード</p>
+              <p>このレッスンの完成コードは、ブランチ <code>nextjs/05-storybook</code> の <code>nextjs/05-storybook/</code> ディレクトリにあります。</p>
+            </div>
+          </div>
+
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../04-client-components/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">04: クライアントコンポーネントと状態管理</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">06: スタイリングとレイアウト実装</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
