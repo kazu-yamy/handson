@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01: 環境構築とプロジェクト作成 | Next.js ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Next.js</li>
+          <li aria-current="page">01</li>
+        </ol>
+        <h1 class="lesson-title">環境構築とプロジェクト作成</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 30分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: JavaScript / TypeScript の基本文法は分かるが、Next.js は初めての人</li>
+          <li class="lesson-meta__item">📋 前提: Node.js がインストール済みであること、ターミナルで基本的なコマンド操作ができること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: なし（トラック最初の項目）</li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>create-next-app</code> で TypeScript + App Router の Next.js プロジェクトを作成する</li>
+          <li>生成されたファイル構成と、それぞれの役割を把握する</li>
+          <li>開発サーバーを起動し、ページ編集がブラウザに即時反映される（Hot Reload）ことを確かめる</li>
+          <li>Sass を導入し、CSS ファイルを SCSS に置き換える</li>
+          <li><code>npm run build</code> と <code>npm run lint</code> でビルドと静的解析が通ることを確認する</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        Next.js トラックの最初の項目です。公式の雛形生成ツール <code>create-next-app</code> でプロジェクトを作り、
+        開発サーバーでの表示確認、SCSS への切り替え、本番ビルドまでをひと通り体験します。
+        以降の項目は、ここで作るプロジェクトの構成（TypeScript・App Router・<code>src/</code> ディレクトリ・SCSS）を前提に進めます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Node.js 24.21.0 / npm 11.19.0 / Next.js 16.3.6 / React 19.2.8 / sass 1.105.0 で動作を確認しています。
+            バージョンは執筆時点（2026年9月）のものです。<code>@latest</code> を指定するため、実行する時期によっては新しいバージョンがインストールされ、出力の内容も多少変わります。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">Node.js と npm のバージョンを確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>まず、Node.js と npm がインストールされていることを確認します。ターミナルで次のコマンドを実行してください。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> node -v</span><span class="terminal__line">v24.21.0</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm -v</span><span class="terminal__line">11.19.0</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>どちらのコマンドもバージョン番号が表示されれば準備完了です。<code>command not found</code> になる場合は、Node.js をインストールしてからやり直してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">create-next-app でプロジェクトを作成する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            作業用のディレクトリに移動し、<code>create-next-app</code> を実行します。
+            オプションを指定しないと対話形式で設定を聞かれますが、ここでは全ての設定をフラグで渡します。こうすると、誰が実行しても同じ構成のプロジェクトができます。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npx create-next-app@latest 01-setup --ts --eslint --app --src-dir --no-tailwind --import-alias "@/*" --use-npm --disable-git --agents-md --yes</span><span class="terminal__line">Creating a new Next.js app in /path/to/01-setup.</span><span class="terminal__line"></span><span class="terminal__line">Using npm.</span><span class="terminal__line"></span><span class="terminal__line">Initializing project with template: app</span><span class="terminal__line"></span><span class="terminal__line">Installing dependencies:</span><span class="terminal__line">- next</span><span class="terminal__line">- react</span><span class="terminal__line">- react-dom</span><span class="terminal__line"></span><span class="terminal__line">Installing devDependencies:</span><span class="terminal__line">- @types/node</span><span class="terminal__line">- @types/react</span><span class="terminal__line">- @types/react-dom</span><span class="terminal__line">- eslint</span><span class="terminal__line">- eslint-config-next</span><span class="terminal__line">- typescript</span><span class="terminal__line"></span><span class="terminal__line">npm warn deprecated eslint@9.39.5: This version is no longer supported. ...</span><span class="terminal__line"></span><span class="terminal__line">added 345 packages, and audited 346 packages in 23s</span><span class="terminal__line">found 0 vulnerabilities</span><span class="terminal__line"></span><span class="terminal__line">Generating route types...</span><span class="terminal__line">✓ Types generated successfully</span><span class="terminal__line"></span><span class="terminal__line">Skipping git initialization.</span><span class="terminal__line"></span><span class="terminal__line">Success! Created 01-setup at /path/to/01-setup</span></pre>
+          </div>
+
+          <p>出力は要点のみを抜粋しています。各フラグの意味は次のとおりです。</p>
+
+          <ul>
+            <li><code>01-setup</code>: 作成するプロジェクトのディレクトリ名</li>
+            <li><code>--ts</code>: TypeScript プロジェクトとして作成する</li>
+            <li><code>--eslint</code>: ESLint の設定を含める</li>
+            <li><code>--app</code>: App Router 構成で作成する</li>
+            <li><code>--src-dir</code>: アプリのコードを <code>src/</code> ディレクトリの中に置く</li>
+            <li><code>--no-tailwind</code>: Tailwind CSS を導入しない（このトラックではスタイルを SCSS で書くため）</li>
+            <li><code>--import-alias "@/*"</code>: <code>@/</code> で <code>src/</code> 以下を参照できる import エイリアスを設定する</li>
+            <li><code>--use-npm</code>: パッケージマネージャーに npm を使う</li>
+            <li><code>--disable-git</code>: プロジェクト内で <code>git init</code> を行わない</li>
+            <li><code>--agents-md</code>: <code>AGENTS.md</code> を生成する（このフラグは既定で有効ですが、環境によらず生成させるために明示しています）</li>
+            <li><code>--yes</code>: フラグで指定しなかった項目は、保存済みの設定または既定値を使う（対話プロンプトを出さない）</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">Tip</p>
+              <p><code>npm warn deprecated eslint@9.39.5</code> の警告が出ますが、プロジェクトの作成やこの後の <code>npm run lint</code> には影響しません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">Tip</p>
+              <p><code>--yes</code> はフラグで指定しなかった項目に保存済みの設定を使うため、React Compiler の有効/無効など一部の項目は実行環境によって教材と異なる結果になることがあります。生成結果が教材と違う場合は、該当する設定を明示的にフラグで指定してください（本執筆時点の <code>create-next-app</code> には React Compiler を無効化する専用フラグはありません）。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>最後に <code>Success! Created 01-setup at ...</code> と表示され、<code>01-setup</code> ディレクトリができていれば成功です。以降のコマンドは全て <code>cd 01-setup</code> で移動してから実行します。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">生成されたファイル構成を確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>生成されたプロジェクトの中身を見てみましょう。<code>node_modules/</code> と <code>.next/</code> を除くと、次の構成になっています。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Text</span>
+              <span class="code-block__filename">01-setup/</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext">01-setup/
+├── .gitignore
+├── AGENTS.md
+├── CLAUDE.md
+├── README.md
+├── eslint.config.mjs
+├── next-env.d.ts
+├── next.config.ts
+├── package-lock.json
+├── package.json
+├── public/
+│   ├── file.svg
+│   ├── globe.svg
+│   ├── next.svg
+│   ├── vercel.svg
+│   └── window.svg
+├── src/
+│   └── app/
+│       ├── favicon.ico
+│       ├── globals.css
+│       ├── layout.tsx
+│       ├── page.module.css
+│       └── page.tsx
+└── tsconfig.json</code></pre>
+          </div>
+
+          <p>主なファイルの役割は次のとおりです。</p>
+
+          <ul>
+            <li><code>src/app/</code>: App Router のルートディレクトリ。この中のフォルダ構成がそのまま URL になります（詳しくは次の項目で扱います）。</li>
+            <li><code>src/app/layout.tsx</code>: 全ページ共通のレイアウト（<code>&lt;html&gt;</code> と <code>&lt;body&gt;</code>）を定義するルートレイアウト。<code>globals.css</code> もここで読み込みます。</li>
+            <li><code>src/app/page.tsx</code>: トップページ（<code>/</code>）の内容です。</li>
+            <li><code>src/app/page.module.css</code>: <code>page.tsx</code> 専用の CSS Modules。クラス名はこのファイルを import したコンポーネントの中だけで有効になります。</li>
+            <li><code>public/</code>: 画像などの静的ファイル置き場。<code>/next.svg</code> のように URL のルートから参照できます。</li>
+            <li><code>next.config.ts</code>: Next.js の設定ファイル。</li>
+            <li><code>tsconfig.json</code>: TypeScript の設定。<code>"paths": { "@/*": ["./src/*"] }</code> が <code>--import-alias</code> で指定したエイリアスです。</li>
+            <li><code>eslint.config.mjs</code>: ESLint の設定。Next.js 用のルール（<code>eslint-config-next</code>）を読み込んでいます。</li>
+            <li><code>next-env.d.ts</code>: Next.js の型定義を読み込むためのファイル。自動生成されるので編集しません。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">AGENTS.md と CLAUDE.md について</p>
+              <p>
+                <code>AGENTS.md</code> と <code>CLAUDE.md</code> は、コーディング支援用の AI エージェント向けの説明ファイルです。<code>create-next-app</code> の <code>--agents-md</code> が既定で有効なため生成されます。
+                アプリの動作には関係しないので、削除しても影響はありません。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>src/app/</code> の中に <code>layout.tsx</code>・<code>page.tsx</code>・<code>globals.css</code>・<code>page.module.css</code> があることを確認してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">開発サーバーを起動して表示を確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>プロジェクトのディレクトリで開発サーバーを起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd 01-setup</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run dev</span><span class="terminal__line"></span><span class="terminal__line">&gt; 01-setup@0.1.0 dev</span><span class="terminal__line">&gt; next dev</span><span class="terminal__line"></span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line">- Local:         http://localhost:3000</span><span class="terminal__line">- Network:       http://192.168.x.x:3000</span><span class="terminal__line">✓ Ready in 239ms</span></pre>
+          </div>
+
+          <p>
+            ブラウザで <a href="http://localhost:3000">http://localhost:3000</a> を開くと、<code>create-next-app</code> が用意したスタートページが表示されます。
+            <code>Network</code> の IP アドレスは環境によって異なります。サーバーはターミナルで <kbd>Ctrl</kbd> + <kbd>C</kbd> を押すと止まりますが、次のステップ以降もページを確認するので、起動したままにしておいてください。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ターミナルに <code>✓ Ready</code> が表示され、ブラウザで <code>http://localhost:3000</code> を開くとページが表示されれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">Sass を導入して SCSS に置き換える</h3>
+        </div>
+        <div class="step__body">
+          <p>このトラックではスタイルを SCSS で書きます。Next.js は <code>sass</code> パッケージを入れるだけで <code>.scss</code> ファイルを読み込めるようになります。開発サーバーを動かしたまま、別のターミナルで次のコマンドを実行してください。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd 01-setup</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm install sass</span><span class="terminal__line"></span><span class="terminal__line">added 8 packages, and audited 354 packages in 778ms</span><span class="terminal__line">found 0 vulnerabilities</span></pre>
+          </div>
+
+          <p>次に、2 つの CSS ファイルの拡張子を <code>.scss</code> に変えます（このコマンドは何も出力しません）。<code>globals.scss</code> の中身は変更しません。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mv src/app/globals.css src/app/globals.scss</span><span class="terminal__line"><span class="terminal__prompt">$</span> mv src/app/page.module.css src/app/page.module.scss</span></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Note</p>
+              <p>この時点でブラウザを開くと <code>Module not found: Can't resolve './globals.css'</code> というエラー画面が一時的に表示されますが、これは失敗ではありません。次の手順で <code>layout.tsx</code> の import を書き換えれば解消します。</p>
+            </div>
+          </div>
+
+          <p><code>layout.tsx</code> で読み込んでいるファイル名を書き換えます。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/app/layout.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- import "./globals.css";</span><span class="diff-line diff-line--add">+ import "./globals.scss";</span></pre>
+          </div>
+
+          <p><code>page.module.scss</code> は、中身を全て次の内容に置き換えます。ページ中央に見出しとバージョン表記を並べるだけの最小限のスタイルです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">SCSS</span>
+              <span class="code-block__filename">src/app/page.module.scss</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-scss">.main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.title {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.version {
+  color: #666;
+}</code></pre>
+          </div>
+
+          <p>
+            最後に <code>page.tsx</code> も、中身を全て次の内容に置き換えます。
+            見出しと、インストールされている Next.js のバージョンを表示するだけのページです。
+            <code>next/package.json</code> から <code>version</code> を読み込めるのは、<code>tsconfig.json</code> で <code>"resolveJsonModule": true</code> が有効になっているためです。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TypeScript</span>
+              <span class="code-block__filename">src/app/page.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-typescript">import { version } from "next/package.json";
+import styles from "./page.module.scss";
+
+export default function Home() {
+  return (
+    &lt;main className={styles.main}&gt;
+      &lt;h1 className={styles.title}&gt;Hello, Next.js!&lt;/h1&gt;
+      &lt;p className={styles.version}&gt;Next.js v{version}&lt;/p&gt;
+    &lt;/main&gt;
+  );
+}</code></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ブラウザの <code>http://localhost:3000</code> に、画面中央に「Hello, Next.js!」と「Next.js v16.3.6」が表示されれば成功です。<code>package.json</code> の <code>dependencies</code> に <code>"sass": "^1.105.0"</code> が追加されていることも確認しておきましょう。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">page.tsx を書き換えて Hot Reload を体験する</h3>
+        </div>
+        <div class="step__body">
+          <p>開発サーバーは、ファイルを保存すると変更をすぐブラウザに反映します（Hot Reload）。ブラウザを開いたまま、見出しの文言を書き換えて保存してみましょう。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/app/page.tsx</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">-       &lt;h1 className={styles.title}&gt;Hello, Next.js!&lt;/h1&gt;</span><span class="diff-line diff-line--add">+       &lt;h1 className={styles.title}&gt;こんにちは、Next.js!&lt;/h1&gt;</span></pre>
+          </div>
+
+          <p>同じように、<code>page.module.scss</code> の <code>.title</code> の <code>font-size</code> を変えて保存すると、スタイルの変更も即座に反映されます。試し終わったら、両方とも元の内容に戻しておいてください。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ブラウザを手動で再読み込みしなくても、保存した直後に見出しの文言や大きさが変わることを確認してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">本番ビルドと Lint を実行する</h3>
+        </div>
+        <div class="step__body">
+          <p>開発サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めてから、本番用のビルドを実行します。TypeScript の型チェックもこの中で行われます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line"></span><span class="terminal__line">&gt; 01-setup@0.1.0 build</span><span class="terminal__line">&gt; next build</span><span class="terminal__line"></span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line"></span><span class="terminal__line">✓ Running next.config.ts took 12ms</span><span class="terminal__line">  Creating an optimized production build ...</span><span class="terminal__line">✓ Compiled successfully in 1504ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 654ms ...</span><span class="terminal__line">  Collecting page data using 5 workers ...</span><span class="terminal__line">✓ Generating static pages using 5 workers (4/4) in 198ms</span><span class="terminal__line">  Finalizing page optimization ...</span><span class="terminal__line"></span><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">└ ○ /_not-found</span><span class="terminal__line"></span><span class="terminal__line">○  (Static)  prerendered as static content</span></pre>
+          </div>
+
+          <p><code>Route (app)</code> の一覧に <code>/</code> が <code>○ (Static)</code> として表示されています。これは、トップページがビルド時に静的な HTML として生成されたことを表します。続いて Lint（ESLint による静的解析）を実行します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 01-setup@0.1.0 lint</span><span class="terminal__line">&gt; eslint</span><span class="terminal__line"></span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run build</code> がエラーなく終わり、<code>Route (app)</code> の一覧が表示されることを確認してください。<code>npm run lint</code> は、エラーや警告を出さずに終われば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>node -v</code> と <code>npm -v</code> でバージョンを確認した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>create-next-app</code> で TypeScript + App Router + <code>src/</code> 構成のプロジェクトを作成した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>layout.tsx</code>・<code>page.tsx</code>・<code>public/</code> の役割を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>npm run dev</code> で開発サーバーを起動し、ブラウザで表示を確認した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>sass</code> を導入し、<code>globals.scss</code> と <code>page.module.scss</code> に置き換えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">ファイルを保存すると、ブラウザに変更が即座に反映されることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>npm run build</code> と <code>npm run lint</code> がエラーなく終わった</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--warning">
+        <span class="callout__icon" aria-hidden="true">⚠️</span>
+        <div class="callout__body">
+          <p class="callout__title">Git リポジトリの中で作成するときは <code>--disable-git</code> を付ける</p>
+          <p><code>--disable-git</code> を付けないと、<code>create-next-app</code> がプロジェクト内に独自の <code>.git</code> を作ります。既存の Git リポジトリの中で実行すると、リポジトリが入れ子になってしまいます。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--warning">
+        <span class="callout__icon" aria-hidden="true">⚠️</span>
+        <div class="callout__body">
+          <p class="callout__title">「workspace root」の警告が出る</p>
+          <p>
+            親ディレクトリにも <code>package-lock.json</code> がある場所でプロジェクトを作ると、<code>npm run dev</code> や <code>npm run build</code> の実行時に警告が出ます。
+            警告の文面は <code>⚠ Warning: Next.js inferred your workspace root, but it may not be correct.</code> です。
+            ビルド自体は成功するので、このレッスンでは無視して構いません。気になる場合は、<code>next.config.ts</code> で <code>turbopack.root</code> を設定するか、lockfile が 1 つになるよう作業場所を見直してください。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ポート 3000 が使用中の場合</p>
+          <p>
+            別の開発サーバーなどがポート 3000 を使っていると、<code>⚠ Port 3000 is in use by process ..., using available port 3001 instead.</code> と表示され、自動的に 3001 番で起動します。
+            ターミナルの <code>- Local:</code> に表示された URL を開いてください。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>--no-tailwind</code> がヘルプに見当たらない</p>
+          <p>
+            <code>npx create-next-app@latest --help</code> には <code>--tailwind</code>（既定で有効）しか載っていませんが、<code>--no-tailwind</code> で Tailwind CSS なしのプロジェクトを作れます。
+            CLI のバージョンが変わって挙動が異なる場合は、<code>--help</code> で <code>--tailwind</code> の扱いを確認してください。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>sass</code> が <code>dependencies</code> に入る</p>
+          <p><code>npm install sass</code> はパッケージを <code>dependencies</code> に追加します。<code>devDependencies</code> に入れたい場合は <code>npm install --save-dev sass</code> のように <code>--save-dev</code> を付けてください。どちらでも動作は変わりません。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>create-next-app</code> で TypeScript + App Router のプロジェクトを作り、開発サーバーでの表示確認、SCSS への置き換え、本番ビルドと Lint までを体験しました。
+        次の項目では、<code>src/app/</code> 配下のファイル構成と URL の対応（ファイルベースルーティング）を学びます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>nextjs/01-setup</code> の <code>nextjs/01-setup/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../../index.html">
+          <span class="lesson-nav__direction">← カタログ</span>
+          <span class="lesson-nav__title">ハンズオン教材カタログ</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">02: App Router の基礎とファイルベースルーティング</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
