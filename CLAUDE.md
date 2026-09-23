@@ -119,7 +119,8 @@ src/
   - 例: `nextjs/01-setup`、`nextjs/05-storybook`、`axum/01-hello-axum`、`infra/aws/01-vpc`
 - 項目のブランチでは、ハンズオンで学習者が作るプロジェクト（コード）をリポジトリ直下のトラック別フォルダ `<track>/<NN>-<slug>/`（`infra` のみ `infra/<cloud>/<NN>-<slug>/`）に作成し、教材 HTML を `document/<track>/<NN>-<slug>/index.html` に書く。
 - `main` への PR に含めるのは `document/` 配下の変更（レッスン HTML、カタログ、トラック README、必要なら `document/assets/`）のみ。トラック別フォルダ配下のコードはブランチ上に残し、main には統合しない。教材内で完成コードを参照したい場合は、ブランチ名を教材ページに明記する。
-- 完成したら `main` に PR を出してマージする。コミットメッセージは日本語の 1 行要約 + 本文とする。
+- 完成したら PR 用ブランチ `docs/<track>-<NN>-<slug>` を `main` から切り、`git checkout <track>/<NN>-<slug> -- document/` で `document/` の変更だけを取り込んで 1 コミットにし、`main` に PR を出す。コミットメッセージは日本語の 1 行要約 + 本文とする。
+- PR は **squash merge** でマージし、マージ後に `docs/` ブランチは削除する。コードを含む `<track>/<NN>-<slug>` ブランチはマージせず残す。
 
 ## コンポーネントのクラス名一覧
 
