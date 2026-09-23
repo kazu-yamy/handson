@@ -1,0 +1,29 @@
+.title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.item {
+  border-bottom: 1px solid #e5e5e5;
+  padding-bottom: 1rem;
+}
+
+.itemTitle {
+  font-weight: 700;
+  color: #0070f3;
+}
+
+.itemBody {
+  color: #666;
+  margin-top: 0.25rem;
+}
