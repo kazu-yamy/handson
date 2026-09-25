@@ -121,7 +121,6 @@ src/
 - `main` への PR に含めるのは `document/` 配下の変更（レッスン HTML、カタログ、トラック README、必要なら `document/assets/`）のみ。トラック別フォルダ配下のコードはブランチ上に残し、main には統合しない。教材内で完成コードを参照したい場合は、ブランチ名を教材ページに明記する。
 - 完成したら PR 用ブランチ `docs/<track>-<NN>-<slug>` を `main` から切り、`git checkout <track>/<NN>-<slug> -- document/` で `document/` の変更だけを取り込んで 1 コミットにし、`main` に PR を出す。コミットメッセージは日本語の 1 行要約 + 本文とする。
 - PR は **squash merge** でマージし、マージ後に `docs/` ブランチは削除する。コードを含む `<track>/<NN>-<slug>` ブランチはマージせず残す。
-
 - 複数のセッションで並行して別トラックを作る場合は、トラックごとに `git worktree` を分ける。同じ作業ツリーでブランチを切り替え合わない。
   - 例: `git worktree add ../handson-axum -b axum/01-hello-axum main` して `../handson-axum` で Claude Code を起動する。
   - 共有ファイルは `document/index.html`（カタログ）と Obsidian の `progress.md` だけなので、PR 用ブランチは必ず最新の `main` から切る。
