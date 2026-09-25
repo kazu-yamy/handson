@@ -84,7 +84,8 @@ handson/
 - `src/app/` はルーティング専用（`page.tsx` / `layout.tsx` / `loading.tsx` など）とする。ルートグループ `(group)/` と、そのルート専用の部品を置く `_components/`（先頭 `_` でルート化を防ぐ）を使う。
 - 再利用する部品は `src/components/<Name>/` に 1 コンポーネント = 1 フォルダで置く。`<Name>.tsx`、`<Name>.module.scss`、`<Name>.stories.tsx`（Storybook 導入後）、`<Name>.test.tsx`（テスト導入後）、`index.ts`（re-export）を同居させる。
 - 機能単位のまとまりは `src/features/<feature>/` に `components` / `hooks` / `api` を同居させる。
-- 共通 SCSS は `src/styles/` に集約する: `globals.scss`、`_variables.scss`、`_mixins.scss`。`next.config.ts` の `sassOptions.includePaths: ['./src/styles']` と `additionalData` で `@use "variables" as *;` を自動プレリュードにし、各 `module.scss` から相対パスを書かないようにする（この設定は 06 スタイリングの項目で導入する。01〜05 は `globals.scss` のみを使う）。
+- 共通 SCSS は `src/styles/` に集約する: `globals.scss`、`_variables.scss`、`_mixins.scss`。`next.config.ts` の `sassOptions.loadPaths: ['./src/styles']` と `additionalData` で `@use "variables" as *;` を自動プレリュードにし、各 `module.scss` から相対パスを書かないようにする（`includePaths` は Next.js 16 の sass-loader では無視されるので使わない。Storybook には継承されないため `.storybook/main.ts` の `viteFinal` にも同じ設定を書く。この設定は 06 スタイリングの項目で導入する。01〜05 は `globals.scss` のみを使う）。
+- `_variables.scss` / `_mixins.scss` には CSS を出力する記述（`:root` など）を書かない。`additionalData` で全ての `module.scss` に `@use` されるため、CSS を出力するとファイルの数だけ複製される。CSS カスタムプロパティの定義は `globals.scss` に置く。
 - ページ専用のスタイルは `page.module.scss` を `page.tsx` と同じ場所に置いてよい。
 - エディタ表示はリポジトリ直下の `.vscode/settings.json` の file nesting で `.module.scss` / `.stories.tsx` / `.test.tsx` を `.tsx` の下にネストする。
 
