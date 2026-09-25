@@ -1,0 +1,16 @@
+.toggle {
+  border: 1px solid var(--color-border);
+  border-radius: $radius-full;
+  background: none;
+  padding: 0.375rem 0.875rem;
+  font-size: 0.8125rem;
+  color: inherit;
+  cursor: pointer;
+
+  @include focus-ring;
+
+  &:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+}

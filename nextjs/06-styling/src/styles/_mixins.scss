@@ -1,0 +1,41 @@
+// 共通で使うミックスイン。
+@use "sass:map";
+@use "variables" as vars;
+
+// ブレークポイント名を指定してメディアクエリを書くためのミックスイン。
+// 例: @include mq(md) { flex-direction: column; }
+$breakpoints: (
+  sm: vars.$breakpoint-sm,
+  md: vars.$breakpoint-md,
+  lg: vars.$breakpoint-lg,
+);
+
+@mixin mq($name) {
+  $width: map.get($breakpoints, $name);
+
+  @if $width == null {
+    @error "mq: 不明なブレークポイント名です (#{$name})。sm / md / lg を使ってください。";
+  }
+
+  @media (max-width: $width) {
+    @content;
+  }
+}
+
+// キーボード操作時のフォーカスリング。マウス操作時（:focus のみで :focus-visible ではない場合）には出さない。
+@mixin focus-ring {
+  &:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}
+
+// ボタンの見た目をリセットして、テキストリンクのように使いたいときに使う。
+@mixin button-reset {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}

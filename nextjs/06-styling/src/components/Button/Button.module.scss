@@ -1,0 +1,66 @@
+// variant / size を styles[variant] のような「クラス名の出し分け」ではなく、
+// [data-variant="..."] という属性セレクタで切り替えている。
+// - クラス名は常に .button 1 つだけなので、呼び出し側が className で見た目を拡張しやすい
+//   （styles[variant] 方式だと、拡張用の className と variant 用のクラスの結合を毎回書く必要がある）。
+// - devtools で data-variant="primary" のように見えるので、いま何が選ばれているか読みやすい。
+// 欠点は、DOM に data-variant / data-size がそのまま出るため、
+// 見た目の情報が漏れているように見える／CSS 側の実装詳細が伝わってしまう点。
+// なお Sass 側は &[data-variant="#{$v}"] の形で @each と組み合わせられるため、
+// バリアント数が増えても map + @each で生成できる（今回は 3 種類なのでベタ書きしている）。
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  border: 1px solid transparent;
+  border-radius: $radius-full;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+
+  @include focus-ring;
+
+  &[data-size="sm"] {
+    padding: $space-1 $space-3;
+    font-size: 0.8125rem;
+  }
+
+  &[data-size="md"] {
+    padding: $space-2 $space-4;
+    font-size: 0.875rem;
+  }
+
+  &[data-variant="primary"] {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: #ffffff;
+
+    &:hover {
+      opacity: 0.9;
+    }
+  }
+
+  &[data-variant="secondary"] {
+    background: var(--color-surface);
+    border-color: var(--color-border);
+    color: var(--color-fg);
+
+    &:hover {
+      border-color: var(--color-accent);
+      color: var(--color-accent);
+    }
+  }
+
+  &[data-variant="ghost"] {
+    background: none;
+    border-color: transparent;
+    color: var(--color-fg);
+
+    &:hover {
+      background: var(--color-border);
+    }
+  }
+}

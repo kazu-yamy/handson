@@ -1,0 +1,21 @@
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.main {
+  flex: 1;
+  width: 100%;
+  max-width: $breakpoint-lg;
+  margin: 0 auto;
+  padding: $space-8 $space-4;
+}
+
+.footer {
+  border-top: 1px solid var(--color-border);
+  padding: $space-4 $space-8;
+  text-align: center;
+  color: var(--color-text-subtle);
+  font-size: 0.875rem;
+}

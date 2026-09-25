@@ -1,0 +1,10 @@
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+}
+
+.title {
+  font-size: 2rem;
+  font-weight: 700;
+}
