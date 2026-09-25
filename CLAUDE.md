@@ -122,6 +122,22 @@ src/
 - 完成したら PR 用ブランチ `docs/<track>-<NN>-<slug>` を `main` から切り、`git checkout <track>/<NN>-<slug> -- document/` で `document/` の変更だけを取り込んで 1 コミットにし、`main` に PR を出す。コミットメッセージは日本語の 1 行要約 + 本文とする。
 - PR は **squash merge** でマージし、マージ後に `docs/` ブランチは削除する。コードを含む `<track>/<NN>-<slug>` ブランチはマージせず残す。
 
+- 複数のセッションで並行して別トラックを作る場合は、トラックごとに `git worktree` を分ける。同じ作業ツリーでブランチを切り替え合わない。
+  - 例: `git worktree add ../handson-axum -b axum/01-hello-axum main` して `../handson-axum` で Claude Code を起動する。
+  - 共有ファイルは `document/index.html`（カタログ）と Obsidian の `progress.md` だけなので、PR 用ブランチは必ず最新の `main` から切る。
+  - 開発サーバーのポート（Next.js 3000、Storybook 6006 など）が他セッションと重ならないよう、起動前に空きを確認する。
+
+## 教材作成のワークフロー
+
+1 項目は次の 4 段階で作る。各段階は別のエージェント（またはセッション）が担当し、前段の成果物だけを入力にする。
+
+1. **実装（implementer）**: 前の項目の完成コードを出発点に、`<track>/<NN>-<slug>/` に実プロジェクトを作る。ステップごとに「作成・変更したファイルの全文（変更は前後）」「実行したコマンドと実際の出力」「意図的に失敗させた場合のエラー文言」「つまずきやすい点」を手順ログ（Markdown）に残す。ビルド・lint・テストが通ることを確認し、起動したサーバーは必ず止める。`document/` には触れない。
+2. **執筆（writer）**: 手順ログと実プロジェクトの実物だけを材料に `document/<track>/<NN>-<slug>/index.html` を書く。コードと出力は創作せず、実ファイルを読み込んでエスケープ埋め込みする。ログに無い挙動は書かないか「要確認」の印を付ける。カリキュラム表・カタログ・前の項目の「次へ」も更新する。textlint（ja-technical-writing）で校正する。
+3. **レビュー（reviewer）**: 教材のコード・diff・出力を実プロジェクトと突き合わせ、diff の変更前が前の項目の完成状態と一致するか、途中段階のコードがその時点で動くかを別コピーで再現して確かめる。「要確認」の箇所は実際に動かして確定させる。フレームワークの仕様説明は同梱ドキュメントや公式ドキュメントで裏取りする。指摘は「ファイル:行番号 — 問題 — 修正案」で返し、修正はしない。
+4. **修正と PR**: 指摘を反映し（コードを直した場合は教材内のコードも一致させる）、項目ブランチにコミットして push する。`docs/<track>-<NN>-<slug>` を最新の `main` から切って `document/` だけを取り込み、PR を出す。マージ後に Obsidian の `progress.md` を更新する。
+
+教材の出発点は「前の項目の完成コードをそのまま使う」とし、学習者にはブランチの取り込み手順を見せない。`package.json` の `name` など項目名に依存する値は出発点で直す。
+
 ## コンポーネントのクラス名一覧
 
 実装（`document/template/lesson.html` / `document/assets/scss/_layout.scss` / `document/assets/scss/_components.scss` / `document/assets/scss/_code.scss` / `document/assets/js/main.js`）が正。新しいレッスンを書く際は以下のマークアップをコピーして使う。
