@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01: Hello Axum: 最小の Web サーバーを起動する | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">01</li>
+        </ol>
+        <h1 class="lesson-title">Hello Axum: 最小の Web サーバーを起動する</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 30分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: Rust の基本文法は分かるが、Axum で Web サーバーを書くのは初めての人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法、cargo の基本操作（<code>cargo new</code> / <code>cargo run</code>）、ターミナルでの基本的なコマンド操作ができること。Rust ツールチェーンがインストール済みであること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: なし（トラック最初の項目）</li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>cargo new</code> でプロジェクトを作り、<code>cargo add</code> で axum と tokio を依存に追加する</li>
+          <li><code>GET /</code> に文字列を返す最小の Axum サーバーを書いて起動する</li>
+          <li><code>curl</code> でレスポンスを確認し、存在しないパスが 404 になることを確かめる</li>
+          <li>ルートを追加し、サーバーを再起動して反映させる</li>
+          <li><code>#[tokio::main]</code> が必要な理由を、コンパイルエラーから確かめる</li>
+          <li><code>cargo build</code> / <code>cargo clippy</code> / <code>cargo fmt</code> で仕上げの確認をする</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        Axum トラックの最初の項目です。Rust の Web フレームワーク Axum を使い、<code>127.0.0.1:3000</code> で待ち受けて文字列を返すだけの、最小の HTTP サーバーを作ります。
+        以降の項目は、ここで作るプロジェクトを出発点にして機能を足していきます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Rust（rustc）1.98.1 / cargo 1.98.1 / axum 0.8.9 / tokio 1.53.1（Rust edition 2024）で動作を確認しています。
+            バージョンは執筆時点（2026年9月）のものです。<code>cargo add</code> はその時点の最新版を追加するため、実行する時期によっては新しいバージョンが入り、出力の内容も多少変わります。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">cargo new でプロジェクトを作成する</h3>
+        </div>
+        <div class="step__body">
+          <p>作業用のディレクトリに移動し、<code>cargo new</code> でプロジェクトを作成します。ディレクトリ名は <code>01-hello-axum</code>、パッケージ名は <code>--name</code> で <code>hello-axum</code> と指定します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo new --name hello-axum 01-hello-axum</span><span class="terminal__line">    Creating binary (application) `hello-axum` package</span><span class="terminal__line">note: see more `Cargo.toml` keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html</span></pre>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">なぜ --name を付けるのか</p>
+              <p>
+                <code>cargo new</code> は、何も指定しないとディレクトリ名をそのままパッケージ名にします。
+                このトラックではディレクトリ名に番号（<code>01-</code>）を付けますが、先頭が数字のパッケージ名はエラーになります。そこで <code>--name</code> でパッケージ名を別に指定しています。
+              </p>
+            </div>
+          </div>
+
+          <p>生成された <code>Cargo.toml</code> と <code>src/main.rs</code> は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TOML</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-toml">[package]
+name = "hello-axum"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]</code></pre>
+          </div>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">fn main() {
+    println!("Hello, world!");
+}</code></pre>
+          </div>
+
+          <p>プロジェクトのディレクトリに移動し、そのまま実行してみます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd 01-hello-axum</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   Compiling hello-axum v0.1.0 (/path/to/01-hello-axum)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.45s</span><span class="terminal__line">     Running `target/debug/hello-axum`</span><span class="terminal__line">Hello, world!</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>最後に <code>Hello, world!</code> と表示されれば成功です。以降のコマンドは全て <code>01-hello-axum</code> ディレクトリで実行します。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">axum と tokio を依存に追加する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>cargo add</code> で依存クレートを追加します。Axum 本体の <code>axum</code> と、非同期ランタイムの <code>tokio</code> の 2 つです。
+            まず <code>axum</code> を追加します。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add axum</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding axum v0.8.9 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             + form</span><span class="terminal__line">             + http1</span><span class="terminal__line">             + json</span><span class="terminal__line">             + matched-path</span><span class="terminal__line">             + original-uri</span><span class="terminal__line">             + query</span><span class="terminal__line">             + tokio</span><span class="terminal__line">             + tower-log</span><span class="terminal__line">             + tracing</span><span class="terminal__line">             - __private</span><span class="terminal__line">             - __private_docs</span><span class="terminal__line">             - http2</span><span class="terminal__line">             - macros</span><span class="terminal__line">             - multipart</span><span class="terminal__line">             - ws</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">     Locking 52 packages to latest Rust 1.98.1 compatible versions</span><span class="terminal__line">      Adding atomic-waker v1.1.2</span><span class="terminal__line">      ...</span></pre>
+          </div>
+
+          <p>出力の後半は、一緒に追加される依存クレートの一覧が続くため省略しています。続いて <code>tokio</code> を、必要なフィーチャーを指定して追加します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add tokio --features macros,net,rt-multi-thread</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding tokio v1.53.1 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             + libc</span><span class="terminal__line">             + macros</span><span class="terminal__line">             + net</span><span class="terminal__line">             + rt</span><span class="terminal__line">             + rt-multi-thread</span><span class="terminal__line">             + socket2</span><span class="terminal__line">             + tokio-macros</span><span class="terminal__line">             - bytes</span><span class="terminal__line">             - fs</span><span class="terminal__line">             - full</span><span class="terminal__line">             - io-std</span><span class="terminal__line">             - io-uring</span><span class="terminal__line">             - io-util</span><span class="terminal__line">             - mio</span><span class="terminal__line">             - parking_lot</span><span class="terminal__line">             - process</span><span class="terminal__line">             - schedule-latency</span><span class="terminal__line">             - signal</span><span class="terminal__line">             - signal-hook-registry</span><span class="terminal__line">             - sync</span><span class="terminal__line">             - taskdump</span><span class="terminal__line">             - test-util</span><span class="terminal__line">             - time</span><span class="terminal__line">             - tracing</span><span class="terminal__line">             - windows-sys</span></pre>
+          </div>
+
+          <p>指定した 3 つのフィーチャーは、このレッスンのコードで次のように使います。</p>
+
+          <ul>
+            <li><code>macros</code>: <code>#[tokio::main]</code> アトリビュートを使うため</li>
+            <li><code>net</code>: <code>tokio::net::TcpListener</code> でポートを待ち受けるため</li>
+            <li><code>rt-multi-thread</code>: <code>#[tokio::main]</code> が起動するランタイムのため</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>net</code> フィーチャーを明示する理由</p>
+              <p><code>axum</code> の既定フィーチャー <code>tokio</code> が tokio の <code>net</code> も有効にするため、<code>net</code> を指定しなくてもビルドは通ります。ただし、このレッスンのコードでは <code>tokio::net::TcpListener</code> を直接使うので、自分のコードが使う機能として明示しておきます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>rt-multi-thread</code> を忘れるとコンパイルできない</p>
+              <p><code>rt-multi-thread</code> を外すと、<code>#[tokio::main]</code> の行で次のコンパイルエラーになります。<code>#[tokio::main]</code> の既定はマルチスレッドランタイムなので、このフィーチャーが必要です。</p>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line">error: The default runtime flavor is `multi_thread`, but the `rt-multi-thread` feature is disabled.</span><span class="terminal__line"> --&gt; src/main.rs:3:1</span></pre>
+              </div>
+            </div>
+          </div>
+
+          <p>追加後の <code>Cargo.toml</code> は次のようになります。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TOML</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-toml">[package]
+name = "hello-axum"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.9"
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread"] }</code></pre>
+          </div>
+
+          <p><code>cargo tree --depth 1</code> を実行すると、直接の依存関係を確認できます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo tree --depth 1</span><span class="terminal__line">hello-axum v0.1.0 (/path/to/01-hello-axum)</span><span class="terminal__line">├── axum v0.8.9</span><span class="terminal__line">└── tokio v1.53.1</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Cargo.toml</code> の <code>[dependencies]</code> に <code>axum</code> と <code>tokio</code> が並んでいることを確認してください。<code>tokio</code> の <code>features</code> に <code>"macros"</code>・<code>"net"</code>・<code>"rt-multi-thread"</code> の 3 つが入っていれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">最小のサーバーを書いて起動する</h3>
+        </div>
+        <div class="step__body">
+          <p><code>src/main.rs</code> の中身を全て次の内容に置き換えます。<code>127.0.0.1:3000</code> で待ち受け、<code>GET /</code> に <code>Hello, Axum!</code> という文字列を返すサーバーです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{routing::get, Router};
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new().route("/", get(|| async { "Hello, Axum!" }));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}</code></pre>
+          </div>
+
+          <p>コードの流れは次のとおりです。</p>
+
+          <ul>
+            <li><code>Router::new().route("/", get(...))</code>: パス <code>/</code> への <code>GET</code> リクエストに、<code>"Hello, Axum!"</code> を返す非同期クロージャを割り当てます。</li>
+            <li><code>tokio::net::TcpListener::bind("127.0.0.1:3000")</code>: ポート 3000 で接続を待ち受けます。</li>
+            <li><code>println!</code>: 待ち受けているアドレスを表示します。</li>
+            <li><code>axum::serve(listener, app)</code>: 待ち受けたポートでリクエストを受け付け、<code>app</code> のルートに振り分けます。</li>
+          </ul>
+
+          <p>保存したら、サーバーを起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   Compiling itoa v1.0.18</span><span class="terminal__line">   ...</span><span class="terminal__line">   Compiling hyper v1.11.1</span><span class="terminal__line">   Compiling tower v0.5.3</span><span class="terminal__line">   Compiling hyper-util v0.1.21</span><span class="terminal__line">   Compiling axum v0.8.9</span><span class="terminal__line">   Compiling hello-axum v0.1.0 (/path/to/01-hello-axum)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.60s</span><span class="terminal__line">     Running `target/debug/hello-axum`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>
+            初回は axum と tokio に関連する 50 個以上の依存クレートを全てコンパイルするため、完了まで数秒から十数秒かかります（出力の途中は省略しています）。
+            2 回目以降はコンパイル済みの結果が再利用されるので速くなります。
+            サーバーは起動したまま止まらないので、このターミナルは開いたままにしておいてください。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ターミナルの最後に <code>listening on 127.0.0.1:3000</code> と表示され、プロンプトへ戻らず待ち受けを続けていれば成功です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">curl でレスポンスを確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>サーバーを動かしたまま別のターミナルを開き、<code>curl -i</code> でリクエストを送ります。<code>-i</code> を付けると、本文に加えてレスポンスヘッダーも表示されます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 12</span><span class="terminal__line">date: Fri, 25 Sep 2026 15:46:43 GMT</span><span class="terminal__line"></span><span class="terminal__line">Hello, Axum!</span></pre>
+          </div>
+
+          <p>本文はハンドラの返した文字列そのもので、<code>content-type</code> は <code>text/plain; charset=utf-8</code> です。<code>date</code> の値は実行した日時によって変わります。</p>
+
+          <p>次に、ルートを登録していないパスにリクエストを送ってみます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/foo</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Fri, 25 Sep 2026 15:46:43 GMT</span></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">404 の本文は空</p>
+              <p>ルートにないパスへのリクエストには、Axum が既定で <code>404 Not Found</code> を返します。このとき本文は空（<code>content-length: 0</code>）なので、<code>curl</code> にはヘッダーだけが表示されます。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/</code> で <code>200 OK</code> と <code>Hello, Axum!</code>、<code>/foo</code> で <code>404 Not Found</code> が返れば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">/health ルートを追加して再起動する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            動作確認用のエンドポイント <code>GET /health</code> を追加し、<code>ok</code> を返すようにします。
+            まず、サーバーを起動しているターミナルで <kbd>Ctrl</kbd> + <kbd>C</kbd> を押してサーバーを止めてください。
+            そのうえで、<code>src/main.rs</code> の <code>let app = ...</code> の部分を次のように書き換えます。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">-     let app = Router::new().route("/", get(|| async { "Hello, Axum!" }));</span><span class="diff-line diff-line--add">+     let app = Router::new()</span><span class="diff-line diff-line--add">+         .route("/", get(|| async { "Hello, Axum!" }))</span><span class="diff-line diff-line--add">+         .route("/health", get(|| async { "ok" }));</span></pre>
+          </div>
+
+          <p><code>.route(...)</code> をつなげて書くと、ルートをいくつでも追加できます。変更後の <code>src/main.rs</code> の全体は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{routing::get, Router};
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(|| async { "Hello, Axum!" }))
+        .route("/health", get(|| async { "ok" }));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}</code></pre>
+          </div>
+
+          <p>保存したら、もう一度サーバーを起動します。今回は <code>hello-axum</code> だけがコンパイルされるので、すぐに起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   Compiling hello-axum v0.1.0 (/path/to/01-hello-axum)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.43s</span><span class="terminal__line">     Running `target/debug/hello-axum`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>2 つ目のターミナルから、<code>/</code> と <code>/health</code> にリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 12</span><span class="terminal__line">date: Fri, 25 Sep 2026 15:47:08 GMT</span><span class="terminal__line"></span><span class="terminal__line">Hello, Axum!</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 2</span><span class="terminal__line">date: Fri, 25 Sep 2026 15:47:08 GMT</span><span class="terminal__line"></span><span class="terminal__line">ok</span></pre>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">コードを変えたら再起動が必要</p>
+              <p><code>cargo run</code> で起動したサーバーは、ソースコードを保存しても自動では変更を反映しません。ルートを追加したら、サーバーを止めて <code>cargo run</code> し直してください。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/health</code> で <code>200 OK</code> と <code>ok</code> が返り、<code>/</code> も引き続き <code>Hello, Axum!</code> を返せば成功です。確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">#[tokio::main] を外してエラーを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>main</code> 関数に付けた <code>#[tokio::main]</code> の役割を、あえて外してみることで確かめます。
+            サーバーを止めた状態で、<code>src/main.rs</code> から次の 1 行を一時的に削除してください。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use axum::{routing::get, Router};</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- #[tokio::main]</span><span class="diff-line">  async fn main() {</span></pre>
+          </div>
+
+          <p>この状態でビルドします。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling hello-axum v0.1.0 (/path/to/01-hello-axum)</span><span class="terminal__line">error[E0752]: `main` function is not allowed to be `async`</span><span class="terminal__line"> --&gt; src/main.rs:3:1</span><span class="terminal__line">  |</span><span class="terminal__line">3 | async fn main() {</span><span class="terminal__line">  | ^^^^^^^^^^^^^^^ `main` function is not allowed to be `async`</span><span class="terminal__line"></span><span class="terminal__line">For more information about this error, try `rustc --explain E0752`.</span><span class="terminal__line">error: could not compile `hello-axum` (bin "hello-axum") due to 1 previous error</span></pre>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>main</code> 関数は標準では <code>async</code> にできない</p>
+              <p>
+                エラー E0752 は、Axum や tokio ではなく Rust 言語自体が出すエラーです。Rust の <code>main</code> 関数は、そのままでは <code>async fn</code> にできません。
+                <code>#[tokio::main]</code> は、<code>async fn main</code> を通常の <code>main</code> 関数で包み、tokio の非同期ランタイムを起動してから中身を実行するコードに展開するマクロです。
+                これにより、<code>main</code> の中で <code>.await</code> を使えるようになります。
+              </p>
+            </div>
+          </div>
+
+          <p>確認できたら、削除した <code>#[tokio::main]</code> を元に戻してください。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>#[tokio::main]</code> を外すと <code>error[E0752]</code> になり、戻すとビルドが通ることを確認してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">ビルド・Lint・フォーマットを確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>仕上げに、ビルドと静的解析（Clippy）がエラーや警告なく通ることを確認します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling hello-axum v0.1.0 (/path/to/01-hello-axum)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy</span><span class="terminal__line">   ...</span><span class="terminal__line">    Checking hello-axum v0.1.0 (/path/to/01-hello-axum)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.03s</span></pre>
+          </div>
+
+          <p>続いて、<code>cargo fmt --check</code> でコードの書式を確認します。<code>--check</code> を付けると、ファイルを書き換えずに差分だけを表示します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span><span class="terminal__line">Diff in /path/to/01-hello-axum/src/main.rs:1:</span><span class="terminal__line">-use axum::{routing::get, Router};</span><span class="terminal__line">+use axum::{Router, routing::get};</span><span class="terminal__line"></span><span class="terminal__line"> #[tokio::main]</span><span class="terminal__line"> async fn main() {</span></pre>
+          </div>
+
+          <p>
+            <code>use</code> 文の中の並び順に差分が出ました。
+            この並び順は <code>cargo fmt</code> の既定ルールで決まるので、手で直す必要はありません。<code>cargo fmt</code> を実行すると自動で整形されます。
+            整形後にもう一度 <code>cargo fmt --check</code> を実行し、何も表示されなければ OK です。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span></pre>
+          </div>
+
+          <p>完成した <code>src/main.rs</code> は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{Router, routing::get};
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(|| async { "Hello, Axum!" }))
+        .route("/health", get(|| async { "ok" }));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}</code></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>target/</code> と <code>.gitignore</code> について</p>
+              <p>
+                ビルド結果は <code>target/</code> に出力されます。<code>target/</code> は Git にコミットしません。
+                このリポジトリでは、ルートの <code>.gitignore</code> に <code>**/target/</code> を書いて除外しています。既存の Git リポジトリの中で実行した <code>cargo new</code> は、プロジェクト内に <code>.gitignore</code> を作りません。
+                Git 管理外のディレクトリで単独のプロジェクトとして作った場合は、<code>cargo new</code> が <code>target/</code> を除外する <code>.gitignore</code> を生成します。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo build</code> と <code>cargo clippy</code> がエラーや警告を出さずに終わり、<code>cargo fmt --check</code> が何も表示しなければ完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>cargo new --name</code> でパッケージ名を指定してプロジェクトを作成した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>cargo add</code> で <code>axum</code> と、<code>macros</code>・<code>net</code>・<code>rt-multi-thread</code> を有効にした <code>tokio</code> を追加した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>cargo run</code> でサーバーを起動し、<code>listening on 127.0.0.1:3000</code> が表示された</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>curl -i</code> で <code>/</code> が 200、<code>/foo</code> が本文なしの 404 になることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>/health</code> ルートを追加し、サーバーを再起動して <code>ok</code> が返ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>#[tokio::main]</code> を外すと E0752 になる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>cargo build</code>・<code>cargo clippy</code>・<code>cargo fmt --check</code> が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ポート 3000 が使用中の場合</p>
+          <p>別の開発サーバーなどがポート 3000 を使っていると、<code>TcpListener::bind</code> が失敗し、<code>unwrap()</code> によって次のように panic します（macOS での出力例です）。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line">thread 'main' (12345) panicked at src/main.rs:9:10:</span><span class="terminal__line">called `Result::unwrap()` on an `Err` value: Os { code: 48, kind: AddrInUse, message: "Address already in use" }</span></pre>
+          </div>
+          <p><code>lsof -nP -i :3000</code> で使用中のプロセスを確認して止めるか、<code>src/main.rs</code> の <code>"127.0.0.1:3000"</code> を空いているポート番号に変えてください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">前回のサーバーが残っている</p>
+          <p>サーバーを止め忘れたまま別のターミナルで <code>cargo run</code> すると、ポート 3000 が使用中の状態になります。ステップ 5 以降で再起動するときは、前のサーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で確実に止めてから起動してください。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>cargo new</code> と <code>cargo add</code> でプロジェクトを用意し、<code>Router</code> にルートを登録して <code>axum::serve</code> で起動する、最小の Axum サーバーを作りました。
+        あわせて、<code>#[tokio::main]</code> が <code>async fn main</code> を動かすために必要なことも確かめました。
+        次の項目では、ルーティングとハンドラについて学び、複数のエンドポイントやパスパラメーターを扱えるようにします。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/01-hello-axum</code> の <code>axum/01-hello-axum/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../../index.html">
+          <span class="lesson-nav__direction">← カタログ</span>
+          <span class="lesson-nav__title">ハンズオン教材カタログ</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">02: ルーティングとハンドラ</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
