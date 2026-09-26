@@ -1,0 +1,1587 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04: 共有状態とミドルウェア | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">04</li>
+        </ol>
+        <h1 class="lesson-title">共有状態とミドルウェア</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 03 で JSON の API を作れるようになり、次にリクエストをまたいでデータを保持したり、共通の処理を差し込んだりしたい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法（構造体・<code>Option</code> / <code>Result</code>・クロージャー）、<code>cargo run</code> と <code>curl</code> の基本操作ができること、<code>Arc</code> / <code>Mutex</code> を知っていること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../03-json/index.html">03: JSON リクエスト/レスポンス</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>State</code> と <code>with_state</code> で、全ハンドラから読み書きできる共有状態（<code>Arc&lt;Mutex&lt;...&gt;&gt;</code>）を持つ</li>
+          <li><code>Extension</code> で設定値をハンドラへ渡し、付け忘れると実行時エラー（500）になることを確かめる</li>
+          <li><code>middleware::from_fn</code> で、全リクエストのログを出すミドルウェアを書く</li>
+          <li><code>route_layer</code> と <code>merge</code> で、一部のルートにだけ API キー認証を掛ける</li>
+          <li><code>with_state</code> を書き忘れるとコンパイルエラーになることを確かめ、<code>Extension</code> との違いを説明できるようになる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        03 の API は、<code>POST /users</code> でユーザーを作っても保存されず、<code>GET /users</code> は常に同じ 2 件を返していました。
+        このレッスンでは、axum の <code>State</code> を使ってユーザーの一覧をメモリー上に持ち、全てのハンドラから読み書きできるようにします。
+        また、設定値を <code>Extension</code> で渡す方法と、ハンドラの前後に共通の処理を差し込むミドルウェアの書き方を学びます。
+      </p>
+
+      <p>このレッスンの完成時には、サーバーが次のルートへ応答します。03 から変わったところを太字にしています。ミドルウェアの列は、そのルートに掛かるミドルウェアです。</p>
+
+      <table>
+        <thead>
+          <tr><th>メソッド</th><th>パス</th><th>返す内容</th><th>ミドルウェア</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/</code></td><td><strong><code>Extension</code> の設定値を使った <code>Hello from Handson Axum</code></strong></td><td><strong>ログ</strong></td></tr>
+          <tr><td>GET</td><td><code>/health</code></td><td>JSON <code>{"status":"ok"}</code></td><td><strong>ログ</strong></td></tr>
+          <tr><td>GET</td><td><code>/users</code></td><td><strong>共有状態に保存されているユーザーの JSON 配列</strong></td><td><strong>ログ</strong></td></tr>
+          <tr><td>POST</td><td><code>/users</code></td><td><strong>共有状態にユーザーを追加し、201 と作成したユーザーの JSON</strong></td><td><strong>ログ + API キー認証</strong></td></tr>
+          <tr><td>GET</td><td><code>/users/{id}</code></td><td><strong>共有状態から探したユーザーの JSON（なければ 404）</strong></td><td><strong>ログ</strong></td></tr>
+          <tr><td>PUT</td><td><code>/users/{id}</code></td><td><strong>共有状態のユーザーの名前を更新し、更新後の JSON（なければ 404）</strong></td><td><strong>ログ + API キー認証</strong></td></tr>
+          <tr><td>GET</td><td><code>/users/{user_id}/posts/{post_id}</code></td><td><code>user {user_id} post {post_id}</code></td><td><strong>ログ</strong></td></tr>
+          <tr><td>GET</td><td><code>/search</code></td><td>受け取ったクエリパラメーターの一覧</td><td><strong>ログ</strong></td></tr>
+          <tr><td>（上記以外）</td><td>どれにもマッチしないパス</td><td>404 と本文 <code>Not Found</code></td><td><strong>ログ</strong></td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Rust（rustc）1.98.1 / cargo 1.98.1（Rust edition 2024）で動作を確認しています。クレートのバージョンは axum 0.8.9 / tokio 1.53.1 / serde 1.0.229 / serde_json 1.0.151 です。
+            バージョンは執筆時点（2026年9月）のものです。このレッスンで新たに追加するクレートはありません。<code>State</code>・<code>Extension</code>・<code>middleware::from_fn</code>・<code>route_layer</code> は、いずれも axum に標準で含まれています。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">03 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            03 の完成コードをそのまま出発点にします。<code>03-json</code> ディレクトリがある場所で、次のコマンドを実行してください。
+            ビルド結果の <code>target/</code> はコピーせず、<code>Cargo.toml</code>・<code>Cargo.lock</code>・<code>src/</code> だけを新しいディレクトリ <code>04-state-middleware</code> にコピーします。
+            コマンドは何も表示せずに終わります。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir 04-state-middleware</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 03-json/Cargo.toml 03-json/Cargo.lock 03-json/src 04-state-middleware/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 04-state-middleware</span></pre>
+          </div>
+
+          <p>次に、<code>Cargo.toml</code> の <code>name</code> を <code>json</code> から <code>state-middleware</code> に変更します。変更するのはこの 1 行だけです。依存クレートは 03 のまま変えません。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "json"</span><span class="diff-line diff-line--add">+ name = "state-middleware"</span><span class="diff-line">  version = "0.1.0"</span></pre>
+          </div>
+
+          <p><code>src/main.rs</code> は 03 の完成形のまま使います。サーバーを起動して、03 と同じように動くことを確かめます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   ...</span><span class="terminal__line">   Compiling axum v0.8.9</span><span class="terminal__line">   Compiling state-middleware v0.1.0 (/path/to/04-state-middleware)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.78s</span><span class="terminal__line">     Running `target/debug/state-middleware`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p><code>target/</code> をコピーしていないので、初回は依存クレートのコンパイルから始まり、数秒かかります（出力の途中は省略しています）。サーバーを動かしたまま別のターミナルを開き、<code>/</code> と <code>/health</code> にリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 12</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:08:50 GMT</span><span class="terminal__line"></span><span class="terminal__line">Hello, Axum!</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 15</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:08:50 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Running `target/debug/state-middleware`</code> が表示され、<code>/</code> が <code>Hello, Axum!</code>、<code>/health</code> が <code>{"status":"ok"}</code> を返せば OK です。以降のコマンドは全て <code>04-state-middleware</code> ディレクトリで実行します。確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">State で共有状態を持つ（GET /users）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ユーザーの一覧をサーバーのメモリー上に持ち、ハンドラから読めるようにします。
+            axum では、アプリ全体で共有したい値を構造体にまとめて <code>Router</code> に渡し、ハンドラでは <code>State</code> extractor で受け取ります。
+            <code>src/main.rs</code> を次のように変更してください。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use axum::{</span><span class="diff-line">      Json, Router,</span><span class="diff-line diff-line--remove">-     extract::{Path, Query},</span><span class="diff-line diff-line--add">+     extract::{Path, Query, State},</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line">      routing::get,</span><span class="diff-line">  };</span><span class="diff-line">  use serde::{Deserialize, Serialize};</span><span class="diff-line">  use serde_json::json;</span><span class="diff-line">  use std::collections::HashMap;</span><span class="diff-line diff-line--add">+ use std::sync::{Arc, Mutex};</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- #[derive(Serialize)]</span><span class="diff-line diff-line--add">+ #[derive(Clone, Serialize)]</span><span class="diff-line">  struct User {</span><span class="diff-line">      id: u32,</span><span class="diff-line">      name: String,</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #[derive(Deserialize)]</span><span class="diff-line">  struct CreateUser {</span><span class="diff-line">      name: String,</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[derive(Clone)]</span><span class="diff-line diff-line--add">+ struct AppState {</span><span class="diff-line diff-line--add">+     users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line"> </span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  async fn main() {</span><span class="diff-line diff-line--add">+     let state = AppState {</span><span class="diff-line diff-line--add">+         users: Arc::new(Mutex::new(vec![</span><span class="diff-line diff-line--add">+             User {</span><span class="diff-line diff-line--add">+                 id: 1,</span><span class="diff-line diff-line--add">+                 name: "alice".to_string(),</span><span class="diff-line diff-line--add">+             },</span><span class="diff-line diff-line--add">+             User {</span><span class="diff-line diff-line--add">+                 id: 2,</span><span class="diff-line diff-line--add">+                 name: "bob".to_string(),</span><span class="diff-line diff-line--add">+             },</span><span class="diff-line diff-line--add">+         ])),</span><span class="diff-line diff-line--add">+     };</span><span class="diff-line diff-line--add">+</span><span class="diff-line">      let app = Router::new()</span><span class="diff-line">  ...</span><span class="diff-line">          .route("/search", get(search))</span><span class="diff-line diff-line--remove">-         .fallback(not_found);</span><span class="diff-line diff-line--add">+         .fallback(not_found)</span><span class="diff-line diff-line--add">+         .with_state(state);</span><span class="diff-line">  ...</span><span class="diff-line diff-line--remove">- async fn list_users() -&gt; Json&lt;Vec&lt;User&gt;&gt; {</span><span class="diff-line diff-line--remove">-     Json(vec![</span><span class="diff-line diff-line--remove">-         User {</span><span class="diff-line diff-line--remove">-             id: 1,</span><span class="diff-line diff-line--remove">-             name: "alice".to_string(),</span><span class="diff-line diff-line--remove">-         },</span><span class="diff-line diff-line--remove">-         User {</span><span class="diff-line diff-line--remove">-             id: 2,</span><span class="diff-line diff-line--remove">-             name: "bob".to_string(),</span><span class="diff-line diff-line--remove">-         },</span><span class="diff-line diff-line--remove">-     ])</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Json&lt;Vec&lt;User&gt;&gt; {</span><span class="diff-line diff-line--add">+     let users = state.users.lock().unwrap();</span><span class="diff-line diff-line--add">+     Json(users.clone())</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <p>変更点は次の 4 つです。</p>
+
+          <ul>
+            <li><code>AppState</code> 構造体: 共有状態をまとめる構造体です。ユーザーの一覧 <code>Vec&lt;User&gt;</code> を <code>Mutex</code> で包んで複数のリクエストから安全に読み書きできるようにし、さらに <code>Arc</code> で包んで複数の場所から同じデータを指せるようにしています。<code>#[derive(Clone)]</code> を付けても、複製されるのは <code>Arc</code>（参照）だけで、中の <code>Vec</code> は 1 つのままです。</li>
+            <li><code>main</code>: 03 の <code>list_users</code> が返していた 2 件を初期データにして <code>AppState</code> を作り、<code>.with_state(state)</code> で <code>Router</code> に渡します。</li>
+            <li><code>list_users</code>: 引数 <code>State(state): State&lt;AppState&gt;</code> で共有状態を受け取ります。<code>lock()</code> でロックを取り、一覧を <code>clone()</code> して <code>Json</code> で返します。</li>
+            <li><code>User</code>: <code>users.clone()</code> で <code>Vec&lt;User&gt;</code> を複製するために、<code>#[derive(Clone)]</code> を追加します。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">tokio の Mutex ではなく std の Mutex を使う理由</p>
+              <p>ここで使っている <code>Mutex</code> は標準ライブラリの <code>std::sync::Mutex</code> です。このレッスンのハンドラは、ロックを持っている間（<code>Vec</code> を読み書きする間）に <code>.await</code> を挟みません。そのため非同期用の <code>tokio::sync::Mutex</code> は不要で、軽量でロックの取得も同期的に終わる <code>std::sync::Mutex</code> を選んでいます。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Serialize)]
+struct User {
+    id: u32,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,
+}
+
+#[tokio::main]
+async fn main() {
+    let state = AppState {
+        users: Arc::new(Mutex::new(vec![
+            User {
+                id: 1,
+                name: "alice".to_string(),
+            },
+            User {
+                id: 2,
+                name: "bob".to_string(),
+            },
+        ])),
+    };
+
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users).post(create_user))
+        .route("/users/{id}", get(get_user).put(update_user))
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found)
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn root() -&gt; &amp;'static str {
+    "Hello, Axum!"
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    let users = state.users.lock().unwrap();
+    Json(users.clone())
+}
+
+async fn create_user(Json(payload): Json&lt;CreateUser&gt;) -&gt; (StatusCode, Json&lt;User&gt;) {
+    let user = User {
+        id: 1,
+        name: payload.name,
+    };
+    (StatusCode::CREATED, Json(user))
+}
+
+async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; Json&lt;User&gt; {
+    Json(User {
+        id,
+        name: "alice".to_string(),
+    })
+}
+
+async fn update_user(Path(id): Path&lt;u32&gt;, Json(payload): Json&lt;CreateUser&gt;) -&gt; Json&lt;User&gt; {
+    Json(User {
+        id,
+        name: payload.name,
+    })
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+            </div>
+          </details>
+
+          <p>保存したら <code>cargo build</code> でビルドし、<code>cargo run</code> でサーバーを起動します。ビルド済みなので、<code>cargo run</code> では <code>Compiling</code> の行は表示されません。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling state-middleware v0.1.0 (/path/to/04-state-middleware)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.64s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s</span><span class="terminal__line">     Running `target/debug/state-middleware`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>警告は出ません。2 つ目のターミナルから <code>/users</code> にリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 47</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:08:52 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]</span></pre>
+          </div>
+
+          <p>結果は 03 と同じ 2 件ですが、今回はハンドラの中で作った値ではなく、<code>main</code> で作って <code>State</code> に入れた値を返しています。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/users</code> が 2 件のユーザーを JSON で返せば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">共有状態を更新する（POST /users、GET /users/{id}、PUT /users/{id}）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            残りのユーザー関連のハンドラも、共有状態を使うように書き換えます。
+            <code>POST /users</code> は一覧に追加し、<code>GET /users/{id}</code> と <code>PUT /users/{id}</code> は一覧から <code>id</code> で探します。見つからなければ 404 を返します。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- async fn create_user(Json(payload): Json&lt;CreateUser&gt;) -&gt; (StatusCode, Json&lt;User&gt;) {</span><span class="diff-line diff-line--add">+ async fn create_user(</span><span class="diff-line diff-line--add">+     State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--add">+     Json(payload): Json&lt;CreateUser&gt;,</span><span class="diff-line diff-line--add">+ ) -&gt; (StatusCode, Json&lt;User&gt;) {</span><span class="diff-line diff-line--add">+     let mut users = state.users.lock().unwrap();</span><span class="diff-line">      let user = User {</span><span class="diff-line diff-line--remove">-         id: 1,</span><span class="diff-line diff-line--add">+         id: users.len() as u32 + 1,</span><span class="diff-line">          name: payload.name,</span><span class="diff-line">      };</span><span class="diff-line diff-line--add">+     users.push(user.clone());</span><span class="diff-line">      (StatusCode::CREATED, Json(user))</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; Json&lt;User&gt; {</span><span class="diff-line diff-line--remove">-     Json(User {</span><span class="diff-line diff-line--remove">-         id,</span><span class="diff-line diff-line--remove">-         name: "alice".to_string(),</span><span class="diff-line diff-line--remove">-     })</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ async fn get_user(</span><span class="diff-line diff-line--add">+     State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--add">+     Path(id): Path&lt;u32&gt;,</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {</span><span class="diff-line diff-line--add">+     let users = state.users.lock().unwrap();</span><span class="diff-line diff-line--add">+     users</span><span class="diff-line diff-line--add">+         .iter()</span><span class="diff-line diff-line--add">+         .find(|user| user.id == id)</span><span class="diff-line diff-line--add">+         .cloned()</span><span class="diff-line diff-line--add">+         .map(Json)</span><span class="diff-line diff-line--add">+         .ok_or(StatusCode::NOT_FOUND)</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- async fn update_user(Path(id): Path&lt;u32&gt;, Json(payload): Json&lt;CreateUser&gt;) -&gt; Json&lt;User&gt; {</span><span class="diff-line diff-line--remove">-     Json(User {</span><span class="diff-line diff-line--remove">-         id,</span><span class="diff-line diff-line--remove">-         name: payload.name,</span><span class="diff-line diff-line--remove">-     })</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ async fn update_user(</span><span class="diff-line diff-line--add">+     State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--add">+     Path(id): Path&lt;u32&gt;,</span><span class="diff-line diff-line--add">+     Json(payload): Json&lt;CreateUser&gt;,</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {</span><span class="diff-line diff-line--add">+     let mut users = state.users.lock().unwrap();</span><span class="diff-line diff-line--add">+     let user = users</span><span class="diff-line diff-line--add">+         .iter_mut()</span><span class="diff-line diff-line--add">+         .find(|user| user.id == id)</span><span class="diff-line diff-line--add">+         .ok_or(StatusCode::NOT_FOUND)?;</span><span class="diff-line diff-line--add">+     user.name = payload.name;</span><span class="diff-line diff-line--add">+     Ok(Json(user.clone()))</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <p>変更点は次の 3 つです。</p>
+
+          <ul>
+            <li><code>create_user</code>: <code>State</code> と <code>Json</code> を受け取ります。<code>Json</code> は 03 で確かめたとおり引数の最後に置きます。<code>id</code> は「今の件数 + 1」で決め、<code>push</code> で一覧に追加します。</li>
+            <li><code>get_user</code>: 戻り値を <code>Result&lt;Json&lt;User&gt;, StatusCode&gt;</code> にします。見つかれば <code>Ok(Json(...))</code>、見つからなければ <code>Err(StatusCode::NOT_FOUND)</code> になり、axum はどちらもレスポンスに変換します。</li>
+            <li><code>update_user</code>: <code>iter_mut()</code> で書き換え可能な参照を探し、見つからなければ <code>?</code> で 404 を返して終わります。見つかったら名前を書き換え、<code>clone()</code> した値を返します。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>id</code> の決め方は簡易版</p>
+              <p>「今の件数 + 1」で <code>id</code> を決める方法は、削除がない前提でしか重複を防げません。このレッスンでは削除（DELETE）を扱わないのでこのままにしますが、本来は連番のカウンターや UUID を使います。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Serialize)]
+struct User {
+    id: u32,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,
+}
+
+#[tokio::main]
+async fn main() {
+    let state = AppState {
+        users: Arc::new(Mutex::new(vec![
+            User {
+                id: 1,
+                name: "alice".to_string(),
+            },
+            User {
+                id: 2,
+                name: "bob".to_string(),
+            },
+        ])),
+    };
+
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users).post(create_user))
+        .route("/users/{id}", get(get_user).put(update_user))
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found)
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn root() -&gt; &amp;'static str {
+    "Hello, Axum!"
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    let users = state.users.lock().unwrap();
+    Json(users.clone())
+}
+
+async fn create_user(
+    State(state): State&lt;AppState&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; (StatusCode, Json&lt;User&gt;) {
+    let mut users = state.users.lock().unwrap();
+    let user = User {
+        id: users.len() as u32 + 1,
+        name: payload.name,
+    };
+    users.push(user.clone());
+    (StatusCode::CREATED, Json(user))
+}
+
+async fn get_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;u32&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let users = state.users.lock().unwrap();
+    users
+        .iter()
+        .find(|user| user.id == id)
+        .cloned()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn update_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;u32&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let mut users = state.users.lock().unwrap();
+    let user = users
+        .iter_mut()
+        .find(|user| user.id == id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    user.name = payload.name;
+    Ok(Json(user.clone()))
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+            </div>
+          </details>
+
+          <p><code>cargo build</code> でビルドしてから、<code>cargo run</code> でサーバーを起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling state-middleware v0.1.0 (/path/to/04-state-middleware)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s</span><span class="terminal__line">     Running `target/debug/state-middleware`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>2 つ目のターミナルから、ユーザーを追加して一覧を取り直し、続けて 1 件の取得と更新を試します。存在しない <code>id</code>（<code>999</code>）も送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -d '{"name":"carol"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":3,"name":"carol"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 71</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"},{"id":2,"name":"bob"},{"id":3,"name":"carol"}]</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/1</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/999</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:05 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/1 -H 'content-type: application/json' -d '{"name":"alice2"}'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 24</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice2"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/999 -H 'content-type: application/json' -d '{"name":"x"}'</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:05 GMT</span><span class="terminal__line"></span></pre>
+          </div>
+
+          <p>
+            <code>POST</code> で追加した <code>carol</code> が、次の <code>GET /users</code> の結果に含まれています。リクエストをまたいでデータが保持されるようになりました。
+            存在しない <code>id</code> では、本文なし（<code>content-length: 0</code>）の 404 が返ります。
+          </p>
+
+          <p>次に、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めて、もう一度 <code>cargo run</code> で起動してください。起動し直したら、一覧を取得します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 47</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:07 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]</span></pre>
+          </div>
+
+          <p>追加した <code>carol</code> と更新した <code>alice2</code> は消え、初期データの 2 件に戻りました。<code>State</code> の中身はメモリー上にあるだけなので、サーバーを止めると失われます。データを永続化するデータベースへの接続は、05 の項目で扱います。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>POST</code> したユーザーが <code>GET /users</code> に現れ、存在しない <code>id</code> が 404 になり、再起動すると初期データに戻れば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">Extension で設定値を渡す（GET /）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            共有したい値を渡すもう 1 つの方法が <code>Extension</code> です。<code>Router</code> に <code>.layer(Extension(値))</code> で値を追加し、ハンドラでは <code>Extension</code> extractor で受け取ります。
+            ここでは、アプリ名を持つ設定 <code>AppConfig</code> を渡し、<code>GET /</code> がその名前を返すようにします。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use axum::{</span><span class="diff-line diff-line--remove">-     Json, Router,</span><span class="diff-line diff-line--add">+     Extension, Json, Router,</span><span class="diff-line">      extract::{Path, Query, State},</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line">      routing::get,</span><span class="diff-line">  };</span><span class="diff-line">  ...</span><span class="diff-line">  #[derive(Clone)]</span><span class="diff-line">  struct AppState {</span><span class="diff-line">      users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[derive(Clone)]</span><span class="diff-line diff-line--add">+ struct AppConfig {</span><span class="diff-line diff-line--add">+     app_name: String,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line">  ...</span><span class="diff-line">          .fallback(not_found)</span><span class="diff-line diff-line--add">+         .layer(Extension(AppConfig {</span><span class="diff-line diff-line--add">+             app_name: "Handson Axum".to_string(),</span><span class="diff-line diff-line--add">+         }))</span><span class="diff-line">          .with_state(state);</span><span class="diff-line">  ...</span><span class="diff-line diff-line--remove">- async fn root() -&gt; &amp;'static str {</span><span class="diff-line diff-line--remove">-     "Hello, Axum!"</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {</span><span class="diff-line diff-line--add">+     format!("Hello from {}", config.app_name)</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Extension, Json, Router,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Serialize)]
+struct User {
+    id: u32,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,
+}
+
+#[derive(Clone)]
+struct AppConfig {
+    app_name: String,
+}
+
+#[tokio::main]
+async fn main() {
+    let state = AppState {
+        users: Arc::new(Mutex::new(vec![
+            User {
+                id: 1,
+                name: "alice".to_string(),
+            },
+            User {
+                id: 2,
+                name: "bob".to_string(),
+            },
+        ])),
+    };
+
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users).post(create_user))
+        .route("/users/{id}", get(get_user).put(update_user))
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found)
+        .layer(Extension(AppConfig {
+            app_name: "Handson Axum".to_string(),
+        }))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {
+    format!("Hello from {}", config.app_name)
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    let users = state.users.lock().unwrap();
+    Json(users.clone())
+}
+
+async fn create_user(
+    State(state): State&lt;AppState&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; (StatusCode, Json&lt;User&gt;) {
+    let mut users = state.users.lock().unwrap();
+    let user = User {
+        id: users.len() as u32 + 1,
+        name: payload.name,
+    };
+    users.push(user.clone());
+    (StatusCode::CREATED, Json(user))
+}
+
+async fn get_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;u32&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let users = state.users.lock().unwrap();
+    users
+        .iter()
+        .find(|user| user.id == id)
+        .cloned()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn update_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;u32&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let mut users = state.users.lock().unwrap();
+    let user = users
+        .iter_mut()
+        .find(|user| user.id == id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    user.name = payload.name;
+    Ok(Json(user.clone()))
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+            </div>
+          </details>
+
+          <p><code>cargo build</code> でビルドしてから、<code>cargo run</code> でサーバーを起動し、2 つ目のターミナルから <code>/</code> にリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling state-middleware v0.1.0 (/path/to/04-state-middleware)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.06s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s</span><span class="terminal__line">     Running `target/debug/state-middleware`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:08 GMT</span><span class="terminal__line"></span><span class="terminal__line">Hello from Handson Axum</span></pre>
+          </div>
+
+          <p>
+            <code>Extension</code> で渡したアプリ名が返りました。
+            ここで、<code>Extension</code> の layer を付け忘れた場合の挙動を確かめます。サーバーを止めてから、<code>main</code> の <code>.layer(Extension(...))</code> の 3 行を一時的に削除してください。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">          .fallback(not_found)</span><span class="diff-line diff-line--remove">-         .layer(Extension(AppConfig {</span><span class="diff-line diff-line--remove">-             app_name: "Handson Axum".to_string(),</span><span class="diff-line diff-line--remove">-         }))</span><span class="diff-line">          .with_state(state);</span></pre>
+          </div>
+
+          <p>この状態でビルドし、サーバーを起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling state-middleware v0.1.0 (/path/to/04-state-middleware)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.58s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s</span><span class="terminal__line">     Running `target/debug/state-middleware`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>ハンドラ <code>root</code> は <code>Extension&lt;AppConfig&gt;</code> を必要としているのに、エラーや警告を出さずにビルドが通りました。2 つ目のターミナルから <code>/</code> にリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/</span><span class="terminal__line">HTTP/1.1 500 Internal Server Error</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 142</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:10 GMT</span><span class="terminal__line"></span><span class="terminal__line">Missing request extension: Extension of type `state_middleware::AppConfig` was not found. Perhaps you forgot to add it? See `axum::Extension`.</span></pre>
+          </div>
+
+          <p>
+            リクエストを送った時点で、<code>500 Internal Server Error</code> になりました。
+            <code>Extension</code> が追加されているかどうかは型では検出されず、リクエストを処理するときに初めて判定されます。付け忘れはコンパイルでは見つからず、そのルートを実際に呼んで初めて分かるということです。
+            <code>State</code> を付け忘れた場合とどう違うかは、ステップ 7 で確かめます。
+          </p>
+
+          <p>確認できたらサーバーを止め、削除した <code>.layer(Extension(...))</code> の 3 行を元に戻してください。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/</code> が <code>Hello from Handson Axum</code> を返し、layer を削除するとビルドは通るのに <code>/</code> が 500 になることを確認できれば OK です。削除した 3 行を元に戻し、サーバーを止めた状態で次に進みます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">リクエストログのミドルウェアを全ルートに掛ける</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ミドルウェアは、ハンドラの前後に共通の処理を差し込む仕組みです。
+            axum では <code>middleware::from_fn</code> を使うと、普通の <code>async fn</code> をミドルウェアにできます。
+            ここでは、全てのリクエストについてメソッド・URI・ステータス・処理時間を標準出力に出すミドルウェア <code>log_request</code> を作ります。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use axum::{</span><span class="diff-line">      Extension, Json, Router,</span><span class="diff-line diff-line--remove">-     extract::{Path, Query, State},</span><span class="diff-line diff-line--add">+     extract::{Path, Query, Request, State},</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line diff-line--add">+     middleware::{self, Next},</span><span class="diff-line diff-line--add">+     response::Response,</span><span class="diff-line">      routing::get,</span><span class="diff-line">  };</span><span class="diff-line">  use serde::{Deserialize, Serialize};</span><span class="diff-line">  use serde_json::json;</span><span class="diff-line">  use std::collections::HashMap;</span><span class="diff-line">  use std::sync::{Arc, Mutex};</span><span class="diff-line diff-line--add">+ use std::time::Instant;</span><span class="diff-line">  ...</span><span class="diff-line">          .layer(Extension(AppConfig {</span><span class="diff-line">              app_name: "Handson Axum".to_string(),</span><span class="diff-line">          }))</span><span class="diff-line diff-line--add">+         .layer(middleware::from_fn(log_request))</span><span class="diff-line">          .with_state(state);</span><span class="diff-line">  ...</span><span class="diff-line">      axum::serve(listener, app).await.unwrap();</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ async fn log_request(req: Request, next: Next) -&gt; Response {</span><span class="diff-line diff-line--add">+     let method = req.method().clone();</span><span class="diff-line diff-line--add">+     let uri = req.uri().clone();</span><span class="diff-line diff-line--add">+     let start = Instant::now();</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let response = next.run(req).await;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let elapsed = start.elapsed();</span><span class="diff-line diff-line--add">+     println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());</span><span class="diff-line diff-line--add">+     response</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {</span></pre>
+          </div>
+
+          <p>変更点は次の 2 つです。<code>log_request</code> は <code>main</code> の直後、<code>root</code> の直前に追加してください。</p>
+
+          <ul>
+            <li><code>log_request</code>: リクエスト <code>Request</code> と、後続の処理を表す <code>Next</code> を受け取り、<code>Response</code> を返します。<code>next.run(req).await</code> の前に書いた処理がハンドラの前に、後に書いた処理がハンドラの後に実行されます。ここでは前でメソッド・URI・開始時刻を記録し、後でステータスと経過時間を出力しています。</li>
+            <li><code>.layer(middleware::from_fn(log_request))</code>: <code>Router</code> 全体にミドルウェアを掛けます。ハンドラ側を変更する必要はありません。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>next.run(req)</code> を忘れない</p>
+              <p>ミドルウェアの中で <code>next.run(req).await</code> を呼ばないと、後続のミドルウェアとハンドラは一切実行されません。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Extension, Json, Router,
+    extract::{Path, Query, Request, State},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::Response,
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+#[derive(Clone, Serialize)]
+struct User {
+    id: u32,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,
+}
+
+#[derive(Clone)]
+struct AppConfig {
+    app_name: String,
+}
+
+#[tokio::main]
+async fn main() {
+    let state = AppState {
+        users: Arc::new(Mutex::new(vec![
+            User {
+                id: 1,
+                name: "alice".to_string(),
+            },
+            User {
+                id: 2,
+                name: "bob".to_string(),
+            },
+        ])),
+    };
+
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users).post(create_user))
+        .route("/users/{id}", get(get_user).put(update_user))
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found)
+        .layer(Extension(AppConfig {
+            app_name: "Handson Axum".to_string(),
+        }))
+        .layer(middleware::from_fn(log_request))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn log_request(req: Request, next: Next) -&gt; Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = Instant::now();
+
+    let response = next.run(req).await;
+
+    let elapsed = start.elapsed();
+    println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());
+    response
+}
+
+async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {
+    format!("Hello from {}", config.app_name)
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    let users = state.users.lock().unwrap();
+    Json(users.clone())
+}
+
+async fn create_user(
+    State(state): State&lt;AppState&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; (StatusCode, Json&lt;User&gt;) {
+    let mut users = state.users.lock().unwrap();
+    let user = User {
+        id: users.len() as u32 + 1,
+        name: payload.name,
+    };
+    users.push(user.clone());
+    (StatusCode::CREATED, Json(user))
+}
+
+async fn get_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;u32&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let users = state.users.lock().unwrap();
+    users
+        .iter()
+        .find(|user| user.id == id)
+        .cloned()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn update_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;u32&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let mut users = state.users.lock().unwrap();
+    let user = users
+        .iter_mut()
+        .find(|user| user.id == id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    user.name = payload.name;
+    Ok(Json(user.clone()))
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+            </div>
+          </details>
+
+          <p><code>cargo build</code> でビルドしてから、<code>cargo run</code> でサーバーを起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling state-middleware v0.1.0 (/path/to/04-state-middleware)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.61s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s</span><span class="terminal__line">     Running `target/debug/state-middleware`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>2 つ目のターミナルから 3 つのリクエストを送ります。レスポンスはこれまでのステップと同じなので、ここでは 1 つ目のターミナルのログに注目します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:12 GMT</span><span class="terminal__line"></span><span class="terminal__line">Hello from Handson Axum</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 47</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:12 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/999</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:12 GMT</span><span class="terminal__line"></span></pre>
+          </div>
+
+          <p>サーバーを起動した 1 つ目のターミナルには、次のように 1 リクエストにつき 1 行のログが出ます。処理時間の値は環境や実行ごとに変わります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（サーバー側の出力）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line">listening on 127.0.0.1:3000</span><span class="terminal__line">GET / -&gt; 200 OK (71µs)</span><span class="terminal__line">GET /users -&gt; 200 OK (50.542µs)</span><span class="terminal__line">GET /users/999 -&gt; 404 Not Found (27.916µs)</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>リクエストごとに <code>GET /users -&gt; 200 OK (...)</code> の形式のログが 1 行ずつ出れば OK です。404 のリクエストにもログが出ていることを確認してください。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">一部のルートにだけ API キー認証を掛ける（route_layer と merge）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            次は、データを変更する <code>POST /users</code> と <code>PUT /users/{id}</code> にだけ、簡単な API キー認証を掛けます。
+            リクエストヘッダー <code>x-api-key</code> が <code>secret</code> でなければ 401 を返すミドルウェア <code>require_api_key</code> を作ります。
+            認証を掛けたいルートだけを別の <code>Router</code> に分け、<code>route_layer</code> で適用します。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use axum::{</span><span class="diff-line">      Extension, Json, Router,</span><span class="diff-line">      extract::{Path, Query, Request, State},</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line">      middleware::{self, Next},</span><span class="diff-line diff-line--remove">-     response::Response,</span><span class="diff-line diff-line--remove">-     routing::get,</span><span class="diff-line diff-line--add">+     response::{IntoResponse, Response},</span><span class="diff-line diff-line--add">+     routing::{get, post, put},</span><span class="diff-line">  };</span><span class="diff-line">  ...</span><span class="diff-line">          ])),</span><span class="diff-line">      };</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+     let protected_users = Router::new()</span><span class="diff-line diff-line--add">+         .route("/users", post(create_user))</span><span class="diff-line diff-line--add">+         .route("/users/{id}", put(update_user))</span><span class="diff-line diff-line--add">+         .route_layer(middleware::from_fn(require_api_key));</span><span class="diff-line diff-line--add">+</span><span class="diff-line">      let app = Router::new()</span><span class="diff-line">          .route("/", get(root))</span><span class="diff-line">          .route("/health", get(health))</span><span class="diff-line diff-line--remove">-         .route("/users", get(list_users).post(create_user))</span><span class="diff-line diff-line--remove">-         .route("/users/{id}", get(get_user).put(update_user))</span><span class="diff-line diff-line--add">+         .route("/users", get(list_users))</span><span class="diff-line diff-line--add">+         .route("/users/{id}", get(get_user))</span><span class="diff-line diff-line--add">+         .merge(protected_users)</span><span class="diff-line">          .route("/users/{user_id}/posts/{post_id}", get(get_user_post))</span><span class="diff-line">  ...</span><span class="diff-line">      response</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ async fn require_api_key(req: Request, next: Next) -&gt; Response {</span><span class="diff-line diff-line--add">+     let is_valid = req</span><span class="diff-line diff-line--add">+         .headers()</span><span class="diff-line diff-line--add">+         .get("x-api-key")</span><span class="diff-line diff-line--add">+         .and_then(|value| value.to_str().ok())</span><span class="diff-line diff-line--add">+         == Some("secret");</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     if !is_valid {</span><span class="diff-line diff-line--add">+         return (StatusCode::UNAUTHORIZED, "invalid or missing x-api-key").into_response();</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     next.run(req).await</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {</span></pre>
+          </div>
+
+          <p>変更点は次の 3 つです。<code>require_api_key</code> は <code>log_request</code> の直後に追加してください。</p>
+
+          <ul>
+            <li><code>require_api_key</code>: <code>x-api-key</code> ヘッダーの値を <code>to_str().ok()</code> で <code>Option&lt;&amp;str&gt;</code> にして、<code>Some("secret")</code> と比べます。ヘッダーがない場合や、文字列として読めない値の場合も「無効」になります。無効なら <code>next.run</code> を呼ばずに 401 を返すので、ハンドラは実行されません。<code>(StatusCode, &amp;str)</code> を <code>Response</code> へ変換するため、<code>IntoResponse</code> を読み込んでいます。</li>
+            <li><code>protected_users</code>: 認証を掛けたい <code>POST /users</code> と <code>PUT /users/{id}</code> だけを持つ <code>Router</code> です。<code>route_layer</code> で <code>require_api_key</code> を掛けます。</li>
+            <li><code>.merge(protected_users)</code>: メインの <code>Router</code> に合流させます。<code>/users</code> の <code>get(...)</code> と <code>post(...)</code> のように、同じパスのメソッドを別々の <code>Router</code> に書いても、<code>merge</code> すると 1 つのパスのルートとしてまとめられます。</li>
+          </ul>
+
+          <p>これでこの項目の完成形です。変更後の <code>src/main.rs</code> の全体は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Extension, Json, Router,
+    extract::{Path, Query, Request, State},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post, put},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+#[derive(Clone, Serialize)]
+struct User {
+    id: u32,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,
+}
+
+#[derive(Clone)]
+struct AppConfig {
+    app_name: String,
+}
+
+#[tokio::main]
+async fn main() {
+    let state = AppState {
+        users: Arc::new(Mutex::new(vec![
+            User {
+                id: 1,
+                name: "alice".to_string(),
+            },
+            User {
+                id: 2,
+                name: "bob".to_string(),
+            },
+        ])),
+    };
+
+    let protected_users = Router::new()
+        .route("/users", post(create_user))
+        .route("/users/{id}", put(update_user))
+        .route_layer(middleware::from_fn(require_api_key));
+
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users))
+        .route("/users/{id}", get(get_user))
+        .merge(protected_users)
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found)
+        .layer(Extension(AppConfig {
+            app_name: "Handson Axum".to_string(),
+        }))
+        .layer(middleware::from_fn(log_request))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn log_request(req: Request, next: Next) -&gt; Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = Instant::now();
+
+    let response = next.run(req).await;
+
+    let elapsed = start.elapsed();
+    println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());
+    response
+}
+
+async fn require_api_key(req: Request, next: Next) -&gt; Response {
+    let is_valid = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        == Some("secret");
+
+    if !is_valid {
+        return (StatusCode::UNAUTHORIZED, "invalid or missing x-api-key").into_response();
+    }
+
+    next.run(req).await
+}
+
+async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {
+    format!("Hello from {}", config.app_name)
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    let users = state.users.lock().unwrap();
+    Json(users.clone())
+}
+
+async fn create_user(
+    State(state): State&lt;AppState&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; (StatusCode, Json&lt;User&gt;) {
+    let mut users = state.users.lock().unwrap();
+    let user = User {
+        id: users.len() as u32 + 1,
+        name: payload.name,
+    };
+    users.push(user.clone());
+    (StatusCode::CREATED, Json(user))
+}
+
+async fn get_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;u32&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let users = state.users.lock().unwrap();
+    users
+        .iter()
+        .find(|user| user.id == id)
+        .cloned()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn update_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;u32&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let mut users = state.users.lock().unwrap();
+    let user = users
+        .iter_mut()
+        .find(|user| user.id == id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    user.name = payload.name;
+    Ok(Json(user.clone()))
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+
+          <p><code>cargo build</code> でビルドしてから、<code>cargo run</code> でサーバーを起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling state-middleware v0.1.0 (/path/to/04-state-middleware)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.65s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s</span><span class="terminal__line">     Running `target/debug/state-middleware`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>2 つ目のターミナルから、<code>POST /users</code> をヘッダーなし・誤ったキー・正しいキーの順に送り、続けて <code>GET</code> と <code>PUT</code> を試します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -d '{"name":"dave"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 28</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:14 GMT</span><span class="terminal__line"></span><span class="terminal__line">invalid or missing x-api-key</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: wrong' -d '{"name":"dave"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 28</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:14 GMT</span><span class="terminal__line"></span><span class="terminal__line">invalid or missing x-api-key</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"dave"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 22</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:14 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":3,"name":"dave"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 70</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:14 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"},{"id":2,"name":"bob"},{"id":3,"name":"dave"}]</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/1 -H 'content-type: application/json' -d '{"name":"x"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 28</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:14 GMT</span><span class="terminal__line"></span><span class="terminal__line">invalid or missing x-api-key</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/1 -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"alice3"}'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 24</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:14 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice3"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/1</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 24</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:14 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice3"}</span></pre>
+          </div>
+
+          <p>
+            <code>POST</code> と <code>PUT</code> は、正しいキーを付けたときだけ処理され、それ以外は 401 になりました。
+            一方、<code>GET /users</code> と <code>GET /users/1</code> はヘッダーなしでも 200 のままです。<code>route_layer</code> を掛けたのは <code>protected_users</code> 側の <code>POST</code> と <code>PUT</code> だけで、<code>GET</code> は別の <code>Router</code> に書いたためです。
+          </p>
+
+          <p>さらに、定義していないメソッド（<code>/users</code> への <code>DELETE</code>）と、定義していないパス（<code>/nope</code>）も送ってみます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X DELETE http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">allow: GET,HEAD,POST</span><span class="terminal__line">content-length: 28</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:14 GMT</span><span class="terminal__line"></span><span class="terminal__line">invalid or missing x-api-key</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/nope</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 9</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:09:14 GMT</span><span class="terminal__line"></span><span class="terminal__line">Not Found</span></pre>
+          </div>
+
+          <p>1 つ目のターミナルのログは次のとおりです。<code>log_request</code> は <code>Router</code> 全体に掛けているので、401 で止められたリクエストや 404 のリクエストにもログが出ています。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（サーバー側の出力）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line">listening on 127.0.0.1:3000</span><span class="terminal__line">POST /users -&gt; 401 Unauthorized (108.708µs)</span><span class="terminal__line">POST /users -&gt; 401 Unauthorized (39.916µs)</span><span class="terminal__line">POST /users -&gt; 201 Created (104.375µs)</span><span class="terminal__line">GET /users -&gt; 200 OK (28.875µs)</span><span class="terminal__line">PUT /users/1 -&gt; 401 Unauthorized (26.333µs)</span><span class="terminal__line">PUT /users/1 -&gt; 200 OK (66.625µs)</span><span class="terminal__line">GET /users/1 -&gt; 200 OK (43µs)</span><span class="terminal__line">DELETE /users -&gt; 401 Unauthorized (18.458µs)</span><span class="terminal__line">GET /nope -&gt; 404 Not Found (16.167µs)</span></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>route_layer</code> が掛かる範囲</p>
+              <p>上の 2 つのリクエストの結果から、<code>route_layer</code> で掛けたミドルウェアの範囲が分かります。</p>
+              <ul>
+                <li>パスが一致しない場合（<code>/nope</code>）: <code>require_api_key</code> は掛からず、<code>fallback</code> の 404 がそのまま返ります。</li>
+                <li>パスは一致するがメソッドが定義されていない場合（<code>/users</code> への <code>DELETE</code>）: 本来は 405 Method Not Allowed になる状況です。しかし <code>require_api_key</code> を通り、401 が返りました。<code>allow: GET,HEAD,POST</code> ヘッダーが付いているとおり、リクエストは 405 応答の処理に回されています。ただし、その 405 応答の処理を <code>require_api_key</code> が包んでいるので、先に 401 が返ります。</li>
+              </ul>
+              <p>Router の <code>route_layer</code> は、その Router に登録済みの各パスの MethodRouter に掛かります。対象は登録したメソッド（ここでは <code>POST</code> と <code>PUT</code>）と、そのパスでメソッドが一致しないときの 405 応答です。<code>merge</code> で <code>/users</code> を合流すると、405 応答には protected 側（認証付き）のものが使われます。そのため <code>DELETE /users</code> は 401 になります。<code>allow</code> ヘッダーは 405 応答を作った後に付け足されるので、401 にも付きます。</p>
+              <p>パスが一致しない場合は Router の <code>fallback</code> が処理するので、<code>route_layer</code> は掛からず 404 のままです。なお、<code>x-api-key: secret</code> を付けて <code>DELETE /users</code> を送ると、認証を通過して本来の 405（<code>allow: GET,HEAD,POST</code>）が返ります。この 405 → 401 の挙動はドキュメントに明記されておらず、<code>merge</code> の順序に依存する実装上の挙動です。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>POST</code> と <code>PUT</code> が <code>x-api-key: secret</code> のときだけ成功し、<code>GET</code> はヘッダーなしでも 200 を返せば OK です。<code>DELETE /users</code> が 401、<code>/nope</code> が 404 になることも確認してください。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">with_state を書き忘れてコンパイルエラーを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ステップ 4 では、<code>Extension</code> を付け忘れてもビルドは通り、実行時エラー（500）になることを確かめました。
+            では、<code>State</code> を渡す <code>.with_state(state)</code> を書き忘れるとどうなるでしょうか。サーバーを止めた状態で、<code>main</code> の <code>.with_state(state)</code> の行を削除し、1 つ上の行の末尾に <code>;</code> を付けてください。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">          .layer(Extension(AppConfig {</span><span class="diff-line">              app_name: "Handson Axum".to_string(),</span><span class="diff-line">          }))</span><span class="diff-line diff-line--remove">-         .layer(middleware::from_fn(log_request))</span><span class="diff-line diff-line--remove">-         .with_state(state);</span><span class="diff-line diff-line--add">+         .layer(middleware::from_fn(log_request));</span></pre>
+          </div>
+
+          <p>この状態で <code>cargo build</code> を実行します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling state-middleware v0.1.0 (/path/to/04-state-middleware)</span><span class="terminal__line">error[E0277]: the trait bound `for&lt;'a&gt; Router&lt;AppState&gt;: tower_service::Service&lt;IncomingStream&lt;'a, tokio::net::TcpListener&gt;&gt;` is not satisfied</span><span class="terminal__line">   --&gt; src/main.rs:74:27</span><span class="terminal__line">    |</span><span class="terminal__line"> 74 |     axum::serve(listener, app).await.unwrap();</span><span class="terminal__line">    |     -----------           ^^^ the trait `for&lt;'a&gt; tower_service::Service&lt;IncomingStream&lt;'a, tokio::net::TcpListener&gt;&gt;` is not implemented for `Router&lt;AppState&gt;`</span><span class="terminal__line">    |     |</span><span class="terminal__line">    |     required by a bound introduced by this call</span><span class="terminal__line">    |</span><span class="terminal__line">help: `Router` implements trait `tower_service::Service&lt;Request&gt;`</span><span class="terminal__line">   --&gt; ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/routing/mod.rs:549:5</span><span class="terminal__line">    |</span><span class="terminal__line">549 | /     impl&lt;L&gt; Service&lt;serve::IncomingStream&lt;'_, L&gt;&gt; for Router&lt;()&gt;</span><span class="terminal__line">550 | |     where</span><span class="terminal__line">551 | |         L: serve::Listener,</span><span class="terminal__line">    | |___________________________^ `tower_service::Service&lt;IncomingStream&lt;'_, L&gt;&gt;`</span><span class="terminal__line">...</span><span class="terminal__line">569 | / impl&lt;B&gt; Service&lt;Request&lt;B&gt;&gt; for Router&lt;()&gt;</span><span class="terminal__line">570 | | where</span><span class="terminal__line">571 | |     B: HttpBody&lt;Data = bytes::Bytes&gt; + Send + 'static,</span><span class="terminal__line">572 | |     B::Error: Into&lt;axum_core::BoxError&gt;,</span><span class="terminal__line">    | |________________________________________^ `tower_service::Service&lt;axum::http::Request&lt;B&gt;&gt;`</span><span class="terminal__line">note: required by a bound in `serve`</span><span class="terminal__line">   --&gt; ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/serve/mod.rs:100:8</span><span class="terminal__line">    |</span><span class="terminal__line"> 97 | pub fn serve&lt;L, M, S&gt;(listener: L, make_service: M) -&gt; Serve&lt;L, M, S&gt;</span><span class="terminal__line">    |        ----- required by a bound in this function</span><span class="terminal__line">...</span><span class="terminal__line">100 |     M: for&lt;'a&gt; Service&lt;IncomingStream&lt;'a, L&gt;, Error = Infallible, Response = S&gt;,</span><span class="terminal__line">    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `serve`</span><span class="terminal__line"></span><span class="terminal__line">error[E0277]: `Serve&lt;tokio::net::TcpListener, Router&lt;AppState&gt;, _&gt;` is not a future</span><span class="terminal__line">   --&gt; src/main.rs:74:32</span><span class="terminal__line">    |</span><span class="terminal__line"> 74 |     axum::serve(listener, app).await.unwrap();</span><span class="terminal__line">    |     -------------------------- ^^^^^ `Serve&lt;tokio::net::TcpListener, Router&lt;AppState&gt;, _&gt;` is not a future</span><span class="terminal__line">    |     |</span><span class="terminal__line">    |     this call returns `Serve&lt;tokio::net::TcpListener, Router&lt;AppState&gt;, _&gt;`</span><span class="terminal__line">    |</span><span class="terminal__line">    = help: the trait `IntoFuture` is not implemented for `Serve&lt;tokio::net::TcpListener, Router&lt;AppState&gt;, _&gt;`</span><span class="terminal__line">    = note: Serve&lt;tokio::net::TcpListener, Router&lt;AppState&gt;, _&gt; must be a future or must implement `IntoFuture` to be awaited</span><span class="terminal__line">help: the trait `IntoFuture` is conditionally implemented for `Serve&lt;L, M, S&gt;`</span><span class="terminal__line">   --&gt; ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/serve/mod.rs:218:1</span><span class="terminal__line">    |</span><span class="terminal__line">218 | / impl&lt;L, M, S&gt; IntoFuture for Serve&lt;L, M, S&gt;</span><span class="terminal__line">219 | | where</span><span class="terminal__line">220 | |     L: Listener,</span><span class="terminal__line">221 | |     L::Addr: Debug,</span><span class="terminal__line">222 | |     M: for&lt;'a&gt; Service&lt;IncomingStream&lt;'a, L&gt;, Error = Infallible, Response = S&gt; + Send + 'static,</span><span class="terminal__line">    | |        ------------------------------------------------------------------------</span><span class="terminal__line">    | |        |                                      |                   |</span><span class="terminal__line">    | |        |                                      |                   unsatisfied requirement introduced here: `for&lt;'a&gt; &lt;Router&lt;AppState&gt; as tower_service::Service&lt;IncomingStream&lt;'a, tokio::net::TcpListener&gt;&gt;&gt;::Response == _`</span><span class="terminal__line">    | |        |                                      unsatisfied requirement introduced here: `for&lt;'a&gt; &lt;Router&lt;AppState&gt; as tower_service::Service&lt;IncomingStream&lt;'a, tokio::net::TcpListener&gt;&gt;&gt;::Error == Infallible`</span><span class="terminal__line">    | |        unsatisfied requirement introduced here: `for&lt;'a&gt; Router&lt;AppState&gt;: tower_service::Service&lt;IncomingStream&lt;'a, tokio::net::TcpListener&gt;&gt;`</span><span class="terminal__line">223 | |     for&lt;'a&gt; &lt;M as Service&lt;IncomingStream&lt;'a, L&gt;&gt;&gt;::Future: Send,</span><span class="terminal__line">    | |                                                            ---- unsatisfied requirement introduced here: `for&lt;'a&gt; &lt;Router&lt;AppState&gt; as tower_service::Service&lt;IncomingStream&lt;'a, tokio::net::TcpListener&gt;&gt;&gt;::Future: Send`</span><span class="terminal__line">224 | |     S: Service&lt;Request, Response = Response, Error = Infallible&gt; + Clone + Send + 'static,</span><span class="terminal__line">225 | |     S::Future: Send,</span><span class="terminal__line">    | |____________________^</span><span class="terminal__line">help: remove the `.await`</span><span class="terminal__line">    |</span><span class="terminal__line"> 74 -     axum::serve(listener, app).await.unwrap();</span><span class="terminal__line"> 74 +     axum::serve(listener, app).unwrap();</span><span class="terminal__line">    |</span><span class="terminal__line"></span><span class="terminal__line">For more information about this error, try `rustc --explain E0277`.</span><span class="terminal__line">error: could not compile `state-middleware` (bin "state-middleware") due to 2 previous errors</span></pre>
+          </div>
+
+          <p>
+            コンパイルエラーになり、実行ファイルが作られないため、サーバーも起動できません。
+            エラーの位置 <code>src/main.rs:74</code> は <code>axum::serve(listener, app)</code> の行です。
+            メッセージは「<code>Router&lt;AppState&gt;</code> が <code>tower_service::Service</code> を実装していない」という抽象的な内容で、<code>with_state</code> を呼んでいないとは直接書かれていません。
+            手掛かりは <code>help</code> の <code>impl ... for Router&lt;()&gt;</code> です。Router の場合、<code>axum::serve</code> に渡せるのは <code>Router&lt;()&gt;</code> だけです。
+            <code>State</code> を使うハンドラを登録した <code>Router</code> は、<code>with_state</code> で状態を渡すまで <code>Router&lt;AppState&gt;</code> のままです。
+            2 つ目のエラーも原因は同じで、<code>unsatisfied requirement introduced here</code> の行に同じ <code>Router&lt;AppState&gt;</code> が出ています。
+            末尾に <code>help: remove the `.await`</code> という提案もありますが、原因は <code>.await</code> ではありません。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Router&lt;AppState&gt;</code> のエラーが出たら <code>with_state</code> を疑う</p>
+              <p><code>axum::serve</code> の行に <code>Router&lt;...&gt;: Service&lt;...&gt;</code> is not satisfied と出たら、まず <code>.with_state(...)</code> の書き忘れを疑いましょう。<code>&lt;...&gt;</code> の中に出ている型（ここでは <code>AppState</code>）が、渡し忘れている状態の型です。</p>
+            </div>
+          </div>
+
+          <p>ステップ 4 の結果と並べると、<code>State</code> と <code>Extension</code> の違いがはっきりします。</p>
+
+          <table>
+            <thead>
+              <tr><th></th><th><code>State</code></th><th><code>Extension</code></th></tr>
+            </thead>
+            <tbody>
+              <tr><td>渡し方</td><td><code>.with_state(state)</code></td><td><code>.layer(Extension(値))</code></td></tr>
+              <tr><td>渡し忘れたとき</td><td>コンパイルエラー（このステップ）</td><td>ビルドは通り、実行時に 500（ステップ 4）</td></tr>
+              <tr><td>検出される理由</td><td>状態の型が <code>Router</code> の型パラメーター（<code>Router&lt;AppState&gt;</code>）に現れるため</td><td>値があるかどうかをリクエストの処理中に判定するため</td></tr>
+              <tr><td>向いている値</td><td><code>AppState</code> のように、アプリ全体で 1 つにまとめる状態</td><td><code>AppConfig</code> のように、後から付け足す値（型ごとに区別されるので複数追加できる）</td></tr>
+            </tbody>
+          </table>
+
+          <p>確認できたら、<code>.layer(middleware::from_fn(log_request))</code> の末尾の <code>;</code> を消し、<code>.with_state(state);</code> の行を元に戻してください。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>.with_state(state)</code> を削除すると <code>error[E0277]</code> のコンパイルエラーが 2 つ出て、元に戻したことを確認できれば OK です。このステップではサーバーを起動しません。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">ビルド・Lint・フォーマットを確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>仕上げに、ビルド・静的解析（Clippy）・書式の確認をまとめて行います。ステップ 7 で <code>src/main.rs</code> を書き換えて戻したので、<code>cargo build</code> ではもう一度 <code>state-middleware</code> がコンパイルされます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling state-middleware v0.1.0 (/path/to/04-state-middleware)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.41s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy --all-targets</span><span class="terminal__line">   ...</span><span class="terminal__line">    Checking axum v0.8.9</span><span class="terminal__line">    Checking state-middleware v0.1.0 (/path/to/04-state-middleware)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.77s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span></pre>
+          </div>
+
+          <p><code>cargo fmt --check</code> は何も表示せずに終わります。このレッスンのコードをそのまま書いていれば、書式の差分は出ません。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">手で折り返した行は rustfmt にまとめられる</p>
+              <p>たとえば <code>log_request</code> の <code>println!</code> の引数を手で複数行に折り返すと、<code>cargo fmt --check</code> が差分を表示します。rustfmt は、1 行に収まる長さの式を 1 行へまとめるためです。差分が出たら <code>cargo fmt</code> を実行して整形してください。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo build</code> と <code>cargo clippy --all-targets</code> がエラーや警告を出さずに終わり、<code>cargo fmt --check</code> が何も表示しなければ完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">03 のプロジェクトをコピーし、<code>Cargo.toml</code> の <code>name</code> を <code>state-middleware</code> に変えて起動できた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;</code> を持つ <code>AppState</code> を <code>with_state</code> で渡し、ハンドラで <code>State</code> として受け取った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>POST</code> で追加したユーザーが <code>GET</code> に現れ、再起動すると消えることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>Extension</code> で設定値を渡し、layer を付け忘れると実行時エラー（500）になることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>middleware::from_fn</code> で、全リクエストのログを出すミドルウェアを書いた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>route_layer</code> と <code>merge</code> で、<code>POST</code> と <code>PUT</code> にだけ API キー認証を掛けた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>route_layer</code> のミドルウェアが、別のパスには掛からず、同じパスの未対応メソッドには掛かることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>with_state</code> を書き忘れるとコンパイルエラーになることを確かめ、<code>Extension</code> との違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>cargo build</code>・<code>cargo clippy --all-targets</code>・<code>cargo fmt --check</code> が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Missing request extension</code> の 500 が返る</p>
+          <p>ハンドラが受け取る <code>Extension&lt;T&gt;</code> の <code>T</code> を、<code>.layer(Extension(...))</code> で追加しているか確認してください。ステップ 4 で見たとおり、付け忘れてもビルドは通ります。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>axum::serve</code> の行で <code>Router&lt;AppState&gt;</code> のエラーが出る</p>
+          <p><code>.with_state(state)</code> を書き忘れていないか確認してください。ステップ 7 と同じコンパイルエラーです。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">正しいキーを付けたのに 401 になる</p>
+          <p>ヘッダー名が <code>x-api-key</code>、値が <code>secret</code> になっているか確認してください。<code>curl</code> では <code>-H 'x-api-key: secret'</code> のように指定します。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">追加したユーザーが消えた</p>
+          <p><code>State</code> の中身はメモリー上にあるだけなので、サーバーを止めると初期データの 2 件に戻ります。ステップ 3 で確かめたとおりの動作です。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">コードを変えたのに結果が変わらない</p>
+          <p><code>cargo run</code> で起動したサーバーは、ソースコードを保存しても変更を反映しません。各ステップでコードを変えたら、前のサーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めてから <code>cargo run</code> し直してください。止め忘れたまま別のターミナルで起動すると、ポート 3000 が使用中のエラーになります（01 の「つまずきポイント」を参照）。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>State</code> と <code>with_state</code> で、全てのハンドラから読み書きできる共有状態を持たせました。
+        あわせて、<code>Extension</code> で設定値を渡す方法と、<code>middleware::from_fn</code> でミドルウェアを書く方法を学びました。
+        ミドルウェアは <code>layer</code> で全体に、<code>route_layer</code> と <code>merge</code> で一部のルートに掛けました。
+        <code>State</code> の渡し忘れはコンパイル時に、<code>Extension</code> の渡し忘れは実行時に検出されることも確かめました。
+        次の項目では、データベースに接続して CRUD 操作を実装します。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/04-state-middleware</code> の <code>axum/04-state-middleware/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../03-json/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">03: JSON リクエスト/レスポンス</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">05: DB 接続と CRUD</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
