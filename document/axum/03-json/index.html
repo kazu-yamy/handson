@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03: JSON リクエスト/レスポンス | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">03</li>
+        </ol>
+        <h1 class="lesson-title">JSON リクエスト/レスポンス</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 02 でルーティングとパスパラメーターを扱えるようになり、次に JSON で API を作りたい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法（構造体・<code>#[derive(...)]</code> 属性・パターンによる分解）、<code>cargo run</code> と <code>curl</code> の基本操作ができること、JSON の書き方を知っていること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../02-routing/index.html">02: ルーティングとハンドラ</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>serde</code> と <code>serde_json</code> を依存に追加し、axum の JSON サポートが既定で有効なことを確かめる</li>
+          <li><code>#[derive(Serialize)]</code> を付けた構造体を <code>Json&lt;T&gt;</code> で返し、<code>content-type: application/json</code> になることを確かめる</li>
+          <li><code>#[derive(Deserialize)]</code> を付けた構造体でリクエストの JSON を受け取り、<code>201 Created</code> を返す</li>
+          <li>不正なリクエストが 415・400・422 のどれで拒否されるかを確かめる</li>
+          <li><code>json!</code> マクロで、構造体を定義せずに JSON を返す</li>
+          <li><code>Path</code> と <code>Json</code> を併用し、<code>Json</code> を引数の最後に置く必要があることをコンパイルエラーで確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        02 で作ったサーバーのハンドラを、プレーンテキストではなく JSON を返すように書き換えます。
+        さらに、リクエストの本文で送られてきた JSON を Rust の構造体として受け取れるようにします。
+        Rust の値と JSON の変換には <code>serde</code> を使い、axum の <code>Json</code> を戻り値や引数（extractor）として使います。
+      </p>
+
+      <p>このレッスンの完成時には、サーバーが次のルートへ応答します。02 から変わったところを太字にしています。</p>
+
+      <table>
+        <thead>
+          <tr><th>メソッド</th><th>パス</th><th>返す内容</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/</code></td><td><code>Hello, Axum!</code></td></tr>
+          <tr><td>GET</td><td><code>/health</code></td><td><strong>JSON <code>{"status":"ok"}</code></strong></td></tr>
+          <tr><td>GET</td><td><code>/users</code></td><td><strong>ユーザー 2 件の JSON 配列</strong></td></tr>
+          <tr><td>POST</td><td><code>/users</code></td><td><strong>本文の JSON を受け取り、201 と作成したユーザーの JSON</strong></td></tr>
+          <tr><td>GET</td><td><code>/users/{id}</code></td><td><strong>ユーザー 1 件の JSON</strong>（<code>id</code> が数値でなければ 400）</td></tr>
+          <tr><td><strong>PUT</strong></td><td><strong><code>/users/{id}</code></strong></td><td><strong>本文の JSON を受け取り、更新後のユーザーの JSON</strong></td></tr>
+          <tr><td>GET</td><td><code>/users/{user_id}/posts/{post_id}</code></td><td><code>user {user_id} post {post_id}</code></td></tr>
+          <tr><td>GET</td><td><code>/search</code></td><td>受け取ったクエリパラメーターの一覧</td></tr>
+          <tr><td>（上記以外）</td><td>どれにもマッチしないパス</td><td>404 と本文 <code>Not Found</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Rust（rustc）1.98.1 / cargo 1.98.1（Rust edition 2024）で動作を確認しています。クレートのバージョンは axum 0.8.9 / tokio 1.53.1 / serde 1.0.229 / serde_json 1.0.151 です。
+            バージョンは執筆時点（2026年9月）のものです。このレッスンでは <code>serde</code> と <code>serde_json</code> を新たに追加します。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">02 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            02 の完成コードをそのまま出発点にします。<code>02-routing</code> ディレクトリがある場所で、次のコマンドを実行してください。
+            ビルド結果の <code>target/</code> はコピーせず、<code>Cargo.toml</code>・<code>Cargo.lock</code>・<code>src/</code> だけを新しいディレクトリ <code>03-json</code> にコピーします。
+            コマンドは何も表示せずに終わります。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir 03-json</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 02-routing/Cargo.toml 02-routing/Cargo.lock 02-routing/src 03-json/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 03-json</span></pre>
+          </div>
+
+          <p>次に、<code>Cargo.toml</code> の <code>name</code> を <code>routing</code> から <code>json</code> に変更します。変更するのはこの 1 行だけです。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "routing"</span><span class="diff-line diff-line--add">+ name = "json"</span><span class="diff-line">  version = "0.1.0"</span></pre>
+          </div>
+
+          <p><code>src/main.rs</code> は 02 の完成形のまま使います。サーバーを起動して、02 と同じように動くことを確かめます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   ...</span><span class="terminal__line">   Compiling axum v0.8.9</span><span class="terminal__line">   Compiling json v0.1.0 (/path/to/03-json)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.00s</span><span class="terminal__line">     Running `target/debug/json`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p><code>target/</code> をコピーしていないので、初回は依存クレートのコンパイルから始まり、数秒かかります（出力の途中は省略しています）。サーバーを動かしたまま別のターミナルを開き、<code>/</code> と <code>/health</code> にリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 12</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:39:17 GMT</span><span class="terminal__line"></span><span class="terminal__line">Hello, Axum!</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 2</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:39:17 GMT</span><span class="terminal__line"></span><span class="terminal__line">ok</span></pre>
+          </div>
+
+          <p>どちらのレスポンスも <code>content-type</code> は <code>text/plain; charset=utf-8</code> です。このあと JSON を返すようにすると、ここが変わります。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Running `target/debug/json`</code> が表示され、<code>/</code>・<code>/health</code> が 02 と同じ内容を返せば OK です。以降のコマンドは全て <code>03-json</code> ディレクトリで実行します。確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">serde と serde_json を追加する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            JSON との変換には、Rust の定番のシリアライズ・ライブラリ <code>serde</code> と、その JSON 実装の <code>serde_json</code> を使います。
+            追加する前に、今の依存関係に serde 関連のクレートが入っているかを <code>cargo tree</code> で見てみます。サーバーは止めたままで構いません。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo tree | grep -i serde</span><span class="terminal__line">│   ├── serde_core v1.0.229</span><span class="terminal__line">│   ├── serde_json v1.0.151</span><span class="terminal__line">│   │   ├── serde_core v1.0.229</span><span class="terminal__line">│   ├── serde_path_to_error v0.1.20</span><span class="terminal__line">│   │   └── serde_core v1.0.229</span><span class="terminal__line">│   ├── serde_urlencoded v0.7.1</span><span class="terminal__line">│   │   └── serde v1.0.229</span><span class="terminal__line">│   │       └── serde_core v1.0.229</span></pre>
+          </div>
+
+          <p>
+            <code>Cargo.toml</code> にはまだ書いていないのに、<code>serde_json</code> が依存関係に含まれています。
+            axum は既定で <code>json</code> フィーチャーが有効になっており、<code>Json</code> を使うために axum 自身が <code>serde_json</code> に依存しているからです。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">axum の JSON サポートは最初から有効</p>
+              <p>axum の <code>Json</code> は、<code>Cargo.toml</code> に <code>axum = "0.8.9"</code> と書いただけで使えます。フィーチャーを追加する必要はありません。</p>
+              <p>それでも <code>serde</code> と <code>serde_json</code> を自分で追加するのは、自分のコードで <code>#[derive(Serialize)]</code> や <code>serde_json::json!</code> を直接使うためです。axum に JSON サポートを足すためではありません。</p>
+            </div>
+          </div>
+
+          <p><code>cargo add</code> で 2 つのクレートを追加します。<code>serde</code> には、構造体から変換処理を自動生成する <code>derive</code> フィーチャーを付けます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add serde --features derive</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding serde v1.0.229 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             + derive</span><span class="terminal__line">             + serde_derive</span><span class="terminal__line">             + std</span><span class="terminal__line">             - alloc</span><span class="terminal__line">             - rc</span><span class="terminal__line">             - unstable</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add serde_json</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding serde_json v1.0.151 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             + std</span><span class="terminal__line">             - alloc</span><span class="terminal__line">             - arbitrary_precision</span><span class="terminal__line">             - float_roundtrip</span><span class="terminal__line">             - indexmap</span><span class="terminal__line">             - preserve_order</span><span class="terminal__line">             - raw_value</span><span class="terminal__line">             - unbounded_depth</span></pre>
+          </div>
+
+          <p><code>Features:</code> の <code>+</code> は有効、<code>-</code> は無効なフィーチャーです。<code>serde</code> の <code>derive</code> が有効になっていることを確認してください。変更後の <code>Cargo.toml</code> は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TOML</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-toml">[package]
+name = "json"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.9"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread"] }</code></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Cargo.toml</code> の <code>[dependencies]</code> に <code>serde</code>（<code>features = ["derive"]</code>）と <code>serde_json</code> が追加されていれば OK です。このステップではサーバーを起動しません。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">構造体を JSON で返す（GET /users/{id}、GET /users）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ユーザーを表す構造体 <code>User</code> を定義し、<code>GET /users/{id}</code> と <code>GET /users</code> が JSON を返すようにします。
+            <code>src/main.rs</code> を次のように変更してください。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use axum::{</span><span class="diff-line diff-line--remove">-     Router,</span><span class="diff-line diff-line--add">+     Json, Router,</span><span class="diff-line">      extract::{Path, Query},</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line">      routing::get,</span><span class="diff-line">  };</span><span class="diff-line diff-line--add">+ use serde::Serialize;</span><span class="diff-line">  use std::collections::HashMap;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ #[derive(Serialize)]</span><span class="diff-line diff-line--add">+ struct User {</span><span class="diff-line diff-line--add">+     id: u32,</span><span class="diff-line diff-line--add">+     name: String,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line"> </span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  ...</span><span class="diff-line">      "ok"</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- async fn list_users() -&gt; &amp;'static str {</span><span class="diff-line diff-line--remove">-     "list users"</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ async fn list_users() -&gt; Json&lt;Vec&lt;User&gt;&gt; {</span><span class="diff-line diff-line--add">+     Json(vec![</span><span class="diff-line diff-line--add">+         User {</span><span class="diff-line diff-line--add">+             id: 1,</span><span class="diff-line diff-line--add">+             name: "alice".to_string(),</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line diff-line--add">+         User {</span><span class="diff-line diff-line--add">+             id: 2,</span><span class="diff-line diff-line--add">+             name: "bob".to_string(),</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line diff-line--add">+     ])</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line"> </span><span class="diff-line">  async fn create_user() -&gt; &amp;'static str {</span><span class="diff-line">      "create user"</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; String {</span><span class="diff-line diff-line--remove">-     format!("user {id}")</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; Json&lt;User&gt; {</span><span class="diff-line diff-line--add">+     Json(User {</span><span class="diff-line diff-line--add">+         id,</span><span class="diff-line diff-line--add">+         name: "alice".to_string(),</span><span class="diff-line diff-line--add">+     })</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <p>変更点は次の 3 つです。</p>
+
+          <ul>
+            <li><code>use</code> 文: <code>axum::Json</code> と <code>serde::Serialize</code> を追加します。</li>
+            <li><code>User</code> 構造体: <code>#[derive(Serialize)]</code> を付けると、serde が構造体を JSON などの形式へ変換する処理を自動で生成します。</li>
+            <li><code>list_users</code>・<code>get_user</code>: 戻り値の型を <code>Json&lt;...&gt;</code> にし、値を <code>Json(...)</code> で包んで返します。<code>Json&lt;Vec&lt;User&gt;&gt;</code> のように <code>Vec</code> をそのまま包めば、配列の JSON になります。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Rust</span>
+                  <span class="code-block__filename">src/main.rs</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><code class="language-rust">use axum::{
+    Json, Router,
+    extract::{Path, Query},
+    http::StatusCode,
+    routing::get,
+};
+use serde::Serialize;
+use std::collections::HashMap;
+
+#[derive(Serialize)]
+struct User {
+    id: u32,
+    name: String,
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users).post(create_user))
+        .route("/users/{id}", get(get_user))
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn root() -&gt; &amp;'static str {
+    "Hello, Axum!"
+}
+
+async fn health() -&gt; &amp;'static str {
+    "ok"
+}
+
+async fn list_users() -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    Json(vec![
+        User {
+            id: 1,
+            name: "alice".to_string(),
+        },
+        User {
+            id: 2,
+            name: "bob".to_string(),
+        },
+    ])
+}
+
+async fn create_user() -&gt; &amp;'static str {
+    "create user"
+}
+
+async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; Json&lt;User&gt; {
+    Json(User {
+        id,
+        name: "alice".to_string(),
+    })
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+              </div>
+            </div>
+          </details>
+
+          <p>保存したら <code>cargo build</code> でビルドします。追加した <code>serde</code> などのクレートがコンパイルされます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling serde v1.0.229</span><span class="terminal__line">   Compiling serde_derive v1.0.229</span><span class="terminal__line">   Compiling serde_urlencoded v0.7.1</span><span class="terminal__line">   Compiling axum v0.8.9</span><span class="terminal__line">   Compiling json v0.1.0 (/path/to/03-json)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.06s</span></pre>
+          </div>
+
+          <p>警告は出ません。続けて <code>cargo run</code> でサーバーを起動します。ビルド済みなので <code>Compiling</code> の行は表示されず、すぐに起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s</span><span class="terminal__line">     Running `target/debug/json`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>2 つ目のターミナルから <code>/users/42</code> と <code>/users</code> にリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/42</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 24</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:40:01 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":42,"name":"alice"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 47</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:40:01 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]</span></pre>
+          </div>
+
+          <p>
+            戻り値を <code>Json&lt;T&gt;</code> にしただけで、<code>content-type</code> が <code>application/json</code> になりました。
+            02 で書いた <code>String</code> や <code>&amp;'static str</code> を返すハンドラでは <code>text/plain; charset=utf-8</code> だったので、違いを見比べてください。ヘッダーを自分で設定するコードは書いていません。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/users/42</code> が 1 件、<code>/users</code> が 2 件のユーザーを JSON で返せば OK です。どちらのレスポンスも <code>content-type: application/json</code> になっていることを確認してください。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">JSON を受け取る（POST /users）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            次は反対向きに、リクエストの本文（ボディ）で送られてきた JSON を受け取ります。
+            <code>POST /users</code> で <code>{"name":"alice"}</code> のような JSON を受け取り、作成したユーザーを <code>201 Created</code> とともに返すようにします。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- use serde::Serialize;</span><span class="diff-line diff-line--add">+ use serde::{Deserialize, Serialize};</span><span class="diff-line">  use std::collections::HashMap;</span><span class="diff-line"> </span><span class="diff-line">  #[derive(Serialize)]</span><span class="diff-line">  struct User {</span><span class="diff-line">      id: u32,</span><span class="diff-line">      name: String,</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ #[derive(Deserialize)]</span><span class="diff-line diff-line--add">+ struct CreateUser {</span><span class="diff-line diff-line--add">+     name: String,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line"> </span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  ...</span><span class="diff-line">      ])</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- async fn create_user() -&gt; &amp;'static str {</span><span class="diff-line diff-line--remove">-     "create user"</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ async fn create_user(Json(payload): Json&lt;CreateUser&gt;) -&gt; (StatusCode, Json&lt;User&gt;) {</span><span class="diff-line diff-line--add">+     let user = User {</span><span class="diff-line diff-line--add">+         id: 1,</span><span class="diff-line diff-line--add">+         name: payload.name,</span><span class="diff-line diff-line--add">+     };</span><span class="diff-line diff-line--add">+     (StatusCode::CREATED, Json(user))</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <p>変更点は次の 3 つです。</p>
+
+          <ul>
+            <li><code>CreateUser</code> 構造体: 受け取る JSON の形を表します。<code>#[derive(Deserialize)]</code> を付けると、JSON から構造体へ変換する処理が自動で生成されます。送る側と受け取る側で必要な derive が違う点に注意してください（<code>Serialize</code> は構造体 → JSON、<code>Deserialize</code> は JSON → 構造体）。</li>
+            <li>引数 <code>Json(payload): Json&lt;CreateUser&gt;</code>: 02 の <code>Path(id): Path&lt;u32&gt;</code> と同じ書き方です。リクエストの本文が <code>CreateUser</code> に変換されて <code>payload</code> に入ります。</li>
+            <li>戻り値 <code>(StatusCode, Json&lt;User&gt;)</code>: 02 の <code>not_found</code> で使った <code>(StatusCode, &amp;'static str)</code> と同じく、1 つ目の要素がステータスコード、2 つ目の要素が本文になります。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>id</code> は固定値</p>
+              <p>このレッスンではデータベースを使わないため、作成したユーザーの <code>id</code> は常に <code>1</code> を返します。本来は保存先（データベースなど）で採番します。データベースへの接続は 05 の項目で扱います。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Rust</span>
+                  <span class="code-block__filename">src/main.rs</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><code class="language-rust">use axum::{
+    Json, Router,
+    extract::{Path, Query},
+    http::StatusCode,
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+#[derive(Serialize)]
+struct User {
+    id: u32,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users).post(create_user))
+        .route("/users/{id}", get(get_user))
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn root() -&gt; &amp;'static str {
+    "Hello, Axum!"
+}
+
+async fn health() -&gt; &amp;'static str {
+    "ok"
+}
+
+async fn list_users() -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    Json(vec![
+        User {
+            id: 1,
+            name: "alice".to_string(),
+        },
+        User {
+            id: 2,
+            name: "bob".to_string(),
+        },
+    ])
+}
+
+async fn create_user(Json(payload): Json&lt;CreateUser&gt;) -&gt; (StatusCode, Json&lt;User&gt;) {
+    let user = User {
+        id: 1,
+        name: payload.name,
+    };
+    (StatusCode::CREATED, Json(user))
+}
+
+async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; Json&lt;User&gt; {
+    Json(User {
+        id,
+        name: "alice".to_string(),
+    })
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+              </div>
+            </div>
+          </details>
+
+          <p><code>cargo build</code> でビルドしてから、<code>cargo run</code> でサーバーを起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling json v0.1.0 (/path/to/03-json)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.84s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s</span><span class="terminal__line">     Running `target/debug/json`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>2 つ目のターミナルから JSON を送ります。<code>-H</code> でリクエストの <code>content-type</code> ヘッダーを、<code>-d</code> で本文を指定します。メソッドは 02 と同じく <code>-X POST</code> で指定します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -d '{"name":"alice"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:40:18 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice"}</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ステータスが <code>201 Created</code> になり、送った <code>name</code> を含む <code>{"id":1,"name":"alice"}</code> が返れば OK です。次のステップでも同じコードを使うので、<strong>サーバーは起動したまま</strong>にしておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">不正なリクエストの拒否（415 / 400 / 422）を確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ステップ 4 のサーバーを起動したまま、<code>POST /users</code> にわざと正しくないリクエストを 4 種類送り、<code>Json</code> がどう拒否するかを確かめます。
+            コードは変更しません。
+          </p>
+
+          <p>まず、<code>-H 'content-type: application/json'</code> を付けずに送ります。<code>-d</code> だけで送ると、<code>curl</code> は <code>content-type: application/x-www-form-urlencoded</code> を付けます。このため axum は JSON として受け付けず、415 を返します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -d '{"name":"alice"}'</span><span class="terminal__line">HTTP/1.1 415 Unsupported Media Type</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 54</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:40:22 GMT</span><span class="terminal__line"></span><span class="terminal__line">Expected request with `Content-Type: application/json`</span></pre>
+          </div>
+
+          <p>次に、<code>content-type</code> は正しく付けたうえで、本文の中身を 3 通りに変えて送ります。1 つ目は途中で切れた JSON、2 つ目は <code>name</code> がない JSON、3 つ目は <code>name</code> が文字列ではなく数値の JSON です。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -d '{"name":'</span><span class="terminal__line">HTTP/1.1 400 Bad Request</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 92</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:40:22 GMT</span><span class="terminal__line"></span><span class="terminal__line">Failed to parse the request body as JSON: name: EOF while parsing a value at line 1 column 8</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -d '{}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 97</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:40:22 GMT</span><span class="terminal__line"></span><span class="terminal__line">Failed to deserialize the JSON body into the target type: missing field `name` at line 1 column 2</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -d '{"name": 1}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 128</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:40:22 GMT</span><span class="terminal__line"></span><span class="terminal__line">Failed to deserialize the JSON body into the target type: name: invalid type: integer `1`, expected a string at line 1 column 10</span></pre>
+          </div>
+
+          <p>結果を表にまとめます。</p>
+
+          <table>
+            <thead>
+              <tr><th>送ったリクエスト</th><th>ステータス</th><th>拒否された理由</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>content-type: application/json</code> を付けない</td><td>415 Unsupported Media Type</td><td>リクエストが JSON であると示されていない</td></tr>
+              <tr><td>途中で切れた JSON（<code>{"name":</code>）</td><td>400 Bad Request</td><td>JSON の構文として正しくない</td></tr>
+              <tr><td>必須フィールドがない（<code>{}</code>）</td><td>422 Unprocessable Entity</td><td>JSON としては正しいが、<code>CreateUser</code> に変換できない</td></tr>
+              <tr><td>型が違う（<code>{"name": 1}</code>）</td><td>422 Unprocessable Entity</td><td>JSON としては正しいが、<code>CreateUser</code> に変換できない</td></tr>
+            </tbody>
+          </table>
+
+          <p>
+            どのケースでも、ハンドラ <code>create_user</code> が呼ばれる前に <code>Json</code> がリクエストを拒否し、ステータスコードと本文を返しています。
+            ハンドラの中にエラー処理を書く必要はありません。なお、エラー本文の文言は axum の既定のものです。独自の形式に変える方法は、このレッスンでは扱いません。
+          </p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">400 と 422 の違い</p>
+              <p>400 と 422 は混同しやすいので、区別して覚えておきましょう。400 は「JSON として読めない」（構文エラー）、422 は「JSON としては読めたが、Rust の型に合わない」（フィールドの欠落や型の不一致）です。本文の書き出しも <code>Failed to parse</code> と <code>Failed to deserialize</code> で分かれています。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>4 つのリクエストが順に <code>415</code>・<code>400</code>・<code>422</code>・<code>422</code> になれば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">json! マクロと Path + Json の併用（GET /health、PUT /users/{id}）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            最後の機能追加として、2 つの変更をします。
+            1 つ目は、<code>GET /health</code> を <code>{"status":"ok"}</code> という JSON を返すように変えることです。このような小さな JSON のために構造体を定義するのは大げさなので、<code>serde_json</code> の <code>json!</code> マクロで組み立てます。
+            2 つ目は、ユーザーの名前を更新する <code>PUT /users/{id}</code> を追加することです。パスパラメーターの <code>id</code> と、本文の JSON の両方を受け取ります。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use serde::{Deserialize, Serialize};</span><span class="diff-line diff-line--add">+ use serde_json::json;</span><span class="diff-line">  use std::collections::HashMap;</span><span class="diff-line">  ...</span><span class="diff-line">          .route("/health", get(health))</span><span class="diff-line">          .route("/users", get(list_users).post(create_user))</span><span class="diff-line diff-line--remove">-         .route("/users/{id}", get(get_user))</span><span class="diff-line diff-line--add">+         .route("/users/{id}", get(get_user).put(update_user))</span><span class="diff-line">          .route("/users/{user_id}/posts/{post_id}", get(get_user_post))</span><span class="diff-line">  ...</span><span class="diff-line diff-line--remove">- async fn health() -&gt; &amp;'static str {</span><span class="diff-line diff-line--remove">-     "ok"</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ async fn health() -&gt; Json&lt;serde_json::Value&gt; {</span><span class="diff-line diff-line--add">+     Json(json!({ "status": "ok" }))</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line">  ...</span><span class="diff-line">          name: "alice".to_string(),</span><span class="diff-line">      })</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ async fn update_user(Path(id): Path&lt;u32&gt;, Json(payload): Json&lt;CreateUser&gt;) -&gt; Json&lt;User&gt; {</span><span class="diff-line diff-line--add">+     Json(User {</span><span class="diff-line diff-line--add">+         id,</span><span class="diff-line diff-line--add">+         name: payload.name,</span><span class="diff-line diff-line--add">+     })</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {</span></pre>
+          </div>
+
+          <p>変更点は次の 3 つです。</p>
+
+          <ul>
+            <li><code>health</code>: <code>json!</code> マクロは、JSON とほぼ同じ書き方で <code>serde_json::Value</code>（中身の形が決まっていない JSON の値）を作ります。戻り値の型は <code>Json&lt;serde_json::Value&gt;</code> です。</li>
+            <li><code>.put(update_user)</code>: 02 の <code>get(...).post(...)</code> と同じく、<code>/users/{id}</code> に <code>PUT</code> のハンドラを追加します。</li>
+            <li><code>update_user</code>: 引数に <code>Path</code> と <code>Json</code> の 2 つの extractor を並べます。受け取る JSON の形は作成時と同じなので、<code>CreateUser</code> を使い回しています。<code>get_user</code> と <code>get_user_post</code> の間に追加してください。</li>
+          </ul>
+
+          <p>これでこの項目の完成形です。変更後の <code>src/main.rs</code> の全体は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Json, Router,
+    extract::{Path, Query},
+    http::StatusCode,
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
+
+#[derive(Serialize)]
+struct User {
+    id: u32,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users).post(create_user))
+        .route("/users/{id}", get(get_user).put(update_user))
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn root() -&gt; &amp;'static str {
+    "Hello, Axum!"
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users() -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    Json(vec![
+        User {
+            id: 1,
+            name: "alice".to_string(),
+        },
+        User {
+            id: 2,
+            name: "bob".to_string(),
+        },
+    ])
+}
+
+async fn create_user(Json(payload): Json&lt;CreateUser&gt;) -&gt; (StatusCode, Json&lt;User&gt;) {
+    let user = User {
+        id: 1,
+        name: payload.name,
+    };
+    (StatusCode::CREATED, Json(user))
+}
+
+async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; Json&lt;User&gt; {
+    Json(User {
+        id,
+        name: "alice".to_string(),
+    })
+}
+
+async fn update_user(Path(id): Path&lt;u32&gt;, Json(payload): Json&lt;CreateUser&gt;) -&gt; Json&lt;User&gt; {
+    Json(User {
+        id,
+        name: payload.name,
+    })
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+
+          <p><code>cargo build</code> でビルドしてから、<code>cargo run</code> でサーバーを起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling json v0.1.0 (/path/to/03-json)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.51s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s</span><span class="terminal__line">     Running `target/debug/json`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 15</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:40:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/7 -H 'content-type: application/json' -d '{"name":"carol"}'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 08:40:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":7,"name":"carol"}</span></pre>
+          </div>
+
+          <p><code>/health</code> の <code>content-type</code> も、ステップ 1 の <code>text/plain</code> から <code>application/json</code> に変わりました。<code>PUT</code> では、パスの <code>7</code> と本文の <code>carol</code> が 1 つの JSON にまとまって返っています。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/health</code> が <code>{"status":"ok"}</code> を、<code>PUT /users/7</code> が <code>{"id":7,"name":"carol"}</code> を返せば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">extractor の順番を間違えてコンパイルエラーを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ステップ 6 の <code>update_user</code> では、<code>Path</code> を先に、<code>Json</code> を後に書きました。
+            この順番を逆にするとどうなるか、あえて試してみます。サーバーを止めた状態で、<code>update_user</code> の引数を一時的に入れ替えてください。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- async fn update_user(Path(id): Path&lt;u32&gt;, Json(payload): Json&lt;CreateUser&gt;) -&gt; Json&lt;User&gt; {</span><span class="diff-line diff-line--add">+ async fn update_user(Json(payload): Json&lt;CreateUser&gt;, Path(id): Path&lt;u32&gt;) -&gt; Json&lt;User&gt; {</span></pre>
+          </div>
+
+          <p>この状態で <code>cargo build</code> を実行します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling json v0.1.0 (/path/to/03-json)</span><span class="terminal__line">error[E0277]: the trait bound `fn(Json&lt;CreateUser&gt;, Path&lt;u32&gt;) -&gt; ... {update_user}: Handler&lt;_, _&gt;` is not satisfied</span><span class="terminal__line">   --&gt; src/main.rs:28:49</span><span class="terminal__line">    |</span><span class="terminal__line"> 28 |         .route("/users/{id}", get(get_user).put(update_user))</span><span class="terminal__line">    |                                             --- ^^^^^^^^^^^ the trait `Handler&lt;_, _&gt;` is not implemented for fn item `fn(Json&lt;CreateUser&gt;, Path&lt;u32&gt;) -&gt; ... {update_user}`</span><span class="terminal__line">    |                                             |</span><span class="terminal__line">    |                                             required by a bound introduced by this call</span><span class="terminal__line">    |</span><span class="terminal__line">    = note: Consider using `#[axum::debug_handler]` to improve the error message</span><span class="terminal__line">note: required by a bound in `MethodRouter::&lt;S&gt;::put`</span><span class="terminal__line">   --&gt; ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/routing/method_routing.rs:326:16</span><span class="terminal__line">    |</span><span class="terminal__line">326 |             H: Handler&lt;T, S&gt;,</span><span class="terminal__line">    |                ^^^^^^^^^^^^^ required by this bound in `MethodRouter::&lt;S&gt;::put`</span><span class="terminal__line">...</span><span class="terminal__line">650 |     chained_handler_fn!(put, PUT);</span><span class="terminal__line">    |     -----------------------------</span><span class="terminal__line">    |     |                   |</span><span class="terminal__line">    |     |                   required by a bound in this associated function</span><span class="terminal__line">    |     in this macro invocation</span><span class="terminal__line">    = note: the full name for the type has been written to '/path/to/03-json/target/debug/deps/json-9bb0d88ebc5e2c67.long-type-10788627727377496902.txt'</span><span class="terminal__line">    = note: consider using `--verbose` to print the full type name to the console</span><span class="terminal__line">    = note: this error originates in the macro `chained_handler_fn` (in Nightly builds, run with -Z macro-backtrace for more info)</span><span class="terminal__line"></span><span class="terminal__line">For more information about this error, try `rustc --explain E0277`.</span><span class="terminal__line">error: could not compile `json` (bin "json") due to 1 previous error</span></pre>
+          </div>
+
+          <p>
+            コンパイルエラーになり、実行ファイルが作られないため、サーバーも起動できません。
+            エラーの位置 <code>src/main.rs:28:49</code> は、<code>update_user</code> を登録している <code>.put(update_user)</code> です。
+            メッセージは「<code>update_user</code> が <code>Handler</code> トレイトを実装していない」という抽象的な内容で、引数の順番が原因だとは書かれていません。
+            note に <code>#[axum::debug_handler]</code> を使うよう提案がありますが、このレッスンでは試しません。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">本文を読む extractor は引数の最後に置く</p>
+              <p><code>Json</code> のように、リクエストの本文を読み取る extractor は、ハンドラの引数の最後に置くというルールが axum にはあります。リクエストの本文は非同期のストリームで 1 度しか読めないため、本文を消費する extractor は 1 つだけ、しかも最後に置く必要があるのです。</p>
+              <p>ハンドラを <code>.route(...)</code> に登録した行で <code>Handler&lt;_, _&gt; is not implemented</code> というエラーが出たら、まず引数の順番を疑いましょう。</p>
+            </div>
+          </div>
+
+          <p>
+            02 で見た <code>Path&lt;u32&gt;</code> の変換失敗（400）や、ステップ 5 の <code>Json</code> の拒否（415 / 400 / 422）は、リクエストを受けたときに起こる実行時のエラーでした。
+            extractor の順番の誤りは、それらと違ってコンパイル時に検出されます。
+          </p>
+
+          <p>確認できたら、<code>update_user</code> の引数を <code>Path(id): Path&lt;u32&gt;, Json(payload): Json&lt;CreateUser&gt;</code> の順に戻してください。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>引数の順番を入れ替えると <code>error[E0277]</code> のコンパイルエラーになり、元の順番に戻したことを確認できれば OK です。このステップではサーバーを起動しません。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">ビルド・Lint・フォーマットを確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>仕上げに、ビルド・静的解析（Clippy）・書式の確認をまとめて行います。ステップ 7 で <code>src/main.rs</code> を書き換えて戻したので、<code>cargo build</code> ではもう一度 <code>json</code> がコンパイルされます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling json v0.1.0 (/path/to/03-json)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.38s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy --all-targets</span><span class="terminal__line">   ...</span><span class="terminal__line">    Checking axum v0.8.9</span><span class="terminal__line">    Checking json v0.1.0 (/path/to/03-json)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.23s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span></pre>
+          </div>
+
+          <p><code>cargo fmt --check</code> は何も表示せずに終わります。このレッスンのコードをそのまま書いていれば、書式の差分は出ません。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo build</code> と <code>cargo clippy --all-targets</code> がエラーや警告を出さずに終わり、<code>cargo fmt --check</code> が何も表示しなければ完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">02 のプロジェクトをコピーし、<code>Cargo.toml</code> の <code>name</code> を <code>json</code> に変えて起動できた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>cargo add</code> で <code>serde</code>（<code>derive</code>）と <code>serde_json</code> を追加した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">axum の <code>Json</code> は既定で使え、<code>serde</code> を追加するのは自分のコードで derive などを使うためだと説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>#[derive(Serialize)]</code> の構造体を <code>Json&lt;T&gt;</code> で返し、<code>content-type: application/json</code> になることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>#[derive(Deserialize)]</code> の構造体を <code>Json&lt;T&gt;</code> で受け取り、<code>(StatusCode, Json&lt;T&gt;)</code> で 201 を返した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>Json</code> の拒否が 415・400・422 のどれになるかを、リクエストの内容から説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>json!</code> マクロで構造体を定義せずに JSON を返した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>Path</code> と <code>Json</code> を併用し、<code>Json</code> を引数の最後に置かないとコンパイルエラーになることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>cargo build</code>・<code>cargo clippy --all-targets</code>・<code>cargo fmt --check</code> が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">JSON を送ったのに 415 になる</p>
+          <p><code>curl</code> で <code>-H 'content-type: application/json'</code> を付け忘れていないか確認してください。<code>content-type</code> が <code>application/json</code>（または <code>application/*+json</code> 形式）でないと、本文が正しい JSON でも 415 になります。ステップ 5 で見た <code>415 Unsupported Media Type</code> と同じです。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ハンドラを登録した行で <code>Handler&lt;_, _&gt;</code> のエラーが出る</p>
+          <p><code>Json</code> がハンドラの引数の最後になっているか確認してください。ステップ 7 のように <code>Json</code> を <code>Path</code> より前に書くと、このコンパイルエラーになります。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">コードを変えたのに結果が変わらない</p>
+          <p><code>cargo run</code> で起動したサーバーは、ソースコードを保存しても変更を反映しません。各ステップでコードを変えたら、前のサーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めてから <code>cargo run</code> し直してください。止め忘れたまま別のターミナルで起動すると、ポート 3000 が使用中のエラーになります（01 の「つまずきポイント」を参照）。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>serde</code> の <code>Serialize</code> / <code>Deserialize</code> を構造体に derive し、axum の <code>Json</code> で JSON を返したり受け取ったりできるようにしました。
+        あわせて、<code>Json</code> が不正なリクエストを 415・400・422 で拒否することと、<code>json!</code> マクロで手軽に JSON を返せることを確かめました。本文を読む extractor は引数の最後に置く必要があることも確認しました。
+        次の項目では、共有状態とミドルウェアを扱います。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/03-json</code> の <code>axum/03-json/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../02-routing/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">02: ルーティングとハンドラ</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">04: 共有状態とミドルウェア</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
