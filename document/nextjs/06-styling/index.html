@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06: スタイリングとレイアウト実装 | Next.js ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Next.js</li>
+          <li aria-current="page">06</li>
+        </ol>
+        <h1 class="lesson-title">スタイリングとレイアウト実装</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 30分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 05 を終え、部品ごとにばらばらだったスタイルを共通の変数とレイアウトで整えたい人</li>
+          <li class="lesson-meta__item">📋 前提: CSS のセレクタ・Flexbox・メディアクエリの基本が分かること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../05-storybook/index.html">05: Storybook でのコンポーネントカタログ構築</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>CSS Modules がクラス名をファイルごとに一意にする仕組みを説明でき、複数クラスを結合できる</li>
+          <li>SCSS 変数と CSS カスタムプロパティを使い分けて、共通の変数・ミックスインを定義できる</li>
+          <li><code>sassOptions.additionalData</code> で変数・ミックスインを全ファイルに自動で読み込ませ、Storybook にも同じ設定を入れられる</li>
+          <li>ルートレイアウトと CSS Grid で、ヘッダー固定・センタリング・レスポンシブなサイドバーを組める</li>
+          <li><code>data-*</code> 属性でバリアントを切り替える <code>Button</code> コンポーネントを作り、既存の部品から再利用できる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        05 までは、部品ごとの <code>.module.scss</code> に色や余白の値を直接書いていました。
+        同じ <code>#e5e5e5</code> や <code>1rem</code> があちこちに散らばり、ダークテーマに切り替えても一部の色が変わらない状態です。
+        このレッスンでは、共通の変数とミックスインを <code>src/styles/</code> にまとめ、すべての部品から使えるようにします。
+        あわせて、サイト全体のレイアウトと、再利用できる <code>Button</code> コンポーネントを作ります。
+      </p>
+
+      <h3 id="styling-options">Next.js のスタイリング手法</h3>
+      <p>Next.js（App Router）では、主に次の方法でスタイルを書けます。</p>
+      <table>
+        <thead>
+          <tr><th>手法</th><th>概要</th><th>このトラックでの扱い</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>グローバル CSS</td><td>ルートレイアウトで読み込み、サイト全体に効かせる</td><td>リセットや <code>body</code> の指定だけに使う（<code>globals.scss</code>）</td></tr>
+          <tr><td>CSS Modules</td><td><code>*.module.css</code> のクラス名をファイルごとに一意の名前へ変換する</td><td>採用。部品ごとのスタイルはすべてこれで書く</td></tr>
+          <tr><td>Sass（SCSS）</td><td>変数・ミックスイン・ネストを使える CSS の拡張言語。CSS Modules と組み合わせられる</td><td>採用（<code>*.module.scss</code>）</td></tr>
+          <tr><td>CSS-in-JS</td><td>JavaScript の中にスタイルを書くライブラリ群</td><td>使わない</td></tr>
+          <tr><td>Tailwind CSS</td><td>ユーティリティクラスを組み合わせて見た目を作る CSS フレームワーク</td><td>使わない</td></tr>
+        </tbody>
+      </table>
+      <p>このトラックが CSS Modules + SCSS を選ぶ理由は次のとおりです。</p>
+      <ul>
+        <li><strong>デザインフレームワークを使わない方針</strong>: 見た目を自分の CSS で組み立てることを学ぶため、Tailwind CSS のようなフレームワークは使いません。</li>
+        <li><strong>サーバーコンポーネントと相性が良い</strong>: CSS Modules は <code>import styles from "./x.module.scss"</code> でクラス名の文字列を受け取るだけなので、サーバーコンポーネントでもクライアントコンポーネントでも同じ書き方で使えます。実行時に JavaScript でスタイルを生成する CSS-in-JS のライブラリは、サーバーコンポーネントでは使えないものがあります。</li>
+        <li><strong>ビルド時に静的な CSS になる</strong>: SCSS の変数やミックスインはビルド時に展開され、ブラウザには通常の CSS だけが届きます。</li>
+      </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">出発点</p>
+              <p>
+                05 で使ったプロジェクトをそのまま使って続けます。05 の完成状態（Storybook で <code>LikeButton</code> / <code>Collapsible</code> / <code>Header</code> のストーリーとテストが動く状態）がこのレッスンのスタート地点です。
+                作業を始める前に、<code>package.json</code> の <code>name</code> を <code>06-styling</code> に直しておきます。追加でインストールするパッケージはありません。
+              </p>
+            </div>
+          </div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line diff-line--remove">-   "name": "05-storybook",</span><span class="diff-line diff-line--add">+   "name": "06-styling",</span><span class="diff-line">    "version": "0.1.0",</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">使用バージョン</p>
+              <p>
+                05 と同じ構成で動作を確認しています（Node.js 24.21.0 / npm 11.19.0 / Next.js 16.3.6 / React 19.2.8 / sass 1.105.0 / Storybook 10.6.0）。執筆時点は 2026年9月です。
+                Next.js の開発サーバーと本番ビルドは、どちらも Turbopack で動きます。
+              </p>
+            </div>
+          </div>
+
+      <p>レッスンを終えると、プロジェクトは次のように変わります（05 から変わらないファイルは省略しています）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">nextjs/06-styling/</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">.storybook/
+  main.ts                   # viteFinal で Sass の設定を追加
+next.config.ts              # sassOptions を追加
+src/
+  app/
+    layout.tsx              # 共通のレイアウト（ヘッダー + main + フッター）
+    layout.module.scss      # 追加
+    blog/
+      layout.module.scss    # CSS Grid でサイドバーをレスポンシブ化
+  components/
+    Button/                 # 追加
+      Button.tsx
+      Button.module.scss
+      Button.stories.tsx
+      index.ts
+    LikeButton/
+      LikeButton.tsx        # Button を使う形に置き換え
+  styles/
+    _variables.scss         # 追加（変数と CSS カスタムプロパティ）
+    _mixins.scss            # 追加（ミックスイン）
+    globals.scss</code></pre>
+</div>
+
+      <h2 id="step-by-step">手順</h2>
+      <p>作業はプロジェクトのディレクトリ（<code>nextjs/06-styling/</code>）で行います。開発サーバーや Storybook を起動した場合は、確認が終わるたびに <kbd>Ctrl</kbd> + <kbd>C</kbd> で停止してください。</p>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">CSS Modules のスコープと複数クラスの結合を確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            まず、05 までに使ってきた CSS Modules の仕組みを確認します。
+            <code>Header.module.scss</code> で <code>.header</code> を定義し、<code>Header.tsx</code> で <code>import styles from "./Header.module.scss"</code> のように読み込みます。
+            このとき <code>styles.header</code> には、<strong>ファイルごとに一意の名前へ変換されたクラス名</strong>の文字列が入ります。
+            別のファイルに同じ <code>.header</code> があっても、変換後の名前が違うので衝突しません。これを「スタイルのスコープがファイルに閉じている」と言います。
+          </p>
+          <p>
+            ここでは手始めに、<code>Header.tsx</code> で複数のクラスを結合している箇所を書き換えます。
+            05 まではテンプレートリテラルと三項演算子で書いていましたが、クラスが増えると読みにくくなります。
+            外部ライブラリ（<code>clsx</code> など）は使わず、配列を <code>filter(Boolean)</code> してから <code>join(" ")</code> する書き方に統一します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/_components/Header/Header.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">                &lt;li key={item.href}&gt;</span><span class="diff-line">                  &lt;Link</span><span class="diff-line">                    href={item.href}</span><span class="diff-line diff-line--remove">-                   className={isActive ? `${styles.link} ${styles.linkActive}` : styles.link}</span><span class="diff-line diff-line--add">+                   className={[styles.link, isActive &amp;&amp; styles.linkActive]</span><span class="diff-line diff-line--add">+                     .filter(Boolean)</span><span class="diff-line diff-line--add">+                     .join(" ")}</span><span class="diff-line">                    aria-current={isActive ? "page" : undefined}</span><span class="diff-line">                  &gt;</span><span class="diff-line">                    {item.label}</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>
+            <code>isActive &amp;&amp; styles.linkActive</code> は、<code>isActive</code> が <code>false</code> のときは <code>false</code> になり、<code>filter(Boolean)</code> で取り除かれます。
+            条件付きのクラスが 2 つ、3 つと増えても、配列に要素を足すだけで済みます。この書き方はステップ 5 の <code>Button</code> でも使います。
+          </p>
+          <p>ビルドして、生成された HTML の中でクラス名がどう変換されているかを見てみます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line">✓ Compiled successfully in 2.5s</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 1354ms ...</span><span class="terminal__line">✓ Generating static pages using 10 workers (13/13) in 818ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -o 'class="[^"]*header[^"]*"' .next/server/app/index.html</span><span class="terminal__line">class="Header-module-scss-module__9ruwhW__header"</span></pre>
+</div>
+
+          <p>
+            <code>Header.module.scss</code> の <code>.header</code> が、<code>&lt;ファイル名&gt;-module-scss-module__&lt;ハッシュ&gt;__&lt;元のクラス名&gt;</code> という形の名前になっています。
+            ビルド出力は一部を省略しています。ハッシュの部分は環境によって変わることがあります。
+          </p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>:global</code> が必要になる場面</p>
+              <p>
+                CSS Modules の中で、変換されない素のクラス名にスタイルを当てたいときは <code>:global(.foo) { ... }</code> と書いてグローバルスコープへ抜けます。
+                たとえば、外部ライブラリが出力する固定のクラス名を上書きする場合です。
+                このレッスンで作る <code>.module.scss</code> は自作の部品のクラスだけを対象にしているので、<code>:global</code> は登場しません。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>npm run build</code> がエラーなく終わり、生成された HTML の <code>header</code> クラスが <code>Header-module-scss-module__…__header</code> のようなハッシュ付きの名前になっていれば成功です。
+              <code>npm run dev</code> でブラウザを開き、ヘッダーの現在ページのリンクが 05 と同じく青色で強調されることも確かめておきましょう。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">共通の変数とミックスインを用意する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            色・余白・ブレークポイントなどの共通の値を <code>src/styles/_variables.scss</code> に、よく使うスタイルのまとまりを <code>src/styles/_mixins.scss</code> にまとめます。
+            ファイル名の先頭の <code>_</code> は、単独では CSS に変換しない「部品用のファイル（パーシャル）」であることを示す Sass の慣習です。
+          </p>
+          <p>ここで大事なのは、<strong>SCSS 変数（<code>$〜</code>）と CSS カスタムプロパティ（<code>--〜</code>）を使い分ける</strong>ことです。</p>
+          <table>
+            <thead>
+              <tr><th>種類</th><th>値が決まるタイミング</th><th>このレッスンで入れるもの</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>SCSS 変数 <code>$space-4</code></td><td>ビルド時に値へ展開される</td><td>ブレークポイント・余白スケール・角丸</td></tr>
+              <tr><td>CSS カスタムプロパティ <code>--color-bg</code></td><td>ブラウザで実行時に解決される</td><td>ライト/ダークで切り替わる色</td></tr>
+            </tbody>
+          </table>
+          <p>
+            04 で作った <code>ThemeToggle</code> は、<code>html</code> 要素の <code>data-theme</code> 属性を <code>"dark"</code> / <code>"light"</code> に切り替えます。
+            SCSS 変数はビルド時に値が埋め込まれてしまうため、この属性に応じて色を変えられません。
+            そこで、切り替わる色は CSS カスタムプロパティにして <code>:root</code> に出し、<code>:root[data-theme="dark"]</code> で値を上書きします。
+            この仕組み自体は 05 までの <code>globals.scss</code> と同じで、<code>:root</code> の定義も引き続き <code>globals.scss</code> に置きます。
+            <code>_variables.scss</code> はその値の元になる SCSS 変数だけを持ち、CSS そのもの（<code>:root</code> など）は書きません。理由はステップ 3 で説明します。
+            変数名は <code>--background</code> / <code>--foreground</code> から <code>--color-bg</code> / <code>--color-fg</code> などに整理し、境界線や補助テキストの色を加えます。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/styles/_variables.scss（新規）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">// 色・余白・ブレークポイント・角丸などをまとめた共通変数（$ 変数のみ）。
+//
+// このファイルには CSS を出力する記述（:root や @media など）を書かない。
+// additionalData により全ての .module.scss にこのファイルが @use されるが、
+// module.scss はそれぞれ別のコンパイル単位としてビルドされるため、
+// ここに :root を書くと module.scss の数だけ CSS が複製されてしまう。
+// 実際の CSS カスタムプロパティの出力は globals.scss（1 回しか @use されない）で行う。
+
+// ブレークポイント（mixins.scss の mq() から使う）
+$breakpoint-sm: 480px;
+$breakpoint-md: 768px;
+$breakpoint-lg: 960px;
+
+// 余白スケール（4px 刻み）
+$space-1: 0.25rem; // 4px
+$space-2: 0.5rem; // 8px
+$space-3: 0.75rem; // 12px
+$space-4: 1rem; // 16px
+$space-6: 1.5rem; // 24px
+$space-8: 2rem; // 32px
+
+// 角丸
+$radius-sm: 6px;
+$radius-full: 999px;
+
+// ライト/ダークで変わらない色（アクセントカラーなど）
+$color-accent: #0070f3;
+
+// ライトテーマの色（globals.scss の :root の既定値に使う）
+$color-bg-light: #ffffff;
+$color-fg-light: #171717;
+$color-border-light: #e5e5e5;
+$color-text-muted-light: #666666;
+$color-text-subtle-light: #888888;
+$color-surface-light: #ffffff;
+
+// ダークテーマの色（globals.scss の prefers-color-scheme / data-theme で使う）
+$color-bg-dark: #0a0a0a;
+$color-fg-dark: #ededed;
+$color-border-dark: #333333;
+$color-text-muted-dark: #a1a1a1;
+$color-text-subtle-dark: #888888;
+$color-surface-dark: #141414;</code></pre>
+</div>
+
+          <p>
+            アクセントカラーのようにテーマで変わらない値も、CSS カスタムプロパティ側に出しておくと、部品からは <code>var(--color-accent)</code> の 1 通りで参照できます。
+            SCSS 変数を CSS カスタムプロパティの値に入れるときは、<code>#{$color-accent}</code> のように <code>#{}</code>（インターポレーション）で囲みます。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/styles/_mixins.scss（新規）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">// 共通で使うミックスイン。
+@use "sass:map";
+@use "variables" as vars;
+
+// ブレークポイント名を指定してメディアクエリを書くためのミックスイン。
+// 例: @include mq(md) { flex-direction: column; }
+$breakpoints: (
+  sm: vars.$breakpoint-sm,
+  md: vars.$breakpoint-md,
+  lg: vars.$breakpoint-lg,
+);
+
+@mixin mq($name) {
+  $width: map.get($breakpoints, $name);
+
+  @if $width == null {
+    @error "mq: 不明なブレークポイント名です (#{$name})。sm / md / lg を使ってください。";
+  }
+
+  @media (max-width: $width) {
+    @content;
+  }
+}
+
+// キーボード操作時のフォーカスリング。マウス操作時（:focus のみで :focus-visible ではない場合）には出さない。
+@mixin focus-ring {
+  &amp;:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+}
+
+// ボタンの見た目をリセットして、テキストリンクのように使いたいときに使う。
+@mixin button-reset {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>mq($name)</code>: ブレークポイント名（<code>sm</code> / <code>md</code> / <code>lg</code>）を渡すと、その幅<strong>以下</strong>に効くメディアクエリを出力します。<code>@content</code> の位置に、呼び出し側のブロックの中身が入ります。存在しない名前を渡すと <code>@error</code> でビルドを止めます。</li>
+            <li><code>focus-ring</code>: キーボードで操作したときだけ（<code>:focus-visible</code>）フォーカス枠を出します。</li>
+            <li><code>button-reset</code>: <code>&lt;button&gt;</code> の既定の見た目を消して、テキストのように使うためのリセットです。</li>
+          </ul>
+          <p>
+            <code>_mixins.scss</code> の先頭では、<code>@use "variables" as vars;</code> で変数を <code>vars.$breakpoint-sm</code> のように名前空間付きで読み込んでいます。
+            <code>@use "sass:map";</code> は Sass の組み込みモジュールで、<code>map.get()</code> を使うために読み込みます。
+          </p>
+          <p>
+            最後に、<code>globals.scss</code> を書き換えます。<code>:root</code> の構造はそのまま残し、直接書いていた色（<code>#ffffff</code> など）を <code>_variables.scss</code> の <code>$color-bg-light</code> のような SCSS 変数からの <code>#{}</code>（インターポレーション）に置き換え、変数名を <code>--background</code> / <code>--foreground</code> から <code>--color-bg</code> / <code>--color-fg</code> などに整理します。
+            この時点ではまだ <code>sassOptions</code> を設定していないので、ファイルの先頭に <code>@use "variables" as *;</code> を手書きします。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/styles/globals.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+ @use "variables" as *;</span><span class="diff-line">  :root {</span><span class="diff-line diff-line--remove">-   --background: #ffffff;</span><span class="diff-line diff-line--remove">-   --foreground: #171717;</span><span class="diff-line diff-line--add">+   // ライトテーマを既定値とする（あとの prefers-color-scheme / data-theme が上書きする）。</span><span class="diff-line diff-line--add">+   --color-bg: #{$color-bg-light};</span><span class="diff-line diff-line--add">+   --color-fg: #{$color-fg-light};</span><span class="diff-line diff-line--add">+   --color-border: #{$color-border-light};</span><span class="diff-line diff-line--add">+   --color-text-muted: #{$color-text-muted-light};</span><span class="diff-line diff-line--add">+   --color-text-subtle: #{$color-text-subtle-light};</span><span class="diff-line diff-line--add">+   --color-accent: #{$color-accent};</span><span class="diff-line diff-line--add">+   --color-surface: #{$color-surface-light};</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+   --radius-sm: #{$radius-sm};</span><span class="diff-line diff-line--add">+   --radius-full: #{$radius-full};</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ // OS のダークモード設定に追従する（ThemeToggle が data-theme を明示していない場合）。</span><span class="diff-line">  @media (prefers-color-scheme: dark) {</span><span class="diff-line">    :root {</span><span class="diff-line diff-line--remove">-     --background: #0a0a0a;</span><span class="diff-line diff-line--remove">-     --foreground: #ededed;</span><span class="diff-line diff-line--add">+     --color-bg: #{$color-bg-dark};</span><span class="diff-line diff-line--add">+     --color-fg: #{$color-fg-dark};</span><span class="diff-line diff-line--add">+     --color-border: #{$color-border-dark};</span><span class="diff-line diff-line--add">+     --color-text-muted: #{$color-text-muted-dark};</span><span class="diff-line diff-line--add">+     --color-text-subtle: #{$color-text-subtle-dark};</span><span class="diff-line diff-line--add">+     --color-surface: #{$color-surface-dark};</span><span class="diff-line diff-line--add">+     color-scheme: dark;</span><span class="diff-line">    }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  // ThemeToggle が html 要素に付与する data-theme 属性による、明示的な切り替え。</span><span class="diff-line">  // OS 設定（prefers-color-scheme）より優先させるため、あとに書く。</span><span class="diff-line">  :root[data-theme="dark"] {</span><span class="diff-line diff-line--remove">-   --background: #0a0a0a;</span><span class="diff-line diff-line--remove">-   --foreground: #ededed;</span><span class="diff-line diff-line--add">+   --color-bg: #{$color-bg-dark};</span><span class="diff-line diff-line--add">+   --color-fg: #{$color-fg-dark};</span><span class="diff-line diff-line--add">+   --color-border: #{$color-border-dark};</span><span class="diff-line diff-line--add">+   --color-text-muted: #{$color-text-muted-dark};</span><span class="diff-line diff-line--add">+   --color-text-subtle: #{$color-text-subtle-dark};</span><span class="diff-line diff-line--add">+   --color-surface: #{$color-surface-dark};</span><span class="diff-line">    color-scheme: dark;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  :root[data-theme="light"] {</span><span class="diff-line diff-line--remove">-   --background: #ffffff;</span><span class="diff-line diff-line--remove">-   --foreground: #171717;</span><span class="diff-line diff-line--add">+   --color-bg: #{$color-bg-light};</span><span class="diff-line diff-line--add">+   --color-fg: #{$color-fg-light};</span><span class="diff-line diff-line--add">+   --color-border: #{$color-border-light};</span><span class="diff-line diff-line--add">+   --color-text-muted: #{$color-text-muted-light};</span><span class="diff-line diff-line--add">+   --color-text-subtle: #{$color-text-subtle-light};</span><span class="diff-line diff-line--add">+   --color-surface: #{$color-surface-light};</span><span class="diff-line">    color-scheme: light;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  html {</span><span class="diff-line">  ...</span><span class="diff-line">  body {</span><span class="diff-line">    min-height: 100%;</span><span class="diff-line">    display: flex;</span><span class="diff-line">    flex-direction: column;</span><span class="diff-line diff-line--remove">-   color: var(--foreground);</span><span class="diff-line diff-line--remove">-   background: var(--background);</span><span class="diff-line diff-line--add">+   color: var(--color-fg);</span><span class="diff-line diff-line--add">+   background: var(--color-bg);</span><span class="diff-line">    font-family: Arial, Helvetica, sans-serif;</span><span class="diff-line">    -webkit-font-smoothing: antialiased;</span><span class="diff-line">    -moz-osx-font-smoothing: grayscale;</span><span class="diff-line">  }</span><span class="diff-line">  ...</span><span class="diff-line">  a {</span><span class="diff-line">    color: inherit;</span><span class="diff-line">    text-decoration: none;</span><span class="diff-line">  }</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">- @media (prefers-color-scheme: dark) {</span><span class="diff-line diff-line--remove">-   html {</span><span class="diff-line diff-line--remove">-     color-scheme: dark;</span><span class="diff-line diff-line--remove">-   }</span><span class="diff-line diff-line--remove">- }</span></pre>
+</div>
+
+          <p>
+            05 の末尾にあった <code>html { color-scheme: dark; }</code> のメディアクエリも削除しています。
+            <code>color-scheme</code> の指定は、すでに <code>:root[data-theme="dark"]</code> / <code>:root[data-theme="light"]</code> と <code>prefers-color-scheme: dark</code> の <code>:root</code> に書いてあるので不要でした。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@import</code> ではなく <code>@use</code> を使う</p>
+              <p>
+                Sass には古い読み込み方の <code>@import</code> もありますが、Dart Sass では非推奨です。
+                <code>@import</code> は読み込むたびに変数やミックスインをグローバルな名前空間に展開するため、同じファイルを複数の場所から読み込むと多重に展開され、警告や重複の原因になります。
+                <code>@use</code> はモジュールを 1 回だけ評価し、既定では <code>variables.$space-4</code> のように名前空間越しに参照します。
+                <code>as *</code> を付けると名前空間を省略して <code>$space-4</code> と書けます。
+              </p><p>
+                ただし「1 回だけ評価」は<strong>そのファイルの中で</strong> 1 回という意味です。ステップ 3 で導入する <code>additionalData</code> は <code>@use</code> を <strong>SCSS ファイルごと</strong>に差し込むため、<code>.module.scss</code> が 10 個あれば <code>@use</code> も 10 回評価されます。
+                <code>@use</code> されたファイルが変数の定義だけならファイルごとに再評価されても問題になりませんが、<code>:root</code> のように実際に CSS を出力する記述が入っていると、その CSS が <code>.module.scss</code> の数だけ複製されてしまいます。
+                そのため <code>_variables.scss</code> / <code>_mixins.scss</code> には CSS を出力する記述を書かず、<code>:root</code> の出力は 1 回しか <code>@use</code> されない <code>globals.scss</code> だけに置いています。
+              </p>
+            </div>
+          </div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">✓ Compiled successfully in 314ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 949ms ...</span><span class="terminal__line">✓ Generating static pages using 10 workers (13/13) in 756ms</span></pre>
+</div>
+
+          <p>この時点では、変数を使っているのは <code>globals.scss</code> だけです。各部品の <code>.module.scss</code> はまだ直接値を書いたままで、次のステップで書き換えます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>src/styles/_variables.scss</code> と <code>src/styles/_mixins.scss</code> ができ、<code>npm run build</code> がエラーなく終われば成功です。
+              <code>npm run dev</code> でブラウザを開き、ヘッダーのテーマ切り替えボタンで背景色と文字色がライト/ダークに切り替わることも確かめておきましょう。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>sassOptions</code> で変数とミックスインを自動で読み込ませる</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            このままでは、各 <code>.module.scss</code> で変数を使うたびに <code>@use "../../../styles/variables" as *;</code> のような相対パスを書く必要があります。
+            そこで <code>next.config.ts</code> の <code>sassOptions</code> を使い、すべての SCSS ファイルの先頭に <code>@use</code> を自動で差し込みます（自動プレリュード）。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">next.config.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import type { NextConfig } from "next";</span><span class="diff-line diff-line--add">+ import path from "node:path";</span><span class="diff-line"> </span><span class="diff-line">  const nextConfig: NextConfig = {</span><span class="diff-line diff-line--remove">-   /* config options here */</span><span class="diff-line diff-line--add">+   sassOptions: {</span><span class="diff-line diff-line--add">+     loadPaths: [path.join(process.cwd(), "src/styles")],</span><span class="diff-line diff-line--add">+     additionalData: '@use "variables" as *; @use "mixins" as *;',</span><span class="diff-line diff-line--add">+   },</span><span class="diff-line">  };</span><span class="diff-line"> </span><span class="diff-line">  export default nextConfig;</span></pre>
+</div>
+
+          <ul>
+            <li><code>additionalData</code>: SCSS としてコンパイルされる<strong>すべてのファイル</strong>（<code>globals.scss</code> も <code>.module.scss</code> も）の先頭に、この文字列を挿入します。これで、どのファイルからも <code>$space-4</code> や <code>@include mq(md)</code> をそのまま書けます。</li>
+            <li><code>loadPaths</code>: <code>@use "variables"</code> の <code>"variables"</code> を探すディレクトリです。<code>src/styles/</code> を指定しているので、<code>src/styles/_variables.scss</code> が見つかります。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>includePaths</code> は使えない</p>
+              <p>
+                最初に <code>sassOptions</code> を古い Sass API のオプション名である <code>includePaths: ["./src/styles"]</code> だけで書いてビルドすると、<code>.module.scss</code> を含むすべての SCSS ファイルで次のエラーになります。
+                <code>includePaths</code> を <code>path.join(process.cwd(), "src/styles")</code> のような絶対パスに変えても結果は同じでした。
+              </p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">Error: Turbopack build failed with 15 errors:</span><span class="terminal__line">./nextjs/06-styling/src/app/(marketing)/contact/page.module.scss</span><span class="terminal__line">Error: Error evaluating Node.js code</span><span class="terminal__line">Error: Can't find stylesheet to import.</span><span class="terminal__line">  ╷</span><span class="terminal__line">1 │ @use "variables" as *; @use "mixins" as *;</span><span class="terminal__line">  │ ^^^^^^^^^^^^^^^^^^^^^</span><span class="terminal__line">  ╵</span><span class="terminal__line">  src/app/(marketing)/contact/page.module.scss 1:1  root stylesheet</span><span class="terminal__line">（以下略）</span></pre>
+</div>
+<p>
+                現在の Dart Sass の API では、このディレクトリ指定は <code>loadPaths</code> という名前に変わっています。
+                Next.js 16 の sass-loader は modern API を使うため、<code>includePaths</code> を渡しても無視されます（Turbopack だけでなく webpack でビルドしたときも同じでした）。
+                <code>includePaths</code> は削除し、<code>loadPaths</code> だけを書きます。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            <code>globals.scss</code> にも <code>additionalData</code> が差し込まれるようになったので、ステップ 2 で書いた <code>@use "variables" as *;</code> は不要になります。削除して、代わりにコメントを残します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/styles/globals.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">- @use "variables" as *;</span><span class="diff-line diff-line--add">+ // 変数・ミックスインは next.config.ts の sassOptions.additionalData により</span><span class="diff-line diff-line--add">+ // このファイルにも自動で @use されるため、ここで明示的に書く必要はない。</span><span class="diff-line diff-line--add">+ //</span><span class="diff-line diff-line--add">+ // CSS カスタムプロパティ（--color-bg など）の実体は、$ 変数から生成して</span><span class="diff-line diff-line--add">+ // このファイルにだけ出力する。globals.scss は layout.tsx から 1 回しか</span><span class="diff-line diff-line--add">+ // @use（import）されないため、ここに書いても複製されない</span><span class="diff-line diff-line--add">+ // （_variables.scss / _mixins.scss には書かない理由も同じ）。</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  :root {</span><span class="diff-line">    // ライトテーマを既定値とする（あとの prefers-color-scheme / data-theme が上書きする）。</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@use</code> が 2 回あってもエラーにはならなかった</p>
+              <p>
+                手書きの <code>@use "variables" as *;</code> を残したままでも、ビルドはエラーになりませんでした。
+                差し込まれる <code>@use</code> と手書きの <code>@use</code> が、同じファイルを同じ名前空間（どちらも <code>as *</code>）で読み込んでいたためです。
+                それでも削除するのは、<code>additionalData</code> を変えたときに手書き側の直し忘れが起きるのを防ぐためです。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            準備ができたので、各部品の <code>.module.scss</code> を変数とミックスインを使う形に書き換えます。書き換えのパターンは次の 4 つです。
+          </p>
+          <ul>
+            <li>直接書いていた余白や角丸の値（<code>1rem</code>、<code>6px</code> など）→ <code>$space-*</code> / <code>$radius-*</code></li>
+            <li>直接書いていた色（<code>#e5e5e5</code>、<code>#0070f3</code>、<code>#666</code> など）→ <code>var(--color-border)</code>、<code>var(--color-accent)</code>、<code>var(--color-text-muted)</code> など</li>
+            <li>リンクやボタン、入力欄へのフォーカス枠の追加 → <code>@include focus-ring</code></li>
+            <li><code>&lt;button&gt;</code> の見た目のリセット → <code>@include button-reset</code></li>
+          </ul>
+          <p>代表として、<code>Header.module.scss</code> と <code>Collapsible.module.scss</code> の変更を示します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/_components/Header/Header.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  .header {</span><span class="diff-line diff-line--remove">-   border-bottom: 1px solid #e5e5e5;</span><span class="diff-line diff-line--remove">-   padding: 1rem 2rem;</span><span class="diff-line diff-line--add">+   border-bottom: 1px solid var(--color-border);</span><span class="diff-line diff-line--add">+   padding: $space-4 $space-8;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .nav {</span><span class="diff-line diff-line--remove">-   max-width: 960px;</span><span class="diff-line diff-line--add">+   max-width: $breakpoint-lg;</span><span class="diff-line">    margin: 0 auto;</span><span class="diff-line">    display: flex;</span><span class="diff-line">    align-items: center;</span><span class="diff-line">    justify-content: space-between;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+   @include mq(sm) {</span><span class="diff-line diff-line--add">+     flex-direction: column;</span><span class="diff-line diff-line--add">+     align-items: flex-start;</span><span class="diff-line diff-line--add">+     gap: $space-3;</span><span class="diff-line diff-line--add">+   }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .list {</span><span class="diff-line">    display: flex;</span><span class="diff-line diff-line--remove">-   gap: 1.5rem;</span><span class="diff-line diff-line--add">+   gap: $space-6;</span><span class="diff-line">    list-style: none;</span><span class="diff-line">    margin: 0;</span><span class="diff-line">    padding: 0;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .link {</span><span class="diff-line diff-line--remove">-   color: #666;</span><span class="diff-line diff-line--add">+   color: var(--color-text-muted);</span><span class="diff-line">    text-decoration: none;</span><span class="diff-line">    font-weight: 500;</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+   @include focus-ring;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">    &amp;:hover {</span><span class="diff-line diff-line--remove">-     color: #111;</span><span class="diff-line diff-line--add">+     color: var(--color-fg);</span><span class="diff-line">    }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .linkActive {</span><span class="diff-line diff-line--remove">-   color: #0070f3;</span><span class="diff-line diff-line--add">+   color: var(--color-accent);</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            <code>.nav</code> には <code>@include mq(sm)</code> を加え、画面幅が 480px 以下のときはナビゲーションとテーマ切り替えボタンを縦に並べます。
+            ミックスインの中に書いたプロパティは、<code>@media (max-width: 480px) { .nav { ... } }</code> として出力されます。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/Collapsible/Collapsible.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  .collapsible {</span><span class="diff-line diff-line--remove">-   margin-top: 2rem;</span><span class="diff-line diff-line--remove">-   padding-top: 1rem;</span><span class="diff-line diff-line--remove">-   border-top: 1px solid #e5e5e5;</span><span class="diff-line diff-line--add">+   margin-top: $space-8;</span><span class="diff-line diff-line--add">+   padding-top: $space-4;</span><span class="diff-line diff-line--add">+   border-top: 1px solid var(--color-border);</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .summary {</span><span class="diff-line">    display: flex;</span><span class="diff-line">    align-items: center;</span><span class="diff-line">    gap: 0.375rem;</span><span class="diff-line diff-line--remove">-   border: none;</span><span class="diff-line diff-line--remove">-   background: none;</span><span class="diff-line diff-line--remove">-   padding: 0;</span><span class="diff-line">    font-size: 1rem;</span><span class="diff-line">    font-weight: 700;</span><span class="diff-line diff-line--remove">-   color: inherit;</span><span class="diff-line diff-line--remove">-   cursor: pointer;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+   @include button-reset;</span><span class="diff-line diff-line--add">+   @include focus-ring;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .icon {</span><span class="diff-line">    font-size: 0.75rem;</span><span class="diff-line diff-line--remove">-   color: #888;</span><span class="diff-line diff-line--add">+   color: var(--color-text-subtle);</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .body {</span><span class="diff-line diff-line--remove">-   margin-top: 0.75rem;</span><span class="diff-line diff-line--add">+   margin-top: $space-3;</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            <code>.summary</code> にあった <code>border</code> / <code>background</code> / <code>padding</code> / <code>color</code> / <code>cursor</code> のリセットは、<code>@include button-reset</code> の 1 行にまとまりました。
+            残りの 2 ファイル（<code>ThemeToggle.module.scss</code> と <code>PostFilter.module.scss</code>）も、同じパターンで書き換えます。書き換え後の全文は次のとおりです。
+          </p>
+
+<details class="disclosure">
+  <summary class="disclosure__summary">src/components/ThemeToggle/ThemeToggle.module.scss の全文</summary>
+  <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/components/ThemeToggle/ThemeToggle.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.toggle {
+  border: 1px solid var(--color-border);
+  border-radius: $radius-full;
+  background: none;
+  padding: 0.375rem 0.875rem;
+  font-size: 0.8125rem;
+  color: inherit;
+  cursor: pointer;
+
+  @include focus-ring;
+
+  &amp;:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+}</code></pre>
+</div>
+
+  </div>
+</details>
+
+<details class="disclosure">
+  <summary class="disclosure__summary">src/app/blog/_components/PostFilter/PostFilter.module.scss の全文</summary>
+  <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/app/blog/_components/PostFilter/PostFilter.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.input {
+  width: 100%;
+  max-width: 320px;
+  padding: $space-2 $space-3;
+  border: 1px solid var(--color-border);
+  border-radius: $radius-sm;
+  font-size: 0.9375rem;
+
+  @include focus-ring;
+}
+
+.count {
+  color: var(--color-text-subtle);
+  font-size: 0.8125rem;
+  margin-top: $space-2;
+}
+
+.list {
+  list-style: none;
+  margin: $space-4 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: $space-4;
+}
+
+.item {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: $space-4;
+}
+
+.itemTitle {
+  font-weight: 700;
+  color: var(--color-accent);
+}
+
+.itemAuthor {
+  color: var(--color-text-subtle);
+  font-size: 0.875rem;
+  margin-top: $space-1;
+}
+
+.itemBody {
+  color: var(--color-text-muted);
+  margin-top: $space-1;
+}
+
+.empty {
+  color: var(--color-text-subtle);
+  margin-top: $space-4;
+}</code></pre>
+</div>
+
+  </div>
+</details>
+
+          <p>
+            <code>LikeButton.module.scss</code> は、ステップ 5 でボタンの見た目を <code>Button</code> へ移すときに書き換えます。
+            ここで書き換えた 4 ファイルは、どれも <code>@use</code> を書いていないのに変数とミックスインを使えている点に注目してください。
+          </p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">発展: Sass で割り算をするときは <code>math.div</code></p>
+              <p>
+                このレッスンでは余白をすべて変数か固定値で書いたので、割り算は登場しません。
+                Dart Sass では <code>/</code> を割り算に使う書き方が非推奨になっています。<code>$space-8 / 2</code> のような計算をしたい場合は、<code>@use "sass:math";</code> を書いて <code>math.div($space-8, 2)</code> と書きます。
+              </p>
+            </div>
+          </div>
+<p>アプリをビルドします。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">✓ Compiled successfully in 505ms</span><span class="terminal__line">  Finished TypeScript in 911ms ...</span><span class="terminal__line">✓ Generating static pages using 10 workers (13/13) in 775ms</span></pre>
+</div>
+
+          <p>
+            続けて <code>npm run build-storybook</code> で Storybook もビルドします。
+            アプリのビルドは通りましたが、Storybook のビルドは次のエラーで失敗します。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build-storybook</span><span class="terminal__line">■  [plugin vite:css] ./src/components/Collapsible/Collapsible.module.scss</span><span class="terminal__line">■  Error: [sass] Undefined variable.</span><span class="terminal__line">│  ╷</span><span class="terminal__line">│  2 │   margin-top: $space-8;</span><span class="terminal__line">│  │               ^^^^^^^^</span></pre>
+</div>
+
+          <p>
+            05 で導入した <code>@storybook/nextjs-vite</code> は、Next.js の部品をそのまま表示できますが、ビルドには Vite を使います。
+            そのため <strong><code>next.config.ts</code> の <code>sassOptions</code> は Storybook には引き継がれません</strong>。
+            <code>.storybook/main.ts</code> の <code>viteFinal</code> で、Vite の Sass 設定（<code>css.preprocessorOptions.scss</code>）に同じ内容を渡します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">.storybook/main.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+ import path from "node:path";</span><span class="diff-line diff-line--add">+ import { fileURLToPath } from "node:url";</span><span class="diff-line">  import type { StorybookConfig } from '@storybook/nextjs-vite';</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ const dirname = path.dirname(fileURLToPath(import.meta.url));</span><span class="diff-line"> </span><span class="diff-line">  const config: StorybookConfig = {</span><span class="diff-line">    "stories": [</span><span class="diff-line">      "../src/**/*.stories.@(ts|tsx)"</span><span class="diff-line">    ],</span><span class="diff-line">    "addons": [</span><span class="diff-line">      "@chromatic-com/storybook",</span><span class="diff-line">      "@storybook/addon-vitest",</span><span class="diff-line">      "@storybook/addon-a11y",</span><span class="diff-line">      "@storybook/addon-docs",</span><span class="diff-line">      "@storybook/addon-mcp"</span><span class="diff-line">    ],</span><span class="diff-line">    "framework": "@storybook/nextjs-vite",</span><span class="diff-line">    "staticDirs": [</span><span class="diff-line">      "../public"</span><span class="diff-line diff-line--remove">-   ]</span><span class="diff-line diff-line--add">+   ],</span><span class="diff-line diff-line--add">+   // next.config.ts の sassOptions（Turbopack / webpack 用）は Storybook の Vite ビルドには</span><span class="diff-line diff-line--add">+   // 反映されないため、同じ内容を viteFinal でも設定する。</span><span class="diff-line diff-line--add">+   // Next.js と Storybook で Sass の前処理設定を二重管理している点に注意（どちらかだけ変更すると片方だけ壊れる）。</span><span class="diff-line diff-line--add">+   async viteFinal(config) {</span><span class="diff-line diff-line--add">+     return {</span><span class="diff-line diff-line--add">+       ...config,</span><span class="diff-line diff-line--add">+       css: {</span><span class="diff-line diff-line--add">+         ...config.css,</span><span class="diff-line diff-line--add">+         preprocessorOptions: {</span><span class="diff-line diff-line--add">+           ...config.css?.preprocessorOptions,</span><span class="diff-line diff-line--add">+           scss: {</span><span class="diff-line diff-line--add">+             ...config.css?.preprocessorOptions?.scss,</span><span class="diff-line diff-line--add">+             loadPaths: [path.join(dirname, "../src/styles")],</span><span class="diff-line diff-line--add">+             additionalData: '@use "variables" as *; @use "mixins" as *;',</span><span class="diff-line diff-line--add">+           },</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line diff-line--add">+       },</span><span class="diff-line diff-line--add">+     };</span><span class="diff-line diff-line--add">+   },</span><span class="diff-line">  };</span><span class="diff-line">  export default config;</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>.storybook/main.ts</code> では <code>__dirname</code> が使えない</p>
+              <p>
+                <code>.storybook/main.ts</code> は ES モジュールとして実行されるため、<code>path.join(__dirname, "../src/styles")</code> と書くと <code>ReferenceError: __dirname is not defined</code> になります。
+                上のコードのように、<code>fileURLToPath(import.meta.url)</code> からディレクトリのパスを求めて使います。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Sass の設定は 2 か所で管理する</p>
+              <p>
+                <code>additionalData</code> と読み込み先のディレクトリは、<code>next.config.ts</code> と <code>.storybook/main.ts</code> の 2 か所に同じ内容で書いています。
+                片方だけを変更すると、アプリか Storybook のどちらかだけがビルドできなくなります。変更するときは必ず両方を直してください。
+              </p>
+            </div>
+          </div>
+<p>もう一度 Storybook をビルドすると、今度は成功します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build-storybook</span><span class="terminal__line">（中略）</span><span class="terminal__line">│  Vite ✓ built in 505ms</span><span class="terminal__line">│</span><span class="terminal__line">◇  Output directory:</span><span class="terminal__line">│  /Users/kazuki/Work/handson/nextjs/06-styling/storybook-static</span><span class="terminal__line">│</span><span class="terminal__line">└  Storybook build completed successfully</span></pre>
+</div>
+
+          <p>Storybook のビルドでは <code>"use client"</code> に関する警告が出ますが、05 から出ているもので、エラーではありません。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>npm run build</code> と <code>npm run build-storybook</code> の両方がエラーなく終われば成功です。
+              書き換えた 4 つの <code>.module.scss</code> には <code>@use</code> の行がないことを確かめてください。
+              ブラウザでテーマを切り替えると、05 では色が固定だったヘッダーの境界線やリンクの色も、ライト/ダークに合わせて変わります。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">共通レイアウトとレスポンシブなサイドバーを作る</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            サイト全体のレイアウトを作ります。ルートレイアウト（<code>src/app/layout.tsx</code>）にヘッダー・本文・フッターの骨組みを置き、本文の最大幅とセンタリングをここで一括して指定します。
+            ルートレイアウト用のスタイルとして <code>layout.module.scss</code> を新しく作ります。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/app/layout.module.scss（新規）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.main {
+  flex: 1;
+  width: 100%;
+  max-width: $breakpoint-lg;
+  margin: 0 auto;
+  padding: $space-8 $space-4;
+}
+
+.footer {
+  border-top: 1px solid var(--color-border);
+  padding: $space-4 $space-8;
+  text-align: center;
+  color: var(--color-text-subtle);
+  font-size: 0.875rem;
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>.shell</code>: 縦方向の Flexbox で、最低でも画面の高さ（<code>100dvh</code>）を確保します。</li>
+            <li><code>.main</code>: <code>flex: 1</code> で残りの高さを占め、中身が少ないページでもフッターを画面の下端に置きます。<code>max-width</code> と <code>margin: 0 auto</code> で本文を中央に寄せます。</li>
+            <li><code>.footer</code>: 上に境界線を引いたフッターです。</li>
+          </ul>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/layout.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import type { Metadata } from "next";</span><span class="diff-line">  import { Geist, Geist_Mono } from "next/font/google";</span><span class="diff-line">  import { Header } from "./_components/Header";</span><span class="diff-line diff-line--add">+ import styles from "./layout.module.scss";</span><span class="diff-line">  import "@/styles/globals.scss";</span><span class="diff-line"> </span><span class="diff-line">  const geistSans = Geist({</span><span class="diff-line">  ...</span><span class="diff-line">    return (</span><span class="diff-line">      &lt;html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}&gt;</span><span class="diff-line">        &lt;body&gt;</span><span class="diff-line diff-line--remove">-         &lt;Header /&gt;</span><span class="diff-line diff-line--remove">-         {children}</span><span class="diff-line diff-line--add">+         &lt;div className={styles.shell}&gt;</span><span class="diff-line diff-line--add">+           &lt;Header /&gt;</span><span class="diff-line diff-line--add">+           &lt;main className={styles.main}&gt;{children}&lt;/main&gt;</span><span class="diff-line diff-line--add">+           &lt;footer className={styles.footer}&gt;</span><span class="diff-line diff-line--add">+             &lt;p&gt;© {new Date().getFullYear()} Handson Materials&lt;/p&gt;</span><span class="diff-line diff-line--add">+           &lt;/footer&gt;</span><span class="diff-line diff-line--add">+         &lt;/div&gt;</span><span class="diff-line">        &lt;/body&gt;</span><span class="diff-line">      &lt;/html&gt;</span><span class="diff-line">    );</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>ヘッダーは、スクロールしても画面の上端に残るよう <code>position: sticky</code> で固定します。背景色を指定しないと、下を流れる本文が透けて見えるので <code>background</code> も加えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/_components/Header/Header.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  .header {</span><span class="diff-line diff-line--add">+   position: sticky;</span><span class="diff-line diff-line--add">+   top: 0;</span><span class="diff-line diff-line--add">+   z-index: 10;</span><span class="diff-line">    border-bottom: 1px solid var(--color-border);</span><span class="diff-line">    padding: $space-4 $space-8;</span><span class="diff-line diff-line--add">+   background: var(--color-bg);</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .nav {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>
+            ヘッダーを sticky にしただけでは画面上端に固定されません。<code>globals.scss</code> の <code>html, body { overflow-x: hidden; }</code> も直します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/styles/globals.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  body {</span><span class="diff-line">    max-width: 100vw;</span><span class="diff-line diff-line--remove">-   overflow-x: hidden;</span><span class="diff-line diff-line--add">+   overflow-x: clip;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>overflow-x: hidden</code> を <code>html</code> / <code>body</code> に付けると sticky が効かない</p>
+              <p>
+                <code>position: sticky</code> は「最も近い、<code>overflow</code> を <code>visible</code> 以外に指定した祖先要素」を基準に位置を決めます。
+                <code>html, body { overflow-x: hidden; }</code> は <code>body</code> に <code>overflow</code> を明示するため、<code>body</code> 自身が新しいスクロールコンテナになってしまい、ヘッダーの sticky の基準がページ全体ではなく <code>body</code> の内側になってしまいます。
+                <code>overflow-x: clip</code> はスクロールコンテナを作らずに横方向のオーバーフローだけを隠せるため、こちらに変えます。
+              </p><p>
+                Playwright で確認すると、<code>overflow-x: clip</code> に変えたあとは <code>window.scrollTo(0, 400)</code> でページを縦にスクロールしても、ヘッダーの <code>getBoundingClientRect().top</code> は <code>0</code> のまま、<code>position</code> は <code>sticky</code> のままでした。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            ルートレイアウトが <code>&lt;main&gt;</code> を持つようになったので、各ページの一番外側の <code>&lt;main&gt;</code> を <code>&lt;div&gt;</code> に変えます。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">  export default function Home() {</span><span class="diff-line">    return (</span><span class="diff-line diff-line--remove">-     &lt;main className={styles.main}&gt;</span><span class="diff-line diff-line--add">+     &lt;div className={styles.main}&gt;</span><span class="diff-line">        &lt;h1 className={styles.title}&gt;Hello, Next.js!&lt;/h1&gt;</span><span class="diff-line">        &lt;p className={styles.version}&gt;Next.js v{version}&lt;/p&gt;</span><span class="diff-line">        &lt;Link href="/about" className={styles.link}&gt;</span><span class="diff-line">          About ページへ</span><span class="diff-line">        &lt;/Link&gt;</span><span class="diff-line diff-line--remove">-     &lt;/main&gt;</span><span class="diff-line diff-line--add">+     &lt;/div&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            同じ変更を <code>src/app/about/page.tsx</code> と <code>src/app/(marketing)/contact/page.tsx</code> にも加えます。<code>not-found.tsx</code> はもともと <code>&lt;div&gt;</code> なので変更しません。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>&lt;main&gt;</code> を入れ子にしない</p>
+              <p>
+                ページ側に <code>&lt;main&gt;</code> が残っていると、ルートレイアウトの <code>&lt;main&gt;</code> の中にもう 1 つ <code>&lt;main&gt;</code> がある、無効な構造になります。
+                共通のレイアウトに要素を追加するときは、ページ側の要素も合わせて見直しましょう。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            3 つのページの <code>page.module.scss</code> も整理します。本文の余白は共通レイアウトの <code>.main</code> が持つので、ページ側の <code>padding: 2rem;</code> は削除します。
+            トップページの <code>min-height: 100dvh</code> も、画面の高さは <code>.shell</code> が確保するので削除します。残りの値は変数に置き換えます。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  .main {</span><span class="diff-line">    display: flex;</span><span class="diff-line">    flex-direction: column;</span><span class="diff-line">    align-items: center;</span><span class="diff-line">    justify-content: center;</span><span class="diff-line diff-line--remove">-   min-height: 100dvh;</span><span class="diff-line diff-line--remove">-   gap: 0.5rem;</span><span class="diff-line diff-line--add">+   gap: $space-2;</span><span class="diff-line">    text-align: center;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .title {</span><span class="diff-line">    font-size: 2rem;</span><span class="diff-line">    font-weight: 700;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .version {</span><span class="diff-line diff-line--remove">-   color: #666;</span><span class="diff-line diff-line--add">+   color: var(--color-text-muted);</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .link {</span><span class="diff-line diff-line--remove">-   margin-top: 0.5rem;</span><span class="diff-line diff-line--remove">-   color: #0070f3;</span><span class="diff-line diff-line--add">+   margin-top: $space-2;</span><span class="diff-line diff-line--add">+   color: var(--color-accent);</span><span class="diff-line">    text-decoration: underline;</span><span class="diff-line">  }</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/about/page.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    display: flex;</span><span class="diff-line">    flex-direction: column;</span><span class="diff-line diff-line--remove">-   gap: 0.5rem;</span><span class="diff-line diff-line--remove">-   padding: 2rem;</span><span class="diff-line diff-line--add">+   gap: $space-2;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>src/app/(marketing)/contact/page.module.scss</code> の <code>.main</code> も、about と同じ変更にします。</p>
+          <p>
+            次に、<code>/blog</code> のサイドバーを CSS Grid で組み直します。
+            <code>blog/layout.tsx</code> は 02 で作ったもので、<code>.layout</code> の中にサイドバー（<code>.sidebar</code>）と本文（<code>.content</code>）を並べています。TSX は変更しません。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TSX</span>
+    <span class="code-block__filename">src/app/blog/layout.tsx（変更なし・参考）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import Link from "next/link";
+import { fetchPosts } from "@/features/posts/api/fetchPosts";
+import styles from "./layout.module.scss";
+
+export default async function BlogLayout({ children }: LayoutProps&lt;"/blog"&gt;) {
+  const posts = await fetchPosts();
+
+  return (
+    &lt;div className={styles.layout}&gt;
+      &lt;aside className={styles.sidebar}&gt;
+        &lt;p className={styles.sidebarTitle}&gt;記事一覧&lt;/p&gt;
+        &lt;ul className={styles.sidebarList}&gt;
+          {posts.map((post) =&gt; (
+            &lt;li key={post.slug}&gt;
+              &lt;Link href={`/blog/${post.slug}`}&gt;{post.title}&lt;/Link&gt;
+            &lt;/li&gt;
+          ))}
+        &lt;/ul&gt;
+      &lt;/aside&gt;
+      &lt;div className={styles.content}&gt;{children}&lt;/div&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/layout.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+ // サイドバー（200px 固定）+ 本文（残り全部）の 2 カラムを CSS Grid で組む。</span><span class="diff-line diff-line--add">+ // 768px 以下ではサイドバーを本文の上に積む 1 カラムに切り替える。</span><span class="diff-line">  .layout {</span><span class="diff-line diff-line--remove">-   display: flex;</span><span class="diff-line diff-line--remove">-   gap: 2rem;</span><span class="diff-line diff-line--remove">-   max-width: 960px;</span><span class="diff-line diff-line--remove">-   margin: 0 auto;</span><span class="diff-line diff-line--remove">-   padding: 2rem;</span><span class="diff-line diff-line--add">+   display: grid;</span><span class="diff-line diff-line--add">+   grid-template-columns: 200px 1fr;</span><span class="diff-line diff-line--add">+   gap: $space-8;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+   @include mq(md) {</span><span class="diff-line diff-line--add">+     grid-template-columns: 1fr;</span><span class="diff-line diff-line--add">+   }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .sidebar {</span><span class="diff-line diff-line--remove">-   flex: 0 0 200px;</span><span class="diff-line diff-line--add">+   @include mq(md) {</span><span class="diff-line diff-line--add">+     border-bottom: 1px solid var(--color-border);</span><span class="diff-line diff-line--add">+     padding-bottom: $space-4;</span><span class="diff-line diff-line--add">+   }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .sidebarTitle {</span><span class="diff-line">    font-weight: 700;</span><span class="diff-line diff-line--remove">-   margin-bottom: 0.5rem;</span><span class="diff-line diff-line--add">+   margin-bottom: $space-2;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .sidebarList {</span><span class="diff-line">    list-style: none;</span><span class="diff-line">    margin: 0;</span><span class="diff-line">    padding: 0;</span><span class="diff-line">    display: flex;</span><span class="diff-line">    flex-direction: column;</span><span class="diff-line diff-line--remove">-   gap: 0.5rem;</span><span class="diff-line diff-line--add">+   gap: $space-2;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  .content {</span><span class="diff-line diff-line--remove">-   flex: 1;</span><span class="diff-line">    min-width: 0;</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>grid-template-columns: 200px 1fr</code> で、1 列目を 200px 固定、2 列目を残り全部にします。05 までの Flexbox で子要素に書いていた <code>flex: 0 0 200px</code> / <code>flex: 1</code> は不要になり、列の幅を親の 1 か所で決められます。</li>
+            <li><code>@include mq(md)</code> で、768px 以下では 1 列（<code>1fr</code>）にしてサイドバーを本文の上に積みます。サイドバーの下には境界線を引いて本文と区切ります。</li>
+            <li><code>max-width</code> / <code>margin</code> / <code>padding</code> は、共通レイアウトの <code>.main</code> と重複するので削除しました。</li>
+          </ul>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">✓ Compiled successfully in 577ms</span><span class="terminal__line">  Finished TypeScript in 1096ms ...</span><span class="terminal__line">✓ Generating static pages using 10 workers (13/13) in 792ms</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run dev</code> でブラウザを開き、次の点を確かめます。</p>
+            <ul>
+              <li>ページをスクロールしても、ヘッダーが画面の上端に残る。</li>
+              <li><code>/blog</code> でブラウザの幅を 768px 以下に縮めると、サイドバーが本文の上に移る。さらに 480px 以下にすると、ヘッダーのナビゲーションが縦に並ぶ。</li>
+              <li>ページ内の <code>&lt;main&gt;</code> が 1 つだけになっている（開発者ツールのコンソールで <code>document.querySelectorAll("main").length</code> が <code>1</code> を返す）。</li>
+            </ul>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">バリアントを持つ <code>Button</code> コンポーネントを作る</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            再利用できる <code>Button</code> コンポーネントを <code>src/components/Button/</code> に作ります。
+            見た目の種類（<code>variant</code>）として <code>primary</code> / <code>secondary</code> / <code>ghost</code> の 3 つ、大きさ（<code>size</code>）として <code>sm</code> / <code>md</code> の 2 つを持たせます。
+          </p>
+          <p>
+            バリアントの切り替えには、<code>variant</code> と <code>size</code> を <strong><code>data-variant</code> / <code>data-size</code> 属性として DOM に出し、CSS の属性セレクタで見た目を変える</strong>方式を使います。
+            クラス名は常に <code>.button</code> の 1 つだけです。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TSX</span>
+    <span class="code-block__filename">src/components/Button/Button.tsx（新規）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import type { ButtonHTMLAttributes, ReactNode } from "react";
+import styles from "./Button.module.scss";
+
+type ButtonVariant = "primary" | "secondary" | "ghost";
+type ButtonSize = "sm" | "md";
+
+type ButtonProps = ButtonHTMLAttributes&lt;HTMLButtonElement&gt; &amp; {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  children: ReactNode;
+};
+
+// variant / size は className を出し分ける（styles[variant]）のではなく、
+// data-variant / data-size 属性として DOM に出し、CSS 側で属性セレクタ
+// （[data-variant="primary"] など）を使って切り替える方式にしている。
+// 理由は Button.module.scss 冒頭のコメントを参照。
+export function Button({
+  variant = "primary",
+  size = "md",
+  className,
+  children,
+  ...rest
+}: ButtonProps) {
+  return (
+    &lt;button
+      type="button"
+      className={[styles.button, className].filter(Boolean).join(" ")}
+      data-variant={variant}
+      data-size={size}
+      {...rest}
+    &gt;
+      {children}
+    &lt;/button&gt;
+  );
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>ButtonHTMLAttributes&lt;HTMLButtonElement&gt;</code> を型に含めているので、<code>onClick</code> や <code>aria-label</code> など <code>&lt;button&gt;</code> の属性をそのまま渡せます。受け取った残りの属性は <code>...rest</code> で <code>&lt;button&gt;</code> に渡します。</li>
+            <li>呼び出し側から <code>className</code> を渡されたときは、ステップ 1 と同じ <code>filter(Boolean).join(" ")</code> で <code>.button</code> と結合します。</li>
+          </ul>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/components/Button/Button.module.scss（新規）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">// variant / size を styles[variant] のような「クラス名の出し分け」ではなく、
+// [data-variant="..."] という属性セレクタで切り替えている。
+// - クラス名は常に .button 1 つだけなので、呼び出し側が className で見た目を拡張しやすい
+//   （styles[variant] 方式だと、拡張用の className と variant 用のクラスの結合を毎回書く必要がある）。
+// - devtools で data-variant="primary" のように見えるので、いま何が選ばれているか読みやすい。
+// 欠点は、DOM に data-variant / data-size がそのまま出るため、
+// 見た目の情報が漏れているように見える／CSS 側の実装詳細が伝わってしまう点。
+// なお Sass 側は &amp;[data-variant="#{$v}"] の形で @each と組み合わせられるため、
+// バリアント数が増えても map + @each で生成できる（今回は 3 種類なのでベタ書きしている）。
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  border: 1px solid transparent;
+  border-radius: $radius-full;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+
+  @include focus-ring;
+
+  &amp;[data-size="sm"] {
+    padding: $space-1 $space-3;
+    font-size: 0.8125rem;
+  }
+
+  &amp;[data-size="md"] {
+    padding: $space-2 $space-4;
+    font-size: 0.875rem;
+  }
+
+  &amp;[data-variant="primary"] {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: #ffffff;
+
+    &amp;:hover {
+      opacity: 0.9;
+    }
+  }
+
+  &amp;[data-variant="secondary"] {
+    background: var(--color-surface);
+    border-color: var(--color-border);
+    color: var(--color-fg);
+
+    &amp;:hover {
+      border-color: var(--color-accent);
+      color: var(--color-accent);
+    }
+  }
+
+  &amp;[data-variant="ghost"] {
+    background: none;
+    border-color: transparent;
+    color: var(--color-fg);
+
+    &amp;:hover {
+      background: var(--color-border);
+    }
+  }
+}</code></pre>
+</div>
+
+          <p>
+            <code>&amp;[data-variant="primary"]</code> は、<code>.button[data-variant="primary"]</code> に展開されます。
+            色はすべて CSS カスタムプロパティで指定しているので、テーマを切り替えると <code>secondary</code> と <code>ghost</code> の色も追従します。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/Button/index.ts（新規）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export { Button } from "./Button";</code></pre>
+</div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">もう 1 つの方式: <code>styles[variant]</code> でクラス名を出し分ける</p>
+              <p>
+                バリアントごとに <code>.primary</code> / <code>.secondary</code> のようなクラスを用意し、<code>className={[styles.button, styles[variant], styles[size]].join(" ")}</code> と出し分ける方式もあります。
+                <code>&amp;[data-variant="#{$v}"]</code> という書き方は <code>@each</code> とマップを組み合わせて生成できるので、属性方式でも <code>styles[variant]</code> 方式でも Sass 側の書きやすさに大きな差はありません（今回は 3 種類なのでどちらもベタ書きしています）。
+                違いは呼び出し側の見え方です。<code>styles[variant]</code> 方式は呼び出し側の <code>className</code> も加えると常に複数のクラスを結合することになり、開発者ツールにもハッシュ付きのクラス名が並んでどれがバリアント由来か分かりにくくなります。
+                このレッスンでは、次に作る <code>LikeButton</code> のように <code>className</code> を付けて再利用する場面があります。
+                そこで、クラスの結合が 1 パターンで済み、開発者ツールで <code>data-variant="primary"</code> と状態がそのまま読める属性方式を選びました。
+                欠点は、見た目の切り替えに使っている <code>data-variant</code> / <code>data-size</code> が DOM にそのまま出るため、CSS の実装詳細が漏れているように見える点です。
+              </p>
+            </div>
+          </div>
+
+          <p>Storybook のストーリーも作ります。<code>AllVariants</code> では、3 つの <code>variant</code> と 2 つの <code>size</code> の組み合わせ 6 通りを 1 画面に並べます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TSX</span>
+    <span class="code-block__filename">src/components/Button/Button.stories.tsx（新規）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import type { Meta, StoryObj } from "@storybook/nextjs-vite";
+import { Button } from "./Button";
+
+const meta = {
+  title: "Components/Button",
+  component: Button,
+  tags: ["autodocs"],
+  argTypes: {
+    variant: {
+      control: "radio",
+      options: ["primary", "secondary", "ghost"],
+    },
+    size: {
+      control: "radio",
+      options: ["sm", "md"],
+    },
+  },
+  args: {
+    children: "ボタン",
+  },
+} satisfies Meta&lt;typeof Button&gt;;
+
+export default meta;
+type Story = StoryObj&lt;typeof meta&gt;;
+
+export const Primary: Story = {
+  args: {
+    variant: "primary",
+  },
+};
+
+export const Secondary: Story = {
+  args: {
+    variant: "secondary",
+  },
+};
+
+export const Ghost: Story = {
+  args: {
+    variant: "ghost",
+  },
+};
+
+// variant（3 種類）× size（2 種類）の全組み合わせを 1 つのストーリーに並べて確認する。
+export const AllVariants: Story = {
+  render: (args) =&gt; (
+    &lt;div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}&gt;
+      {(["primary", "secondary", "ghost"] as const).map((variant) =&gt;
+        (["sm", "md"] as const).map((size) =&gt; (
+          &lt;Button key={`${variant}-${size}`} {...args} variant={variant} size={size}&gt;
+            {variant} / {size}
+          &lt;/Button&gt;
+        )),
+      )}
+    &lt;/div&gt;
+  ),
+};</code></pre>
+</div>
+
+          <p>
+            <code>argTypes</code> の <code>control: "radio"</code> で、Controls パネルの <code>variant</code> と <code>size</code> をラジオボタンで選べるようにしています。
+            <code>AllVariants</code> の <code>div</code> の <code>style</code> は、ストーリーの中だけで使う並べ方の指定です。
+          </p>
+          <p>
+            次に、04 で作った <code>LikeButton</code> の中の <code>&lt;button&gt;</code> を <code>Button</code> に置き換えます。
+            ボタン自身の見た目は <code>Button</code> の <code>secondary</code> に任せ、<code>LikeButton</code> はページの中に置いたときの余白だけを <code>className</code> で足します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButton.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  "use client";</span><span class="diff-line"> </span><span class="diff-line">  import { useState } from "react";</span><span class="diff-line diff-line--add">+ import { Button } from "@/components/Button";</span><span class="diff-line">  import styles from "./LikeButton.module.scss";</span><span class="diff-line"> </span><span class="diff-line">  type LikeButtonProps = {</span><span class="diff-line">  ...</span><span class="diff-line">    };</span><span class="diff-line"> </span><span class="diff-line">    return (</span><span class="diff-line diff-line--remove">-     &lt;button</span><span class="diff-line diff-line--remove">-       type="button"</span><span class="diff-line diff-line--remove">-       className={styles.button}</span><span class="diff-line diff-line--add">+     &lt;Button</span><span class="diff-line diff-line--add">+       variant="secondary"</span><span class="diff-line diff-line--add">+       className={styles.likeButton}</span><span class="diff-line">        onClick={handleClick}</span><span class="diff-line">        aria-label={`記事 ${postId} にいいねする`}</span><span class="diff-line">      &gt;</span><span class="diff-line">        👍 いいね {count}</span><span class="diff-line diff-line--remove">-     &lt;/button&gt;</span><span class="diff-line diff-line--add">+     &lt;/Button&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButton.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">- .button {</span><span class="diff-line diff-line--remove">-   display: inline-flex;</span><span class="diff-line diff-line--remove">-   align-items: center;</span><span class="diff-line diff-line--remove">-   gap: 0.375rem;</span><span class="diff-line diff-line--remove">-   margin-top: 1rem;</span><span class="diff-line diff-line--remove">-   padding: 0.5rem 1rem;</span><span class="diff-line diff-line--remove">-   border: 1px solid #e5e5e5;</span><span class="diff-line diff-line--remove">-   border-radius: 999px;</span><span class="diff-line diff-line--remove">-   background: #fff;</span><span class="diff-line diff-line--remove">-   color: #111;</span><span class="diff-line diff-line--remove">-   font-size: 0.875rem;</span><span class="diff-line diff-line--remove">-   font-weight: 500;</span><span class="diff-line diff-line--remove">-   cursor: pointer;</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-   &amp;:hover {</span><span class="diff-line diff-line--remove">-     border-color: #0070f3;</span><span class="diff-line diff-line--remove">-     color: #0070f3;</span><span class="diff-line diff-line--remove">-   }</span><span class="diff-line diff-line--add">+ // ボタン自体の見た目（色・角丸・パディングなど）は共通の Button コンポーネントに任せ、</span><span class="diff-line diff-line--add">+ // ここでは LikeButton をページ内に置いたときの余白だけを追加する。</span><span class="diff-line diff-line--add">+ .likeButton {</span><span class="diff-line diff-line--add">+   margin-top: $space-4;</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            05 で書いた <code>LikeButton.stories.tsx</code> は変更しません。
+            <code>play</code> 関数の <code>getByRole("button")</code> や <code>toHaveTextContent</code> は、<code>Button</code> が描画する実際の <code>&lt;button&gt;</code> 要素に対してそのまま働きます。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">✓ Compiled successfully in 433ms</span><span class="terminal__line">  Finished TypeScript in 1096ms ...</span><span class="terminal__line">✓ Generating static pages using 10 workers (13/13) in 779ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> npx vitest run --project=storybook</span><span class="terminal__line">（中略）</span><span class="terminal__line"> Test Files  4 passed (4)</span><span class="terminal__line">      Tests  11 passed (11)</span></pre>
+</div>
+
+          <p>
+            テストは 05 の 7 件に、<code>Button</code> の 4 つのストーリー（<code>Primary</code> / <code>Secondary</code> / <code>Ghost</code> / <code>AllVariants</code>）が加わって 11 件になりました。
+            05 で学んだとおり、<code>play</code> 関数のないストーリーも「エラーなく描画できるか」のテストになります。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>npm run storybook</code> で Storybook を開き、<strong>Components &gt; Button</strong> の <code>AllVariants</code> に 6 通りのボタンが並べば成功です。
+              <strong>Components &gt; LikeButton</strong> の <code>Default</code> が <code>secondary</code> の見た目になることも確かめます。
+              <code>ClickIncrementsCount</code> の Interactions パネルは、すべて成功（緑）になります。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">ビルド・テストと、生成されたクラス名を確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、アプリと Storybook の両方で、ビルド・lint・型チェック・テストがすべて通ることを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">✓ Compiled successfully in 433ms</span><span class="terminal__line">✓ Generating static pages using 10 workers (13/13) in 779ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 06-styling@0.1.0 lint</span><span class="terminal__line">&gt; eslint</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> npx tsc --noEmit</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build-storybook</span><span class="terminal__line">（中略）</span><span class="terminal__line">│  Vite ✓ built in 543ms</span><span class="terminal__line">└  Storybook build completed successfully</span><span class="terminal__line"><span class="terminal__prompt">$</span> npx vitest run --project=storybook</span><span class="terminal__line">（中略）</span><span class="terminal__line"> Test Files  4 passed (4)</span><span class="terminal__line">      Tests  11 passed (11)</span></pre>
+</div>
+
+          <p>
+            <code>npm run lint</code> と <code>npx tsc --noEmit</code> は、警告とエラーがなければ何も出力しません。
+            <code>npm run build</code> の <code>Running TypeScript ...</code> など、ステップ 1〜3 で見せた行の一部は上の出力では省略しています。ビルドにかかる時間は環境によって変わります。
+          </p>
+          <p>開発サーバーを起動し、別のターミナルから各ページの HTML に CSS Modules のクラス名が含まれていることを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run dev</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（別ターミナル）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s localhost:3000 | grep -o 'class="[^"]*module[^"]*"' | head -3</span><span class="terminal__line">class="geist_a71539c9-module__T19VSG__variable geist_mono_8d43a2aa-module__8Li5zG__variable"</span><span class="terminal__line">class="layout-module-scss-module__o3NLRq__shell"</span><span class="terminal__line">class="Header-module-scss-module__9ruwhW__header"</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s localhost:3000/blog | grep -o 'class="[^"]*module[^"]*"' | head -3</span><span class="terminal__line">class="geist_a71539c9-module__T19VSG__variable geist_mono_8d43a2aa-module__8Li5zG__variable"</span><span class="terminal__line">class="layout-module-scss-module__o3NLRq__shell"</span><span class="terminal__line">class="Header-module-scss-module__9ruwhW__header"</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s localhost:3000/blog/1 | grep -o 'class="[^"]*module[^"]*"' | tail -3</span><span class="terminal__line">class="page-module-scss-module__J2ewxa__title"</span><span class="terminal__line">class="page-module-scss-module__J2ewxa__body"</span><span class="terminal__line">class="Button-module-scss-module__kamjNq__button LikeButton-module-scss-module__YhCAkG__likeButton"</span></pre>
+</div>
+
+          <p>
+            ステップ 4 で作った <code>layout.module.scss</code> の <code>.shell</code> / <code>.main</code> も、<code>layout-module-scss-module__…</code> という一意な名前になっています。
+            先頭の <code>geist_…</code> は、<code>create-next-app</code> が用意した <code>next/font</code> のフォントが出力するクラスです。
+            最後の行では <code>class</code> 属性の中に <code>Button-module-scss-module__…__button</code> と <code>LikeButton-module-scss-module__…__likeButton</code> の 2 つの名前が空白区切りで並んでいます。
+            これはステップ 1 と同じ <code>filter(Boolean).join(" ")</code> によるもので、<code>Button</code> 自身のクラスと、<code>LikeButton</code> がステップ 5 で <code>className</code> として渡した余白用のクラスが結合された結果です。
+            確認できたら、開発サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で停止します。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              5 つのコマンドがすべてエラーなく終わり、テストが 11 件成功すれば完了です。
+              <code>curl</code> の結果に、<code>layout-module-scss-module__…</code> や <code>Header-module-scss-module__…</code> のようなハッシュ付きのクラス名が含まれていることも確かめます。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">生成された HTML で、<code>.module.scss</code> のクラス名がハッシュ付きの一意な名前に変換されていることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">ライト/ダークで変わる色を SCSS 変数ではなく CSS カスタムプロパティにする理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>@import</code> ではなく <code>@use</code> を使う理由と、<code>as *</code> の意味を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">Turbopack で <code>sassOptions</code> に <code>loadPaths</code> が必要なことと、Storybook では <code>viteFinal</code> に同じ設定が必要なことを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">ブラウザの幅を 768px 以下にして、<code>/blog</code> のサイドバーが本文の上に移ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>data-variant</code> 属性方式と <code>styles[variant]</code> 方式の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>npx vitest run --project=storybook</code> で 11 件のテストが成功した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">（発展）<code>Button</code> に <code>size</code> の <code>lg</code> を追加し、<code>Button.module.scss</code> と <code>Button.stories.tsx</code> の <code>argTypes</code> を更新した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">（発展）<code>blog/[slug]/page.module.scss</code> など、まだ色を直接書いている <code>.module.scss</code> を CSS カスタムプロパティに置き換え、ダークテーマで確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        共通の変数とミックスインを <code>src/styles/</code> にまとめ、<code>sassOptions.additionalData</code> ですべての SCSS ファイルから使えるようにしました。
+        ライト/ダークで変わる色は CSS カスタムプロパティ、ビルド時に決まる値は SCSS 変数と使い分け、Storybook にも同じ Sass の設定を入れました。
+        さらに、ルートレイアウトと CSS Grid でサイト全体のレイアウトを組み、<code>data-*</code> 属性でバリアントを切り替える <code>Button</code> コンポーネントを作りました。
+        次の項目では、Vitest と Testing Library でテストを書く方法を学びます。
+      </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">完成コード</p>
+              <p>このレッスンの完成コードは、ブランチ <code>nextjs/06-styling</code> の <code>nextjs/06-styling/</code> ディレクトリにあります。</p>
+            </div>
+          </div>
+
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../05-storybook/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">05: Storybook でのコンポーネントカタログ構築</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">07: テストの導入</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
