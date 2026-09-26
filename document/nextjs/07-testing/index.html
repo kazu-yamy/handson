@@ -1,0 +1,1278 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07: テストの導入 | Next.js ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Next.js</li>
+          <li aria-current="page">07</li>
+        </ol>
+        <h1 class="lesson-title">テストの導入</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 06 を終え、作った関数や部品が壊れていないことを自動で確かめたい人</li>
+          <li class="lesson-meta__item">📋 前提: <code>async</code> / <code>await</code> と Promise の基本が分かること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../06-styling/index.html">06: スタイリングとレイアウト実装</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>テストの種類と役割分担を説明でき、Storybook 用の Vitest プロジェクトの隣に jsdom で動く <code>unit</code> プロジェクトを追加できる</li>
+          <li>ロジックを純粋関数に切り出し、入力と出力だけでテストできる</li>
+          <li><code>render</code> / <code>screen</code> / <code>userEvent</code> でコンポーネントを操作して検証し、<code>getBy</code> / <code>queryBy</code> / <code>findBy</code> を使い分けられる</li>
+          <li><code>vi.stubGlobal</code> で <code>fetch</code> を差し替え、データ取得関数の正常系と異常系をテストできる</li>
+          <li>async なサーバーコンポーネントを <code>render(await Component())</code> でテストし、<code>vi.mock</code> でデータ取得を差し替えられる</li>
+          <li>カバレッジを計測して表を読み、生成物を ESLint の対象から外せる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        06 までで、ブログのページと再利用できる部品がそろいました。
+        このレッスンでは、関数や部品が期待どおりに動くことをコードで確かめる「自動テスト」を導入します。
+        テストがあれば、あとで部品を書き換えたときに壊れた箇所をコマンド 1 つで見つけられます。
+      </p>
+
+      <h3 id="test-types">テストの種類と役割分担</h3>
+      <p>フロントエンドのテストは、何を・どこで動かすかによって次のように分けられます。</p>
+      <table>
+        <thead>
+          <tr><th>種類</th><th>確かめるもの</th><th>実行環境</th><th>このトラックでの扱い</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>純粋関数のユニットテスト</td><td>入力に対する戻り値（例: <code>filterPosts</code>、<code>fetchPosts</code>）</td><td>Vitest の <code>unit</code> プロジェクト</td><td>07（このレッスン）</td></tr>
+          <tr><td>コンポーネントテスト</td><td>描画結果・操作による状態の変化・コールバックの呼び出し</td><td>Vitest の <code>unit</code> プロジェクト（jsdom）</td><td>07（このレッスン）</td></tr>
+          <tr><td>ブラウザテスト（Storybook の <code>play</code>）</td><td>ストーリーが描画できるか、簡単な操作の結果</td><td>Vitest の <code>storybook</code> プロジェクト（Playwright + Chromium）</td><td>05 で導入済み</td></tr>
+          <tr><td>E2E テスト</td><td>起動したアプリをブラウザで通しで操作した結果</td><td>実ブラウザ + 起動したサーバー</td><td>このトラックでは扱わない</td></tr>
+        </tbody>
+      </table>
+      <p>
+        jsdom は、ブラウザの DOM を Node.js 上で再現するライブラリです。
+        本物のブラウザを起動しないので速い反面、レイアウトの計算はしません。
+        たとえば jsdom では <code>getBoundingClientRect()</code> は幅と高さに 0 を返し、<code>IntersectionObserver</code> も用意されていません。
+        そのため、このトラックでは「見た目とブラウザでの動作は Storybook、ロジックの分岐や状態の変化は <code>unit</code> プロジェクト」と役割を分けます。
+      </p>
+
+      <h3 id="vitest-projects">05 の Storybook 用プロジェクトとの関係</h3>
+      <p>
+        05 で <code>storybook init</code> を実行したとき、Vitest の設定ファイル <code>vitest.config.ts</code> が作られました。
+        その <code>test.projects</code> には、ストーリーを Chromium で実行する <code>storybook</code> プロジェクトが 1 つだけ定義されています。
+        Vitest の <code>projects</code> を使うと、1 つの設定ファイルの中に、実行環境の違うテストのまとまりを複数並べられます。
+        このレッスンでは、この配列に jsdom で動く <code>unit</code> プロジェクトを追加します。
+        実行するときは <code>--project=unit</code> のように名前を指定して、片方だけを動かせます。
+      </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">出発点</p>
+              <p>
+                06 で使ったプロジェクトをそのまま使って続けます。06 の完成状態（共通の変数・レイアウト・<code>Button</code> コンポーネントがあり、Storybook のテストが 11 件成功する状態）がこのレッスンのスタート地点です。
+                作業を始める前に、<code>package.json</code> の <code>name</code> を <code>07-testing</code> に直しておきます。
+              </p>
+            </div>
+          </div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line diff-line--remove">-   "name": "06-styling",</span><span class="diff-line diff-line--add">+   "name": "07-testing",</span><span class="diff-line">    "version": "0.1.0",</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">使用バージョン</p>
+              <p>
+                テストまわりのバージョンは次のとおりです。Vitest 4.1.11 / @vitest/coverage-v8 4.1.11 / jsdom 30.1.1。
+                Testing Library は react 16.3.3 / jest-dom 7.0.1 / user-event 14.6.7 です（いずれも <code>@testing-library/</code> 配下）。
+                そのほかは 06 と同じ構成です（Node.js 24.21.0 / npm 11.19.0 / Next.js 16.3.6 / React 19.2.8 / Storybook 10.6.0）。執筆時点は 2026年9月です。
+              </p>
+            </div>
+          </div>
+
+      <p>レッスンを終えると、プロジェクトは次のように変わります（06 から変わらないファイルは省略しています）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">nextjs/07-testing/</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">eslint.config.mjs           # coverage/ を lint の対象から外す
+package.json                # テスト用のスクリプトを追加
+vitest.config.ts            # unit プロジェクトとカバレッジの設定を追加
+vitest.setup.ts             # 追加（unit プロジェクトのセットアップ）
+src/
+  app/
+    blog/
+      _components/
+        AuthorList/
+          AuthorList.test.tsx   # 追加
+        PostFilter/
+          PostFilter.tsx        # 絞り込みを filterPosts に置き換え
+  components/
+    Button/Button.test.tsx            # 追加
+    Collapsible/Collapsible.test.tsx  # 追加
+    LikeButton/LikeButton.test.tsx    # 追加
+  features/
+    posts/
+      api/
+        fetchPosts.test.ts    # 追加
+      lib/
+        filterPosts.ts        # 追加（絞り込みの純粋関数）
+        filterPosts.test.ts   # 追加</code></pre>
+</div>
+
+      <h2 id="step-by-step">手順</h2>
+      <p>作業はプロジェクトのディレクトリ（<code>nextjs/07-testing/</code>）で行います。</p>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">Vitest に <code>unit</code> プロジェクトを追加する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            まず、テストに使うパッケージをインストールします。
+            <code>@testing-library/react</code> はコンポーネントを描画して要素を探す道具、<code>@testing-library/user-event</code> はクリックや入力を再現する道具です。
+            <code>@testing-library/jest-dom</code> は <code>toBeInTheDocument()</code> のような DOM 向けの検証メソッド（マッチャー）を追加します。
+            <code>jsdom</code> は <code>unit</code> プロジェクトの実行環境、<code>@vitest/coverage-v8</code> はステップ 6 で使うカバレッジ計測のパッケージです。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm i -D @testing-library/react @testing-library/jest-dom @testing-library/user-event jsdom @vitest/coverage-v8@4.1.11</span><span class="terminal__line">added 40 packages, changed 1 package, and audited 595 packages in 2s</span><span class="terminal__line">209 packages are looking for funding</span><span class="terminal__line">found 0 vulnerabilities</span></pre>
+</div>
+
+          <p>
+            <code>@vitest/coverage-v8</code> にだけ <code>@4.1.11</code> とバージョンを付けています。
+            付けないとインストールが失敗します。理由はステップ 6 で説明します。
+            インストールすると、npm が <code>package.json</code> の <code>devDependencies</code> を書き換えます。
+            項目がアルファベット順に並べ替えられ、5 つのパッケージが追加されます。06 の時点で <code>"latest"</code> だった <code>@vitest/coverage-v8</code> の指定は <code>"^4.1.11"</code> に変わります。
+          </p>
+          <p>続いて、<code>package.json</code> にテスト用のスクリプトを 4 つ追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      "build": "next build",</span><span class="diff-line">      "start": "next start",</span><span class="diff-line">      "lint": "eslint",</span><span class="diff-line diff-line--add">+     "test": "vitest run --project=unit",</span><span class="diff-line diff-line--add">+     "test:watch": "vitest --project=unit",</span><span class="diff-line diff-line--add">+     "test:storybook": "vitest run --project=storybook",</span><span class="diff-line diff-line--add">+     "test:all": "vitest run",</span><span class="diff-line">      "storybook": "storybook dev -p 6006",</span><span class="diff-line">      "build-storybook": "storybook build"</span><span class="diff-line">    },</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <table>
+            <thead>
+              <tr><th>スクリプト</th><th>実行されるもの</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>npm run test</code></td><td><code>unit</code> プロジェクトを 1 回実行して終了する</td></tr>
+              <tr><td><code>npm run test:watch</code></td><td><code>unit</code> プロジェクトをウォッチモードで実行する（ファイルを保存するたびに再実行）</td></tr>
+              <tr><td><code>npm run test:storybook</code></td><td>05 で入った <code>storybook</code> プロジェクトを 1 回実行する</td></tr>
+              <tr><td><code>npm run test:all</code></td><td>両方のプロジェクトを実行する</td></tr>
+            </tbody>
+          </table>
+          <p>
+            次に、<code>unit</code> プロジェクト専用のセットアップファイル <code>vitest.setup.ts</code> をプロジェクト直下に作ります。
+            セットアップファイルは、各テストファイルの前に毎回実行されます。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">vitest.setup.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">// unit プロジェクト（jsdom）専用のセットアップファイル。
+// @testing-library/jest-dom の toBeInTheDocument() などのカスタムマッチャーを追加する。
+import "@testing-library/jest-dom/vitest";
+
+import { afterEach } from "vitest";
+import { cleanup } from "@testing-library/react";
+
+// test.globals を true にしていない（globals は使わず describe/it/expect を明示 import する方針）ため、
+// @testing-library/react が Jest/Vitest のグローバル afterEach を検出できず、
+// render() したコンポーネントが次のテストの DOM に残ってしまう。
+// そのため cleanup() をここで手動で afterEach に登録する。
+afterEach(() =&gt; {
+  cleanup();
+});</code></pre>
+</div>
+
+          <p>
+            1 行目の import で、jest-dom のマッチャーが Vitest の <code>expect</code> に追加されます。
+            後半の <code>afterEach(() =&gt; { cleanup(); })</code> は、テストごとに描画した要素を片付ける処理です。
+            このトラックでは <code>describe</code> / <code>it</code> / <code>expect</code> を毎回 <code>"vitest"</code> から import する方針にし、Vitest の <code>globals</code> オプションは有効にしません。
+            その場合、Testing Library は片付けを自動では登録しないので、ここに書いて登録します。
+            登録し忘れたときに何が起きるかは、ステップ 3 で実際のエラーを見ます。
+          </p>
+          <p>最後に、<code>vitest.config.ts</code> の <code>projects</code> に <code>unit</code> プロジェクトを追加します。あわせてカバレッジの設定も書いておきます（ステップ 6 で使います）。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">vitest.config.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // More info at: https://storybook.js.org/docs/next/writing-tests/integrations/vitest-addon</span><span class="diff-line">  export default defineConfig({</span><span class="diff-line">    test: {</span><span class="diff-line diff-line--add">+     // カバレッジはプロジェクト共通の設定として一箇所にまとめる（projects 個別には書かない）。</span><span class="diff-line diff-line--add">+     // src/**/*.stories.tsx（Storybook 用の見本コード）と src/app/**（ルーティング専用。</span><span class="diff-line diff-line--add">+     // ページ本体のロジックは features/components 側でテストする）は対象外にする。</span><span class="diff-line diff-line--add">+     coverage: {</span><span class="diff-line diff-line--add">+       provider: 'v8',</span><span class="diff-line diff-line--add">+       include: ['src/**'],</span><span class="diff-line diff-line--add">+       exclude: ['src/**/*.stories.tsx', 'src/app/**'],</span><span class="diff-line diff-line--add">+     },</span><span class="diff-line">      projects: [</span><span class="diff-line diff-line--add">+       {</span><span class="diff-line diff-line--add">+         // ブラウザに依存しない、通常のユニット / コンポーネントテスト（jsdom 環境）。</span><span class="diff-line diff-line--add">+         resolve: {</span><span class="diff-line diff-line--add">+           alias: {</span><span class="diff-line diff-line--add">+             '@': path.join(dirname, 'src'),</span><span class="diff-line diff-line--add">+           },</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line diff-line--add">+         test: {</span><span class="diff-line diff-line--add">+           name: 'unit',</span><span class="diff-line diff-line--add">+           environment: 'jsdom',</span><span class="diff-line diff-line--add">+           include: ['src/**/*.test.{ts,tsx}'],</span><span class="diff-line diff-line--add">+           setupFiles: [path.join(dirname, 'vitest.setup.ts')],</span><span class="diff-line diff-line--add">+           css: {</span><span class="diff-line diff-line--add">+             modules: {</span><span class="diff-line diff-line--add">+               // CSS Modules のクラス名をハッシュ化せずそのまま返す。</span><span class="diff-line diff-line--add">+               // テストでは実際のハッシュ値ではなく、元のクラス名（styles.button など）で</span><span class="diff-line diff-line--add">+               // アサーションしたいことが多いため。</span><span class="diff-line diff-line--add">+               classNameStrategy: 'non-scoped',</span><span class="diff-line diff-line--add">+             },</span><span class="diff-line diff-line--add">+           },</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line diff-line--add">+       },</span><span class="diff-line">        {</span><span class="diff-line">          extends: true,</span><span class="diff-line">          plugins: [</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><strong><code>resolve.alias</code></strong>: <code>tsconfig.json</code> の <code>paths</code> に書いた <code>@/</code> は、TypeScript の型チェックとエディタの補完にしか効きません。Vitest（Vite）がモジュールを探すときにも同じ対応が要るので、ここで <code>@</code> を <code>src</code> に向けます。</li>
+            <li><strong><code>environment: 'jsdom'</code></strong>: テストを jsdom の DOM の上で実行します。</li>
+            <li><strong><code>include</code></strong>: <code>src/</code> 配下の <code>*.test.ts</code> / <code>*.test.tsx</code> をテストファイルとして集めます。<code>*.stories.tsx</code> は <code>storybook</code> プロジェクトの担当です。</li>
+            <li><strong><code>css.modules.classNameStrategy: 'non-scoped'</code></strong>: CSS Modules のクラス名をハッシュ化せず、元の名前のまま扱う設定です。このレッスンのテストはクラス名を検証しないので必須ではありませんが、CSS Modules を使うプロジェクトでよく入れる設定として加えています。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>unit</code> には <code>extends: true</code> を付けない</p>
+              <p>
+                既存の <code>storybook</code> プロジェクトには <code>extends: true</code> が付いていて、ルートの設定を引き継ぎます。
+                <code>unit</code> プロジェクトは必要な設定をすべて自分で書くので、<code>extends: true</code> は付けていません。
+                なお、<code>tsconfig.json</code> は変更しません。
+                jest-dom のマッチャーの型は <code>@testing-library/jest-dom/vitest</code> の import で読み込まれるため、<code>types</code> への追記は不要でした。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>npm i</code> が <code>found 0 vulnerabilities</code> で終わることを確かめます。
+              <code>package.json</code> に <code>test</code> で始まるスクリプトが 4 つあり、<code>vitest.config.ts</code> の <code>projects</code> に <code>unit</code> と <code>storybook</code> が並んでいれば成功です。
+              テストファイルはまだ無いので、実行はステップ 2 で行います。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">絞り込みを純粋関数に切り出してテストする</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            最初のテストの題材は、04 で作った記事の絞り込みです。
+            06 までの <code>PostFilter</code> は、絞り込みの処理をコンポーネントの中に直接書いていました。
+            この形のままテストするには、コンポーネントを描画し、入力欄に文字を打ち込み、表示された件数を読む必要があります。
+          </p>
+          <p>
+            そこで、絞り込みの処理だけを <strong>純粋関数</strong>（同じ入力には必ず同じ出力を返し、外部の状態を変えない関数）として切り出します。
+            純粋関数なら、配列と検索語を渡して戻り値を比べるだけでテストできます。
+            「テストしやすい形に切り出す」ことは、ロジックと表示を分ける設計そのものでもあります。
+          </p>
+          <p><code>src/features/posts/lib/filterPosts.ts</code> を新しく作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/posts/lib/filterPosts.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export type FilterablePost = {
+  slug: string;
+  title: string;
+  body: string;
+  authorName: string;
+};
+
+/**
+ * 記事一覧を検索語で絞り込む。
+ * 大文字小文字を区別せず、title または body に検索語を含む記事だけを返す。
+ * query が空文字（前後の空白のみを含む）のときは全件を返す。
+ */
+export function filterPosts(posts: FilterablePost[], query: string): FilterablePost[] {
+  const normalizedQuery = query.trim().toLowerCase();
+
+  if (normalizedQuery === "") {
+    return posts;
+  }
+
+  return posts.filter((post) =&gt;
+    `${post.title} ${post.body}`.toLowerCase().includes(normalizedQuery),
+  );
+}</code></pre>
+</div>
+
+          <p><code>PostFilter.tsx</code> は、ローカルの型と絞り込みの処理を削除し、<code>filterPosts</code> を呼び出す 1 行に置き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/blog/_components/PostFilter/PostFilter.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import Link from "next/link";</span><span class="diff-line">  import { useState } from "react";</span><span class="diff-line diff-line--add">+ import { filterPosts, type FilterablePost } from "@/features/posts/lib/filterPosts";</span><span class="diff-line">  import styles from "./PostFilter.module.scss";</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- type PostListItem = {</span><span class="diff-line diff-line--remove">-   slug: string;</span><span class="diff-line diff-line--remove">-   title: string;</span><span class="diff-line diff-line--remove">-   body: string;</span><span class="diff-line diff-line--remove">-   authorName: string;</span><span class="diff-line diff-line--remove">- };</span><span class="diff-line diff-line--remove">- </span><span class="diff-line">  type PostFilterProps = {</span><span class="diff-line diff-line--remove">-   posts: PostListItem[];</span><span class="diff-line diff-line--add">+   posts: FilterablePost[];</span><span class="diff-line">  };</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">  // この PostFilter は受け取った posts を検索語で絞り込んで表示するだけの役割を持つ。</span><span class="diff-line">  // 「データ取得はサーバー、操作はクライアント」という役割分担の例。</span><span class="diff-line diff-line--add">+ // 絞り込みのロジック自体は filterPosts（純粋関数）に切り出してあり、</span><span class="diff-line diff-line--add">+ // PostFilter はそれを呼び出して結果を表示するだけになっている。</span><span class="diff-line">  export function PostFilter({ posts }: PostFilterProps) {</span><span class="diff-line">    const [query, setQuery] = useState("");</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-   const normalizedQuery = query.trim().toLowerCase();</span><span class="diff-line diff-line--remove">-   const filteredPosts =</span><span class="diff-line diff-line--remove">-     normalizedQuery === ""</span><span class="diff-line diff-line--remove">-       ? posts</span><span class="diff-line diff-line--remove">-       : posts.filter((post) =&gt;</span><span class="diff-line diff-line--remove">-           `${post.title} ${post.body}`.toLowerCase().includes(normalizedQuery),</span><span class="diff-line diff-line--remove">-         );</span><span class="diff-line diff-line--add">+   const filteredPosts = filterPosts(posts, query);</span><span class="diff-line"> </span><span class="diff-line">    return (</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>
+            <code>PostFilter</code> の props の形は変わっていないので、呼び出し元の <code>src/app/blog/page.tsx</code> は変更しません。
+          </p>
+
+          <p>同じフォルダーに、テストファイル <code>filterPosts.test.ts</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/posts/lib/filterPosts.test.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { describe, expect, it } from "vitest";
+import { filterPosts, type FilterablePost } from "./filterPosts";
+
+const posts: FilterablePost[] = [
+  { slug: "1", title: "Next.js 入門", body: "App Router を使う", authorName: "Alice" },
+  { slug: "2", title: "Rust ではじめる Web API", body: "Axum を使う", authorName: "Bob" },
+  { slug: "3", title: "TypeScript の型システム", body: "型推論について", authorName: "Carol" },
+];
+
+describe("filterPosts", () =&gt; {
+  it("query が空文字のときは全件を返す", () =&gt; {
+    expect(filterPosts(posts, "")).toEqual(posts);
+  });
+
+  it("query が空白のみのときも全件を返す", () =&gt; {
+    expect(filterPosts(posts, "   ")).toEqual(posts);
+  });
+
+  it("title に部分一致する記事だけを返す", () =&gt; {
+    const result = filterPosts(posts, "Next");
+
+    expect(result).toEqual([posts[0]]);
+  });
+
+  it("大文字小文字を区別しない", () =&gt; {
+    const result = filterPosts(posts, "typescript");
+
+    expect(result).toEqual([posts[2]]);
+  });
+
+  it("body に部分一致する記事だけを返す", () =&gt; {
+    const result = filterPosts(posts, "Axum");
+
+    expect(result).toEqual([posts[1]]);
+  });
+
+  it("該当する記事がないときは空配列を返す", () =&gt; {
+    expect(filterPosts(posts, "存在しない記事")).toEqual([]);
+  });
+});</code></pre>
+</div>
+
+          <ul>
+            <li><code>describe</code> でテストをまとめ、<code>it</code> に 1 つのケースを書きます。<code>it</code> の第 1 引数は、失敗したときに表示される説明文です。</li>
+            <li><code>expect(実際の値).toEqual(期待する値)</code> は、配列やオブジェクトの中身が等しいかを比べます。</li>
+            <li>ケースは「空文字」「空白のみ」「タイトルに部分一致」「大文字小文字を区別しない」「本文に部分一致」「該当なし」の 6 つです。<code>filterPosts</code> の <code>trim()</code> と <code>toLowerCase()</code> が、それぞれどのケースで必要になるかを対応させて読んでみてください。</li>
+          </ul>
+          <p>テストを実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npx vitest run --project=unit</span><span class="terminal__line"></span><span class="terminal__line"> RUN  v4.1.11 /Users/kazuki/Work/handson/nextjs/07-testing</span><span class="terminal__line"></span><span class="terminal__line"> ✓ |unit| src/features/posts/lib/filterPosts.test.ts (6 tests) 2ms</span><span class="terminal__line"></span><span class="terminal__line"> Test Files  1 passed (1)</span><span class="terminal__line">      Tests  6 passed (6)</span><span class="terminal__line">   Start at  18:06:12</span><span class="terminal__line">   Duration  382ms (transform 15ms, setup 64ms, import 8ms, tests 2ms, environment 246ms)</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">実行時に出る Vite の警告</p>
+              <p>
+                05 と同じく、結果の前に Vite の <code>configLoader</code> に関する警告が表示されます。
+                テストの結果には影響しないため、このレッスンの出力からも省いています。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>Tests  6 passed (6)</code> と表示されれば成功です。
+              試しに <code>filterPosts.ts</code> の <code>.toLowerCase()</code> を 1 つ消して保存し、もう一度実行してみましょう。「大文字小文字を区別しない」のケースが失敗することを確かめたら、元に戻します。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">コンポーネントを描画して操作する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            次は、コンポーネントを描画して検証します。
+            Testing Library の基本は、<code>render</code> で描画し、<code>screen</code> から要素を探し、<code>expect</code> で確かめる流れです。
+            要素を探すときは、画面の利用者が認識できる情報（ロールやラベル、表示されたテキスト）を使います。
+            まずは 06 で作った <code>Button</code> から始めます。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/Button/Button.test.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { Button } from "./Button";
+
+describe("Button", () =&gt; {
+  it("デフォルトでは variant=primary / size=md が data-* 属性に反映される", () =&gt; {
+    render(&lt;Button&gt;送信&lt;/Button&gt;);
+
+    const button = screen.getByRole("button", { name: "送信" });
+
+    expect(button).toHaveAttribute("data-variant", "primary");
+    expect(button).toHaveAttribute("data-size", "md");
+  });
+
+  it("variant / size を指定すると data-* 属性が反映される", () =&gt; {
+    render(
+      &lt;Button variant="secondary" size="sm"&gt;
+        いいね
+      &lt;/Button&gt;,
+    );
+
+    const button = screen.getByRole("button", { name: "いいね" });
+
+    expect(button).toHaveAttribute("data-variant", "secondary");
+    expect(button).toHaveAttribute("data-size", "sm");
+  });
+});</code></pre>
+</div>
+
+          <p>
+            <code>screen.getByRole("button", { name: "送信" })</code> は、「送信」という名前（アクセシブルな名前）を持つボタンを探します。
+            <code>toHaveAttribute</code> は jest-dom が追加したマッチャーで、06 で <code>variant</code> / <code>size</code> を出力するようにした <code>data-*</code> 属性を確かめます。
+          </p>
+          <p>
+            続いて、クリックで状態が変わる <code>LikeButton</code> をテストします。
+            <code>LikeButton</code> は <code>aria-label</code> に「記事 1 にいいねする」を設定しているので、その名前でボタンを探せます。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/LikeButton/LikeButton.test.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { LikeButton } from "./LikeButton";
+
+describe("LikeButton", () =&gt; {
+  it("初期表示で initialCount が表示される", () =&gt; {
+    render(&lt;LikeButton postId={1} initialCount={3} /&gt;);
+
+    expect(screen.getByRole("button", { name: "記事 1 にいいねする" })).toHaveTextContent(
+      "👍 いいね 3",
+    );
+  });
+
+  it("クリックするたびにカウントが 1 ずつ増える", async () =&gt; {
+    const user = userEvent.setup();
+    render(&lt;LikeButton postId={1} initialCount={0} /&gt;);
+
+    const button = screen.getByRole("button", { name: "記事 1 にいいねする" });
+    await user.click(button);
+    await user.click(button);
+
+    expect(button).toHaveTextContent("👍 いいね 2");
+  });
+
+  it("クリックすると onLiked が更新後のカウントで 1 回だけ呼ばれる", async () =&gt; {
+    const user = userEvent.setup();
+    const onLiked = vi.fn();
+    render(&lt;LikeButton postId={1} initialCount={0} onLiked={onLiked} /&gt;);
+
+    await user.click(screen.getByRole("button", { name: "記事 1 にいいねする" }));
+
+    expect(onLiked).toHaveBeenCalledTimes(1);
+    expect(onLiked).toHaveBeenCalledWith(1);
+  });
+});</code></pre>
+</div>
+
+          <ul>
+            <li><code>userEvent.setup()</code> で操作用のインスタンスを作ってから <code>render</code> し、<code>await user.click(...)</code> でクリックします。<code>setup()</code> を <code>render</code> より先に呼ぶ書き方は Testing Library の公式ドキュメントが推奨しており、このレッスンでは、すべての操作をこの書き方で統一します。</li>
+            <li><code>user.click</code> は Promise を返します。<code>await</code> を忘れると、クリックによる状態の更新が反映される前に検証してしまい、成功したり失敗したりする不安定なテストの原因になります。</li>
+            <li><code>vi.fn()</code> は、呼ばれた回数と引数を記録する関数（モック関数）です。<code>toHaveBeenCalledTimes(1)</code> と <code>toHaveBeenCalledWith(1)</code> で、<code>onLiked</code> が更新後のカウントで 1 回だけ呼ばれたことを確かめます。</li>
+          </ul>
+          <p>最後に、開閉できる <code>Collapsible</code> をテストします。ここでは要素を探すメソッドの使い分けがポイントです。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/Collapsible/Collapsible.test.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it } from "vitest";
+import { Collapsible } from "./Collapsible";
+
+describe("Collapsible", () =&gt; {
+  it("初期状態（defaultOpen 未指定）では children は表示されない", () =&gt; {
+    render(
+      &lt;Collapsible title="解答例を見る"&gt;
+        &lt;p&gt;ここに答えが入ります&lt;/p&gt;
+      &lt;/Collapsible&gt;,
+    );
+
+    expect(screen.getByRole("button", { name: "解答例を見る" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    // まだ DOM に存在しないことを確かめる（非表示ではなく render されていないことを見たいので queryByText を使う）。
+    expect(screen.queryByText("ここに答えが入ります")).not.toBeInTheDocument();
+  });
+
+  it("クリックすると children が表示される", async () =&gt; {
+    const user = userEvent.setup();
+    render(
+      &lt;Collapsible title="解答例を見る"&gt;
+        &lt;p&gt;ここに答えが入ります&lt;/p&gt;
+      &lt;/Collapsible&gt;,
+    );
+
+    await user.click(screen.getByRole("button", { name: "解答例を見る" }));
+
+    expect(screen.getByText("ここに答えが入ります")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "解答例を見る" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  it("defaultOpen=true のときは最初から children が表示される", () =&gt; {
+    render(
+      &lt;Collapsible title="解答例を見る" defaultOpen&gt;
+        &lt;p&gt;ここに答えが入ります&lt;/p&gt;
+      &lt;/Collapsible&gt;,
+    );
+
+    // すでに DOM にあるはずの要素なので getByText を使う（queryByText でもよいが、
+    // 「あるはず」の要素には getBy* を使い、見つからなければテストを失敗させる）。
+    expect(screen.getByText("ここに答えが入ります")).toBeInTheDocument();
+  });
+});</code></pre>
+</div>
+
+          <table>
+            <thead>
+              <tr><th>メソッド</th><th>要素が無いとき</th><th>使う場面</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>getBy*</code></td><td>例外を投げてテストが失敗する</td><td>「今 DOM にあるはず」の要素を探す</td></tr>
+              <tr><td><code>queryBy*</code></td><td><code>null</code> を返す</td><td>「DOM に無いこと」を確かめる（<code>not.toBeInTheDocument()</code> と組み合わせる）</td></tr>
+              <tr><td><code>findBy*</code></td><td>一定時間待ってから失敗する</td><td>「非同期に現れる」要素を待つ（Promise を返すので <code>await</code> する）</td></tr>
+            </tbody>
+          </table>
+          <p>
+            閉じた状態の <code>Collapsible</code> は、<code>children</code> を描画しません（<code>{isOpen &amp;&amp; ...}</code>）。
+            「無いこと」を確かめたいので、最初のケースでは <code>queryByText</code> を使います。<code>getByText</code> を使うと、要素が無い時点で例外になってしまいます。
+            <code>findBy*</code> は、要素が非同期に現れるのを待ちたい場面（データ取得後にだけ描画される部分など）で使います。
+          </p>
+          <p>ここまでのテストを実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"> ✓ |unit| src/features/posts/lib/filterPosts.test.ts (6 tests) 2ms</span><span class="terminal__line"> ✓ |unit| src/components/Button/Button.test.tsx (2 tests) 60ms</span><span class="terminal__line"> ✓ |unit| src/components/Collapsible/Collapsible.test.tsx (3 tests) 80ms</span><span class="terminal__line"> ✓ |unit| src/components/LikeButton/LikeButton.test.tsx (3 tests) 90ms</span><span class="terminal__line"></span><span class="terminal__line"> Test Files  4 passed (4)</span><span class="terminal__line">      Tests  14 passed (14)</span><span class="terminal__line">   Start at  18:03:09</span><span class="terminal__line">   Duration  701ms (transform 208ms, setup 317ms, import 386ms, tests 232ms, environment 1.26s)</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">片付け（cleanup）を登録しないと要素が残る</p>
+              <p>
+                <code>vitest.setup.ts</code> に <code>afterEach(() =&gt; { cleanup(); })</code> が無いと、前のテストで描画した要素が DOM に残ります。
+                その状態のまま次のテストが始まります。
+                すると同じ名前のボタンが 2 つ見つかり、<code>getByRole</code> が次のエラーで失敗します。
+              </p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">TestingLibraryElementError: Found multiple elements with the role "button" and name "記事 1 にいいねする"</span><span class="terminal__line">（中略）</span><span class="terminal__line"> ❯ src/components/LikeButton/LikeButton.test.tsx:19:27</span><span class="terminal__line"></span><span class="terminal__line"> Test Files  2 failed | 2 passed (4)</span><span class="terminal__line">      Tests  3 failed | 11 passed (14)</span></pre>
+</div>
+<p>
+                <code>Found multiple elements</code> というエラーが、単体で実行すると成功するテストで出たら、片付けの登録漏れを疑ってください。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">Storybook の <code>play</code> 関数との役割分担</p>
+              <p>
+                05 では、<code>LikeButton</code> のストーリーに <code>play</code> 関数を書き、クリックでカウントが増えることを確かめました。
+                同じ操作を <code>play</code> と Testing Library の両方に書くと、テストが重複します。このトラックでは次のように分けます。
+              </p>
+              <ul>
+                <li><strong>Storybook（<code>play</code>）</strong>: 実ブラウザでの見た目の確認と、1 回クリックして結果が変わるといった簡単な操作の確認</li>
+                <li><strong>Testing Library（<code>unit</code>）</strong>: 複数回の操作による累積、コールバックの呼び出し回数、モックを使った異常系など、ロジックの分岐や状態の変化</li>
+              </ul>
+              <p>
+                たとえば <code>LikeButton</code> の「2 回クリックすると 2 になる」ケースは、<code>unit</code> 側だけに書いています。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>Test Files  4 passed (4)</code>、<code>Tests  14 passed (14)</code> と表示されれば成功です。
+              試しに <code>vitest.setup.ts</code> の <code>afterEach</code> をコメントアウトして実行し、<code>Found multiple elements</code> のエラーが出ることを確かめたら、元に戻します。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>fetch</code> をモックしてデータ取得関数をテストする</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            03 で作った <code>fetchPosts</code> は、JSONPlaceholder から記事を取得します。
+            テストのたびに本物の API へアクセスすると、ネットワークの状態で結果が変わり、失敗時の動きも試せません。
+            そこで、グローバルの <code>fetch</code> を、決まった値を返す偽物（モック）に差し替えます。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/posts/api/fetchPosts.test.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchPosts } from "./fetchPosts";
+
+// レスポンスの一部（.ok と .json() だけ）を満たすダミー。fetch の戻り値全体（Response 型）を
+// 作り込む必要はなく、fetchPosts が実際に使っているプロパティだけあれば十分。
+function createResponse(overrides: { ok: boolean; status?: number; body?: unknown }) {
+  return {
+    ok: overrides.ok,
+    status: overrides.status ?? (overrides.ok ? 200 : 500),
+    json: async () =&gt; overrides.body,
+  } as Response;
+}
+
+describe("fetchPosts", () =&gt; {
+  afterEach(() =&gt; {
+    vi.unstubAllGlobals();
+  });
+
+  it("正常系: JSONPlaceholder のレスポンスを Post[] に変換して返す", async () =&gt; {
+    const fetchMock = vi.fn().mockResolvedValue(
+      createResponse({
+        ok: true,
+        body: [
+          { id: 1, userId: 10, title: "タイトル1", body: "本文1" },
+          { id: 2, userId: 20, title: "タイトル2", body: "本文2" },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const posts = await fetchPosts();
+
+    expect(posts).toEqual([
+      { id: 1, userId: 10, slug: "1", title: "タイトル1", body: "本文1" },
+      { id: 2, userId: 20, slug: "2", title: "タイトル2", body: "本文2" },
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://jsonplaceholder.typicode.com/posts?_limit=5",
+      { next: { revalidate: 60 } },
+    );
+  });
+
+  it("異常系: res.ok が false のときは status を含むエラーを投げる", async () =&gt; {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(createResponse({ ok: false, status: 503 })),
+    );
+
+    await expect(fetchPosts()).rejects.toThrow("記事一覧の取得に失敗しました (status: 503)");
+  });
+});</code></pre>
+</div>
+
+          <ul>
+            <li><strong><code>createResponse</code></strong>: <code>fetchPosts</code> が使うのは <code>ok</code> / <code>status</code> / <code>json()</code> だけなので、その 3 つだけを持つオブジェクトを <code>as Response</code> で <code>Response</code> 型として扱います。</li>
+            <li><strong><code>vi.fn().mockResolvedValue(...)</code></strong>: 呼ばれると、指定した値で解決する Promise を返すモック関数を作ります。</li>
+            <li><strong><code>vi.stubGlobal("fetch", fetchMock)</code></strong>: グローバルの <code>fetch</code> をモック関数に置き換えます。<code>afterEach</code> の <code>vi.unstubAllGlobals()</code> で元に戻し、ほかのテストに影響を残さないようにします。</li>
+            <li><strong>正常系</strong>: 戻り値が <code>slug</code> を付けた形に変換されていることに加えて、<code>fetch</code> が正しい URL と <code>{ next: { revalidate: 60 } }</code> で呼ばれたことも確かめます。</li>
+            <li><strong>異常系</strong>: <code>ok: false</code> のレスポンスを返させ、<code>await expect(fetchPosts()).rejects.toThrow(...)</code> で、ステータスコードを含むエラーで失敗することを確かめます。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>vi.stubGlobal</code> と <code>vi.spyOn</code></p>
+              <p>
+                <code>vi.stubGlobal</code> は、<code>fetch</code> のようなグローバルな値をまるごと置き換えます。
+                一方 <code>vi.spyOn(オブジェクト, "メソッド名")</code> は、既存のオブジェクトのメソッドを監視し、必要なら中身を差し替えます。
+                ステップ 5 では、<code>vi.spyOn(console, "error")</code> で React が出す警告を捕まえます。
+              </p>
+            </div>
+          </div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"> Test Files  5 passed (5)</span><span class="terminal__line">      Tests  16 passed (16)</span><span class="terminal__line">   Start at  18:03:17</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>Test Files  5 passed (5)</code>、<code>Tests  16 passed (16)</code> と表示されれば成功です。
+              テストの実行中に、JSONPlaceholder へのアクセスは発生していません。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">async なサーバーコンポーネントをテストする</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            03 で作った <code>AuthorList</code> は、<code>fetchUsers</code> の結果を <code>await</code> してから描画する async なサーバーコンポーネントです。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/blog/_components/AuthorList/AuthorList.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { fetchUsers } from "@/features/users/api/fetchUsers";
+import styles from "./AuthorList.module.scss";
+
+// async コンポーネント。fetch が終わるまでの間、page.tsx 側の Suspense fallback が表示され、
+// 準備できたこの部分だけが後からストリーミングで差し込まれる。
+export async function AuthorList() {
+  const users = await fetchUsers();
+
+  return (
+    &lt;aside className={styles.authors}&gt;
+      &lt;p className={styles.authorsTitle}&gt;投稿者一覧&lt;/p&gt;
+      &lt;ul className={styles.authorsList}&gt;
+        {users.map((user) =&gt; (
+          &lt;li key={user.id} className={styles.authorsItem}&gt;
+            {user.name}（@{user.username}）
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+    &lt;/aside&gt;
+  );
+}</code></pre>
+</div>
+
+          <p>
+            クライアントコンポーネントと同じように <code>render(&lt;AuthorList /&gt;)</code> と書くと、どうなるでしょうか。
+            試しに、下のテストコードから <code>vi.spyOn(console, "error")</code> の行をコメントアウトして実行してみます。
+            すると、<strong>例外は投げられません</strong>。テスト自体は成功しますが、React が <code>console.error</code> に次の 2 つの警告を出します。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal（stderr）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">stderr | src/app/blog/_components/AuthorList/AuthorList.test.tsx &gt; AuthorList &gt; 直接 &lt;AuthorList /&gt; を render すると React が警告を出し、中身が描画されない（記録用）</span><span class="terminal__line">&lt;AuthorList&gt; is an async Client Component. Only Server Components can be async at the moment. This error is often caused by accidentally adding `'use client'` to a module that was originally written for the server.</span><span class="terminal__line"></span><span class="terminal__line">stderr | src/app/blog/_components/AuthorList/AuthorList.test.tsx &gt; AuthorList &gt; 直接 &lt;AuthorList /&gt; を render すると React が警告を出し、中身が描画されない（記録用）</span><span class="terminal__line">A component suspended inside an `act` scope, but the `act` call was not awaited. When testing React components that depend on asynchronous data, you must await the result:</span><span class="terminal__line"></span><span class="terminal__line">await act(() =&gt; ...)</span></pre>
+</div>
+
+          <p>
+            async なコンポーネントを実行できるのは、Next.js が持つ React Server Components（RSC）の仕組みだけです。
+            Vitest + jsdom + Testing Library の組み合わせにはその仕組みがありません。
+            そのため React は <code>AuthorList</code> を「async なクライアントコンポーネント」とみなして警告します。
+            警告が出ることを確認したら、<code>vi.spyOn</code> の行を戻し、この警告を記録用に捕まえて出力を止めます。
+          </p>
+          <p>
+            もう 1 つのテストでは、コンポーネントを JSX として渡すのではなく、<strong>関数として呼び出して <code>await</code> し、その戻り値を <code>render</code> に渡します</strong>。
+            <code>await AuthorList()</code> の結果は、ふつうの React 要素です。
+            データ取得の <code>fetchUsers</code> は <code>vi.mock</code> で差し替えます。
+          </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/blog/_components/AuthorList/AuthorList.test.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { AuthorList } from "./AuthorList";
+
+vi.mock("@/features/users/api/fetchUsers", () =&gt; ({
+  fetchUsers: vi.fn().mockResolvedValue([
+    { id: 1, name: "Alice", username: "alice" },
+    { id: 2, name: "Bob", username: "bob" },
+  ]),
+}));
+
+describe("AuthorList", () =&gt; {
+  it("直接 &lt;AuthorList /&gt; を render すると React が警告を出し、中身が描画されない（記録用）", () =&gt; {
+    // AuthorList は async 関数コンポーネント（サーバーコンポーネント）なので、
+    // 通常のクライアント向け render() に JSX としてそのまま渡しても例外は投げられない。
+    // 代わりに React が console.error に警告を出し、コンポーネントの中身は描画されない。
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() =&gt; {});
+
+    render(&lt;AuthorList /&gt;);
+
+    // React は console.error("%s is an async Client Component. ...", "&lt;AuthorList&gt;") のように
+    // 書式文字列とコンポーネント名を別引数で渡すため、1 引数目だけを検証する。
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "%s is an async Client Component. Only Server Components can be async at the moment.",
+      ),
+      "&lt;AuthorList&gt;",
+    );
+    expect(screen.queryByText(/Alice/)).not.toBeInTheDocument();
+
+    consoleError.mockRestore();
+  });
+
+  it("await AuthorList() の戻り値を render すると、fetchUsers の結果が表示される", async () =&gt; {
+    render(await AuthorList());
+
+    expect(screen.getByText("Alice（@alice）")).toBeInTheDocument();
+    expect(screen.getByText("Bob（@bob）")).toBeInTheDocument();
+  });
+});</code></pre>
+</div>
+
+          <ul>
+            <li><strong><code>vi.mock(パス, ファクトリ)</code></strong>: 指定したモジュールを、ファクトリが返すオブジェクトに置き換えます。<code>AuthorList.tsx</code> が import する <code>fetchUsers</code> が、決まったユーザーを返すモック関数になります。</li>
+            <li><strong>1 つ目のテスト（記録用）</strong>: 直接描画したときの挙動を残すためのテストです。<code>vi.spyOn(console, "error").mockImplementation(() =&gt; {})</code> で上の警告を捕まえ、出力を止めます。React は警告の書式文字列とコンポーネント名 <code>"&lt;AuthorList&gt;"</code> を別々の引数で渡すため、検証も 2 引数で書きます。最後の <code>mockRestore()</code> で <code>console.error</code> を元に戻します。</li>
+            <li><strong>2 つ目のテスト</strong>: <code>render(await AuthorList())</code> で描画すると、この時点ですでに要素は DOM にあるので、<code>getByText</code> でユーザー名を確かめます。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>vi.mock</code> はファイルの先頭に巻き上げられる</p>
+              <p>
+                <code>vi.mock</code> の呼び出しは、どこに書いても、ファイル内の <code>import</code> 文より前に移動して実行されます（巻き上げ、hoisting）。
+                <code>AuthorList</code> を import した時点で、すでに <code>fetchUsers</code> がモックになっているのはこのためです。
+                その反面、ファイル内で宣言した変数をファクトリの中で参照すると、初期化前の変数を読むことになります。この場合は <code>ReferenceError</code> が起きやすくなります。
+                ここではファクトリの中でモックのデータまで完結させて、この問題を避けています。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">props を受け取る async コンポーネントの場合</p>
+              <p>
+                <code>AuthorList</code> は props を受け取らないので <code>await AuthorList()</code> と書けます。
+                props を受け取るコンポーネントでは、<code>await MyComponent({ id: "1" })</code> のように関数へ直接渡します。
+                <code>page.tsx</code> の JSX での使い方とテストの書き方が離れる点に注意してください。
+              </p>
+            </div>
+          </div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npx vitest run --project=unit src/app/blog/_components/AuthorList/AuthorList.test.tsx</span><span class="terminal__line"> Test Files  1 passed (1)</span><span class="terminal__line">      Tests  2 passed (2)</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>AuthorList.test.tsx</code> の 2 件が成功すれば完了です。
+              <code>npx vitest run --project=unit</code> で全体を実行すると、<code>Test Files  6 passed (6)</code>、<code>Tests  18 passed (18)</code> になります。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">カバレッジを計測し、生成物を lint の対象から外す</h3>
+        </div>
+        <div class="step__body">
+
+          <p>
+            カバレッジは、テストの実行中にソースコードのどの行・分岐・関数が実行されたかの割合です。
+            ステップ 1 で <code>vitest.config.ts</code> に書いた <code>coverage</code> の設定を使って計測します。
+          </p>
+          <ul>
+            <li><code>provider: 'v8'</code>: Node.js（V8 エンジン）の機能で計測します。<code>@vitest/coverage-v8</code> がこれを担当します。</li>
+            <li><code>include: ['src/**']</code>: <code>src/</code> 配下を集計の対象にします。</li>
+            <li><code>exclude</code>: ストーリー（<code>*.stories.tsx</code>）と、ルーティング専用の <code>src/app/**</code> を対象から外します。ページ本体のロジックは <code>features</code> / <code>components</code> 側でテストする方針です。</li>
+          </ul>
+          <p><code>npm run test</code> に <code>--coverage</code> を付けて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run test -- --coverage</span><span class="terminal__line"></span><span class="terminal__line">&gt; 07-testing@0.1.0 test</span><span class="terminal__line">&gt; vitest run --project=unit --coverage</span><span class="terminal__line"></span><span class="terminal__line"> RUN  v4.1.11 /Users/kazuki/Work/handson/nextjs/07-testing</span><span class="terminal__line">      Coverage enabled with v8</span><span class="terminal__line"></span><span class="terminal__line"> ✓ |unit| src/features/posts/lib/filterPosts.test.ts (6 tests) 3ms</span><span class="terminal__line"> ✓ |unit| src/features/posts/api/fetchPosts.test.ts (2 tests) 5ms</span><span class="terminal__line">stderr | src/app/blog/_components/AuthorList/AuthorList.test.tsx &gt; AuthorList &gt; 直接 &lt;AuthorList /&gt; を render すると React が警告を出し、中身が描画されない（記録用）</span><span class="terminal__line">A component suspended inside an `act` scope, but the `act` call was not awaited. When testing React components that depend on asynchronous data, you must await the result:</span><span class="terminal__line"></span><span class="terminal__line">await act(() =&gt; ...)</span><span class="terminal__line"></span><span class="terminal__line"> ✓ |unit| src/app/blog/_components/AuthorList/AuthorList.test.tsx (2 tests) 21ms</span><span class="terminal__line"> ✓ |unit| src/components/Button/Button.test.tsx (2 tests) 71ms</span><span class="terminal__line"> ✓ |unit| src/components/Collapsible/Collapsible.test.tsx (3 tests) 93ms</span><span class="terminal__line"> ✓ |unit| src/components/LikeButton/LikeButton.test.tsx (3 tests) 106ms</span><span class="terminal__line"></span><span class="terminal__line"> Test Files  6 passed (6)</span><span class="terminal__line">      Tests  18 passed (18)</span><span class="terminal__line">   Start at  18:04:07</span><span class="terminal__line">   Duration  913ms (transform 365ms, setup 619ms, import 612ms, tests 298ms, environment 2.30s)</span><span class="terminal__line"></span><span class="terminal__line"> % Coverage report from v8</span><span class="terminal__line">-------------------|---------|----------|---------|---------|-------------------</span><span class="terminal__line">File               | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s</span><span class="terminal__line">-------------------|---------|----------|---------|---------|-------------------</span><span class="terminal__line">All files          |   41.66 |    37.93 |   52.63 |   41.37 |</span><span class="terminal__line"> components/Button |     100 |      100 |     100 |     100 |</span><span class="terminal__line">  ...n.module.scss |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  Button.tsx       |     100 |      100 |     100 |     100 |</span><span class="terminal__line">  index.ts         |       0 |        0 |       0 |       0 |</span><span class="terminal__line"> ...ts/Collapsible |     100 |      100 |     100 |     100 |</span><span class="terminal__line">  ...e.module.scss |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  Collapsible.tsx  |     100 |      100 |     100 |     100 |</span><span class="terminal__line">  index.ts         |       0 |        0 |       0 |       0 |</span><span class="terminal__line"> ...nts/LikeButton |      50 |        0 |      40 |      50 |</span><span class="terminal__line">  ...n.module.scss |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  LikeButton.tsx   |     100 |      100 |     100 |     100 |</span><span class="terminal__line">  ...onReducer.tsx |       0 |        0 |       0 |       0 | 1-34</span><span class="terminal__line">  index.ts         |       0 |        0 |       0 |       0 |</span><span class="terminal__line"> ...ts/ThemeToggle |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  ...e.module.scss |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  ThemeToggle.tsx  |       0 |        0 |       0 |       0 | 1-43</span><span class="terminal__line">  index.ts         |       0 |        0 |       0 |       0 |</span><span class="terminal__line"> features/posts    |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  types.ts         |       0 |        0 |       0 |       0 |</span><span class="terminal__line"> ...ures/posts/api |      50 |    33.33 |   66.66 |      50 |</span><span class="terminal__line">  fetchPosts.ts    |      50 |    33.33 |   66.66 |      50 | 47-61</span><span class="terminal__line"> ...ures/posts/lib |     100 |      100 |     100 |     100 |</span><span class="terminal__line">  filterPosts.ts   |     100 |      100 |     100 |     100 |</span><span class="terminal__line"> features/users    |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  types.ts         |       0 |        0 |       0 |       0 |</span><span class="terminal__line"> ...ures/users/api |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  fetchUsers.ts    |       0 |        0 |       0 |       0 | 3-24</span><span class="terminal__line"> styles            |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  _mixins.scss     |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  _variables.scss  |       0 |        0 |       0 |       0 |</span><span class="terminal__line">  globals.scss     |       0 |        0 |       0 |       0 |</span><span class="terminal__line">-------------------|---------|----------|---------|---------|-------------------</span></pre>
+</div>
+
+          <p>
+            表の列は、左から「文（Statements）」「分岐（Branch）」「関数（Funcs）」「行（Lines）」の実行された割合と、実行されなかった行番号です。
+            ステップ 2〜4 でテストした <code>filterPosts.ts</code> / <code>Button.tsx</code> / <code>Collapsible.tsx</code> / <code>LikeButton.tsx</code> は 100% です。
+            一方、次のファイルはまだテストがありません。
+          </p>
+          <ul>
+            <li><code>fetchPosts.ts</code> の 47〜61 行目: 記事を 1 件取得する <code>fetchPost</code> 関数</li>
+            <li><code>fetchUsers.ts</code>: ステップ 5 では <code>vi.mock</code> で差し替えたので、本物のコードは実行されていません</li>
+            <li><code>ThemeToggle.tsx</code> と <code>LikeButtonReducer.tsx</code>（04 で作った <code>useReducer</code> 版）</li>
+          </ul>
+          <p>
+            <code>.module.scss</code> や <code>index.ts</code>、<code>types.ts</code> も、<code>include</code> の範囲に含まれるので 0 として並びます。
+            <code>src/app/**</code> を除外しているため、<code>AuthorList.tsx</code> や <code>PostFilter.tsx</code> は表に出てきません。
+            カバレッジの数字は「テストが足りない場所を見つける目安」です。100% を目指すことより、分岐の多いロジックが実行されているかを確かめるのに使いましょう。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">AI エージェントから実行すると表が短くなる</p>
+              <p>
+                Claude Code などの AI エージェントの中から実行すると、Vitest がそれを検出し、100% のファイルを省いた表と <code>Coverage summary</code> を表示します。
+                上の表は、通常の端末で実行したときの出力です。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            <code>--coverage</code> を付けて実行すると、<code>coverage/</code> ディレクトリに HTML のレポート（<code>coverage/index.html</code>）などが生成されます。
+            <code>.gitignore</code> には <code>create-next-app</code> の時点で <code>/coverage</code> が入っているので、Git の管理対象にはなりません。
+            ただし ESLint はこのディレクトリを除外しておらず、この状態で <code>npm run lint</code> を実行すると、生成された <code>coverage/block-navigation.js</code> などに警告が出ます。
+            <code>eslint.config.mjs</code> の <code>globalIgnores</code> に <code>coverage/**</code> を追加します。
+          </p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">eslint.config.mjs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      "build/**",</span><span class="diff-line">      "next-env.d.ts",</span><span class="diff-line">      "storybook-static/**",</span><span class="diff-line diff-line--add">+     // vitest --coverage の生成物（HTML レポートなど）。テストファイルは対象にしたいので</span><span class="diff-line diff-line--add">+     // coverage/ だけを ignore に加える。</span><span class="diff-line diff-line--add">+     "coverage/**",</span><span class="diff-line">    ]),</span><span class="diff-line">    ...storybook.configs["flat/recommended"]</span><span class="diff-line">  ]);</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>
+            テストファイル（<code>*.test.ts</code> / <code>*.test.tsx</code>）は引き続き lint の対象です。
+            <code>describe</code> や <code>it</code> を <code>"vitest"</code> から import しているので、ESLint にテスト用のグローバル変数を教える設定は要りません。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@vitest/coverage-v8</code> は <code>vitest</code> と同じバージョンに固定する</p>
+              <p>
+                ステップ 1 で <code>@vitest/coverage-v8</code> にバージョンを付けずにインストールすると、最新版の 5.0.2 が選ばれ、次のエラーで失敗します。
+              </p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm i -D @vitest/coverage-v8@latest</span><span class="terminal__line">npm error code ERESOLVE</span><span class="terminal__line">npm error ERESOLVE could not resolve</span><span class="terminal__line">npm error</span><span class="terminal__line">npm error While resolving: 07-testing@0.1.0</span><span class="terminal__line">npm error Found: @vitest/coverage-v8@4.1.11</span><span class="terminal__line">npm error node_modules/@vitest/coverage-v8</span><span class="terminal__line">npm error   peerOptional @vitest/coverage-v8@"4.1.11" from vitest@4.1.11</span><span class="terminal__line">（中略）</span><span class="terminal__line">npm error Conflicting peer dependency: vitest@5.0.2</span><span class="terminal__line">npm error node_modules/vitest</span><span class="terminal__line">npm error   peer vitest@"5.0.2" from @vitest/coverage-v8@5.0.2</span><span class="terminal__line">npm error   node_modules/@vitest/coverage-v8</span><span class="terminal__line">npm error     dev @vitest/coverage-v8@"5.0.2" from the root project</span></pre>
+</div>
+<p>
+                <code>@vitest/coverage-v8@5.0.2</code> は <code>vitest@5.0.2</code> を必要とします（<code>peer vitest@"5.0.2"</code>）。
+                ところが、このプロジェクトに入っている <code>vitest</code> は 4.1.11 です。
+                カバレッジのパッケージは本体とまったく同じバージョンでなければならないため、<code>npm i -D @vitest/coverage-v8@4.1.11</code> のように本体のバージョンを明示します。
+                本体のバージョンは、テストを実行したときの <code>RUN  v4.1.11</code> の行で確かめられます。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              カバレッジの表が表示され、<code>All files</code> の行が <code>41.66 |    37.93 |   52.63 |   41.37</code> になっていれば成功です。
+              <code>coverage/index.html</code> をブラウザで開くと、ファイルごとに実行された行と実行されなかった行を色分けで確かめられます。
+              あわせて、<code>coverage/</code> がある状態で <code>npm run lint</code> を実行し、何も出力されなければ完了です。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">すべてのテストとビルドを確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、2 つのテストプロジェクト・ビルド・lint・型チェック・Storybook のビルドがすべて通ることを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run test</span><span class="terminal__line"></span><span class="terminal__line">&gt; 07-testing@0.1.0 test</span><span class="terminal__line">&gt; vitest run --project=unit</span><span class="terminal__line"></span><span class="terminal__line"> RUN  v4.1.11 /Users/kazuki/Work/handson/nextjs/07-testing</span><span class="terminal__line"></span><span class="terminal__line"> ✓ |unit| src/features/posts/api/fetchPosts.test.ts (2 tests) 3ms</span><span class="terminal__line"> ✓ |unit| src/features/posts/lib/filterPosts.test.ts (6 tests) 4ms</span><span class="terminal__line">stderr | src/app/blog/_components/AuthorList/AuthorList.test.tsx &gt; AuthorList &gt; 直接 &lt;AuthorList /&gt; を render すると React が警告を出し、中身が描画されない（記録用）</span><span class="terminal__line">A component suspended inside an `act` scope, but the `act` call was not awaited. When testing React components that depend on asynchronous data, you must await the result:</span><span class="terminal__line"></span><span class="terminal__line">await act(() =&gt; ...)</span><span class="terminal__line"></span><span class="terminal__line"> ✓ |unit| src/app/blog/_components/AuthorList/AuthorList.test.tsx (2 tests) 19ms</span><span class="terminal__line"> ✓ |unit| src/components/Button/Button.test.tsx (2 tests) 63ms</span><span class="terminal__line"> ✓ |unit| src/components/Collapsible/Collapsible.test.tsx (3 tests) 80ms</span><span class="terminal__line"> ✓ |unit| src/components/LikeButton/LikeButton.test.tsx (3 tests) 90ms</span><span class="terminal__line"></span><span class="terminal__line"> Test Files  6 passed (6)</span><span class="terminal__line">      Tests  18 passed (18)</span><span class="terminal__line">   Start at  18:04:01</span><span class="terminal__line">   Duration  786ms (transform 571ms, setup 518ms, import 798ms, tests 258ms, environment 2.25s)</span></pre>
+</div>
+
+          <p>
+            <code>unit</code> プロジェクトの 6 ファイル・18 件がすべて成功しています。
+            途中の <code>stderr</code> は、ステップ 5 の記録用テストで <code>&lt;AuthorList /&gt;</code> を直接描画したときに React が出す警告の 1 つで、テストの失敗ではありません。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run test:storybook</span><span class="terminal__line"></span><span class="terminal__line">&gt; 07-testing@0.1.0 test:storybook</span><span class="terminal__line">&gt; vitest run --project=storybook</span><span class="terminal__line"></span><span class="terminal__line"> RUN  v4.1.11 /Users/kazuki/Work/handson/nextjs/07-testing</span><span class="terminal__line"></span><span class="terminal__line"> ✓ |storybook (chromium)| src/components/Collapsible/Collapsible.stories.tsx (2 tests) 388ms</span><span class="terminal__line">   ✓ Default  359ms</span><span class="terminal__line"> ✓ |storybook (chromium)| src/app/_components/Header/Header.stories.tsx (2 tests) 494ms</span><span class="terminal__line">   ✓ Home  473ms</span><span class="terminal__line"> ✓ |storybook (chromium)| src/components/LikeButton/LikeButton.stories.tsx (3 tests) 518ms</span><span class="terminal__line">   ✓ Default  470ms</span><span class="terminal__line"> ✓ |storybook (chromium)| src/components/Button/Button.stories.tsx (4 tests) 524ms</span><span class="terminal__line">   ✓ Primary  471ms</span><span class="terminal__line"></span><span class="terminal__line"> Test Files  4 passed (4)</span><span class="terminal__line">      Tests  11 passed (11)</span><span class="terminal__line">   Start at  18:04:25</span><span class="terminal__line">   Duration  2.83s (transform 0ms, setup 4.35s, import 395ms, tests 1.92s, environment 0ms)</span></pre>
+</div>
+
+          <p>
+            05〜06 で作った <code>storybook</code> プロジェクトの 11 件も、これまでどおり成功します。
+            途中の <code>Re-optimizing dependencies</code> の行は、Vite が依存関係の準備をやり直したことを示すメッセージです。
+            <code>vitest.config.ts</code> を変更したことが理由として表示されています。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">✓ Compiled successfully in 2.3s</span><span class="terminal__line">  Finished TypeScript in 1328ms ...</span><span class="terminal__line">（中略）</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 07-testing@0.1.0 lint</span><span class="terminal__line">&gt; eslint</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> npx tsc --noEmit</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build-storybook</span><span class="terminal__line">（中略）</span><span class="terminal__line">◇  Output directory: /Users/kazuki/Work/handson/nextjs/07-testing/storybook-static</span><span class="terminal__line">└  Storybook build completed successfully</span></pre>
+</div>
+
+          <p>
+            <code>npm run lint</code> と <code>npx tsc --noEmit</code> は、警告とエラーがなければ何も出力しません。
+            <code>npm run build</code> と <code>npm run build-storybook</code> の出力は一部を省略しています。
+            <code>npm run build-storybook</code> の途中に出る <code>"use client"</code> に関する Vite の警告は 06 までと同じもので、ビルドは成功します。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              6 つのコマンドがすべてエラーなく終わり、<code>npm run test</code> で 18 件、<code>npm run test:storybook</code> で 11 件のテストが成功すれば完了です。
+            </p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">純粋関数のユニットテスト・コンポーネントテスト・Storybook の <code>play</code>・E2E テストの役割の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>vitest.config.ts</code> の <code>projects</code> に <code>unit</code> と <code>storybook</code> が並び、<code>--project</code> で片方だけを実行できることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>tsconfig.json</code> の <code>paths</code> とは別に、<code>resolve.alias</code> が必要な理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>getBy*</code> / <code>queryBy*</code> / <code>findBy*</code> を、要素が無いときの挙動の違いから使い分けられる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>vitest.setup.ts</code> の <code>cleanup()</code> を外すと <code>Found multiple elements</code> のエラーになることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">async なサーバーコンポーネントを <code>render(&lt;Component /&gt;)</code> ではなく <code>render(await Component())</code> で描画する理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>npm run test -- --coverage</code> の表から、テストが無い関数（<code>fetchPost</code> など）を見つけられる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">（発展）<code>fetchPosts.test.ts</code> に <code>fetchPost</code> のテストを追加し、404 のときに <code>null</code> を返すケースを含めてカバレッジが上がることを確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        05 で入った Storybook 用の Vitest プロジェクトの隣に、jsdom で動く <code>unit</code> プロジェクトを追加しました。
+        絞り込みのロジックを純粋関数に切り出してテストし、Testing Library でコンポーネントを描画して操作しました。
+        さらに <code>fetch</code> と <code>fetchUsers</code> をモックに差し替えてデータ取得とサーバーコンポーネントをテストし、カバレッジでテストが足りない場所を確かめました。
+      </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">完成コード</p>
+              <p>このレッスンの完成コードは、ブランチ <code>nextjs/07-testing</code> の <code>nextjs/07-testing/</code> ディレクトリにあります。</p>
+            </div>
+          </div>
+
+      <h2 id="track-summary">Next.js トラックのまとめ</h2>
+      <p>このレッスンで Next.js トラックは終わりです。01〜07 で作ってきたものを振り返ります。</p>
+      <table>
+        <thead>
+          <tr><th>項目</th><th>作ったもの・身につけたこと</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>01 環境構築</td><td><code>create-next-app</code> で TypeScript + App Router のプロジェクトを作成</td></tr>
+          <tr><td>02 App Router</td><td>ページ・レイアウト・ネストしたルーティング</td></tr>
+          <tr><td>03 サーバーコンポーネント</td><td><code>fetch</code> によるデータ取得（<code>fetchPosts</code> / <code>fetchUsers</code>、<code>AuthorList</code>）</td></tr>
+          <tr><td>04 クライアントコンポーネント</td><td><code>"use client"</code> と <code>useState</code>（<code>PostFilter</code> / <code>LikeButton</code> / <code>Collapsible</code>）</td></tr>
+          <tr><td>05 Storybook</td><td>コンポーネントカタログと <code>play</code> 関数によるブラウザテスト</td></tr>
+          <tr><td>06 スタイリング</td><td>CSS Modules + SCSS の共通変数、レイアウト、<code>Button</code> コンポーネント</td></tr>
+          <tr><td>07 テスト</td><td>Vitest + Testing Library によるユニットテスト・コンポーネントテストとカバレッジ</td></tr>
+        </tbody>
+      </table>
+      <p>次に学ぶとよいテーマは次のとおりです。</p>
+      <ul>
+        <li><strong>E2E テスト（Playwright）</strong>: 起動したアプリをブラウザで通しで操作し、ページ遷移やサーバーとのやり取りを含めて確かめます。このトラックで扱わなかったテストの層です。</li>
+        <li><strong>App Router のキャッシュの深掘り</strong>: 03 で触れた <code>revalidate</code> のほか、キャッシュの種類と無効化の方法を整理すると、データが更新されない原因を追えるようになります。</li>
+        <li><strong>Server Actions</strong>: フォームの送信などのデータ更新を、API ルートを書かずにサーバー側の関数として実装する仕組みです。</li>
+      </ul>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../06-styling/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">06: スタイリングとレイアウト実装</span>
+        </a>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../../index.html">
+          <span class="lesson-nav__direction">Next.js トラックはここまで →</span>
+          <span class="lesson-nav__title">ハンズオン一覧へ戻る</span>
+        </a>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
