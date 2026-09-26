@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05: DB 接続と CRUD | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">05</li>
+        </ol>
+        <h1 class="lesson-title">DB 接続と CRUD</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 04 で共有状態を使った API を作り、次にサーバーを再起動してもデータが残るようにしたい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法（構造体・<code>Option</code> / <code>Result</code>・クロージャー）、<code>cargo run</code> と <code>curl</code> の基本操作、SQL の基本（<code>CREATE TABLE</code>・<code>SELECT</code>・<code>INSERT</code>・<code>UPDATE</code>・<code>DELETE</code>）、<code>sqlite3</code> コマンドが使えること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../04-state-middleware/index.html">04: 共有状態とミドルウェア</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>sqlx の <code>SqlitePool</code> で SQLite に接続し、<code>State</code> でハンドラと共有する</li>
+          <li><code>sqlx::migrate!</code> と <code>migrations/</code> の SQL ファイルで、起動時にテーブルを作る</li>
+          <li><code>FromRow</code> と <code>query_as</code> で、クエリの結果を構造体として受け取る</li>
+          <li><code>RETURNING</code> と <code>rows_affected()</code> を使い、作成・取得・更新・削除（CRUD）の API を実装する</li>
+          <li>SQL の誤り（実行時の 500）と接続文字列の誤り（起動時のパニック）の現れ方を確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        04 の API は、ユーザーの一覧をメモリー上の <code>Vec</code> に持っていたため、サーバーを止めるとデータが初期状態に戻りました。
+        このレッスンでは、sqlx を使って SQLite のデータベースファイル <code>app.db</code> に接続し、ユーザーを DB に保存します。
+        ハンドラを「読み取り → 作成 → 更新・削除」の順に 1 つずつ DB へ置き換え、最後にメモリー上の <code>Vec</code> と <code>Mutex</code> を取り除きます。
+      </p>
+
+      <p>このレッスンの完成時には、サーバーが次のルートへ応答します。04 から変わったところを太字にしています。</p>
+
+      <table>
+        <thead>
+          <tr><th>メソッド</th><th>パス</th><th>返す内容</th><th>ミドルウェア</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/</code></td><td><code>Hello from Handson Axum</code></td><td>ログ</td></tr>
+          <tr><td>GET</td><td><code>/health</code></td><td>JSON <code>{"status":"ok"}</code></td><td>ログ</td></tr>
+          <tr><td>GET</td><td><code>/users</code></td><td><strong>DB に保存されているユーザーの JSON 配列</strong></td><td>ログ</td></tr>
+          <tr><td>POST</td><td><code>/users</code></td><td><strong>DB にユーザーを追加し、201 と作成したユーザーの JSON</strong></td><td>ログ + API キー認証</td></tr>
+          <tr><td>GET</td><td><code>/users/{id}</code></td><td><strong>DB から取得したユーザーの JSON（なければ 404）</strong></td><td>ログ</td></tr>
+          <tr><td>PUT</td><td><code>/users/{id}</code></td><td><strong>DB のユーザーの名前を更新し、更新後の JSON（なければ 404）</strong></td><td>ログ + API キー認証</td></tr>
+          <tr><td><strong>DELETE</strong></td><td><strong><code>/users/{id}</code></strong></td><td><strong>DB からユーザーを削除し、204（なければ 404）</strong></td><td><strong>ログ + API キー認証</strong></td></tr>
+          <tr><td>GET</td><td><code>/users/{user_id}/posts/{post_id}</code></td><td><code>user {user_id} post {post_id}</code></td><td>ログ</td></tr>
+          <tr><td>GET</td><td><code>/search</code></td><td>受け取ったクエリパラメーターの一覧</td><td>ログ</td></tr>
+          <tr><td>（上記以外）</td><td>どれにもマッチしないパス</td><td>404 と本文 <code>Not Found</code></td><td>ログ</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Rust（rustc）1.98.1 / cargo 1.98.1（Rust edition 2024）で動作を確認しています。クレートのバージョンは axum 0.8.9 / tokio 1.53.1 / serde 1.0.229 / serde_json 1.0.151 / sqlx 0.9.0 です。
+            バージョンは執筆時点（2026年9月）のものです。このレッスンで新たに追加するクレートは sqlx（機能 <code>runtime-tokio</code>・<code>sqlite</code>）だけです。DB の中身の確認には <code>sqlite3</code> コマンド 3.51.0 を使います。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">04 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>04 の完成コードをそのまま出発点にします。<code>04-state-middleware</code> ディレクトリがある場所で、次のコマンドを実行してください。ビルド結果の <code>target/</code> はコピーせず、<code>Cargo.toml</code>・<code>Cargo.lock</code>・<code>src/</code> だけを新しいディレクトリ <code>05-database</code> にコピーします。コマンドは何も表示せずに終わります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir 05-database</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 04-state-middleware/Cargo.toml 04-state-middleware/Cargo.lock 04-state-middleware/src 05-database/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 05-database</span></pre>
+          </div>
+
+          <p>次に、<code>Cargo.toml</code> の <code>name</code> を <code>state-middleware</code> から <code>database</code> に変更します。変更するのはこの 1 行だけです。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "state-middleware"</span><span class="diff-line diff-line--add">+ name = "database"</span><span class="diff-line">  version = "0.1.0"</span></pre>
+          </div>
+
+          <p><code>src/main.rs</code> は 04 の完成形のまま使います。サーバーを起動して、04 と同じように動くことを確かめます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   ...</span><span class="terminal__line">   Compiling axum v0.8.9</span><span class="terminal__line">   Compiling database v0.1.0 (/path/to/05-database)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.91s</span><span class="terminal__line">     Running `target/debug/database`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>初回は依存クレートのコンパイルから始まります（出力の途中は省略しています）。別のターミナルを開き、<code>/</code> と <code>/health</code> にリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:36:46 GMT</span><span class="terminal__line"></span><span class="terminal__line">Hello from Handson Axum</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 15</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:36:46 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Running `target/debug/database`</code> が表示され、<code>/</code> が <code>Hello from Handson Axum</code> を返せば OK です。以降のコマンドは全て <code>05-database</code> ディレクトリで実行します。確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">sqlx を追加して SQLite に接続する</h3>
+        </div>
+        <div class="step__body">
+          <p>データベースを操作するクレート sqlx を追加し、SQLite のデータベースファイルに接続します。サーバーを止めた状態で、次のコマンドを実行してください。<code>runtime-tokio</code> は非同期ランタイムに tokio を使う指定、<code>sqlite</code> は SQLite 用のドライバーを有効にする指定です。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add sqlx --features runtime-tokio,sqlite</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding sqlx v0.9.0 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             + _rt-tokio</span><span class="terminal__line">             + _sqlite</span><span class="terminal__line">             + any</span><span class="terminal__line">             + derive</span><span class="terminal__line">             + json</span><span class="terminal__line">             + macros</span><span class="terminal__line">             + migrate</span><span class="terminal__line">             + runtime-tokio</span><span class="terminal__line">             + sqlite</span><span class="terminal__line">             + sqlite-bundled</span><span class="terminal__line">             + sqlite-deserialize</span><span class="terminal__line">             + sqlite-load-extension</span><span class="terminal__line">             + sqlite-unlock-notify</span><span class="terminal__line">             37 deactivated features</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">     Locking 110 packages to latest Rust 1.98.1 compatible versions</span><span class="terminal__line">      ...</span></pre>
+          </div>
+
+          <p>有効になった機能の一覧に <code>derive</code>・<code>macros</code>・<code>migrate</code> が含まれています。ステップ 3 以降で使う <code>sqlx::migrate!</code> と <code>#[derive(sqlx::FromRow)]</code> は、追加の指定なしで使えます。<code>Cargo.toml</code> には次の 1 行が追加されます。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  axum = "0.8.9"</span><span class="diff-line">  serde = { version = "1.0.229", features = ["derive"] }</span><span class="diff-line">  serde_json = "1.0.151"</span><span class="diff-line diff-line--add">+ sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }</span><span class="diff-line">  tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread"] }</span></pre>
+          </div>
+
+          <p>データベースのファイル <code>app.db</code> はプロジェクト直下に作られます。git にコミットしないよう、プロジェクト直下に <code>.gitignore</code> を新規作成します。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Text</span>
+              <span class="code-block__filename">.gitignore</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext">app.db*</code></pre>
+          </div>
+
+          <p><code>app.db*</code> は「<code>app.db</code> で始まる名前のファイル」を表します。DB ファイルは実行するたびに中身が変わるデータなので、ソースコードと一緒に管理しません。テーブルは次のステップで作るマイグレーションから、いつでも作り直せます。</p>
+
+          <p>続いて <code>src/main.rs</code> を変更し、起動時に接続して <code>AppState</code> に持たせます。この時点では 04 の <code>users</code>（<code>Vec</code>）も残したままにします。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use serde::{Deserialize, Serialize};</span><span class="diff-line">  use serde_json::json;</span><span class="diff-line diff-line--add">+ use sqlx::SqlitePool;</span><span class="diff-line">  use std::collections::HashMap;</span><span class="diff-line">  use std::sync::{Arc, Mutex};</span><span class="diff-line">  use std::time::Instant;</span><span class="diff-line">  ...</span><span class="diff-line">  #[derive(Clone)]</span><span class="diff-line">  struct AppState {</span><span class="diff-line">      users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,</span><span class="diff-line diff-line--add">+     pool: SqlitePool,</span><span class="diff-line">  }</span><span class="diff-line">  ...</span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  async fn main() {</span><span class="diff-line diff-line--add">+     let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+</span><span class="diff-line">      let state = AppState {</span><span class="diff-line">          users: Arc::new(Mutex::new(vec![</span><span class="diff-line">  ...</span><span class="diff-line">          ])),</span><span class="diff-line diff-line--add">+         pool,</span><span class="diff-line">      };</span></pre>
+          </div>
+
+          <ul>
+            <li><code>SqlitePool</code>: SQLite への接続をまとめて管理するコネクションプールです。<code>Clone</code> を実装しているので、<code>#[derive(Clone)]</code> の <code>AppState</code> にそのまま入れられます。</li>
+            <li><code>"sqlite://app.db?mode=rwc"</code>: <code>sqlite://</code> の後ろがファイル名です。<code>?mode=rwc</code> は read / write / create の略で、ファイルがなければ作ります。付け忘れたときの動きはステップ 7 で確かめます。</li>
+            <li>接続に失敗したら <code>.unwrap()</code> でパニックさせ、サーバーを起動しません。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Extension, Json, Router,
+    extract::{Path, Query, Request, State},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post, put},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sqlx::SqlitePool;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+#[derive(Clone, Serialize)]
+struct User {
+    id: u32,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,
+    pool: SqlitePool,
+}
+
+#[derive(Clone)]
+struct AppConfig {
+    app_name: String,
+}
+
+#[tokio::main]
+async fn main() {
+    let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")
+        .await
+        .unwrap();
+
+    let state = AppState {
+        users: Arc::new(Mutex::new(vec![
+            User {
+                id: 1,
+                name: "alice".to_string(),
+            },
+            User {
+                id: 2,
+                name: "bob".to_string(),
+            },
+        ])),
+        pool,
+    };
+
+    let protected_users = Router::new()
+        .route("/users", post(create_user))
+        .route("/users/{id}", put(update_user))
+        .route_layer(middleware::from_fn(require_api_key));
+
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users))
+        .route("/users/{id}", get(get_user))
+        .merge(protected_users)
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found)
+        .layer(Extension(AppConfig {
+            app_name: "Handson Axum".to_string(),
+        }))
+        .layer(middleware::from_fn(log_request))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn log_request(req: Request, next: Next) -&gt; Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = Instant::now();
+
+    let response = next.run(req).await;
+
+    let elapsed = start.elapsed();
+    println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());
+    response
+}
+
+async fn require_api_key(req: Request, next: Next) -&gt; Response {
+    let is_valid = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        == Some("secret");
+
+    if !is_valid {
+        return (StatusCode::UNAUTHORIZED, "invalid or missing x-api-key").into_response();
+    }
+
+    next.run(req).await
+}
+
+async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {
+    format!("Hello from {}", config.app_name)
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    let users = state.users.lock().unwrap();
+    Json(users.clone())
+}
+
+async fn create_user(
+    State(state): State&lt;AppState&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; (StatusCode, Json&lt;User&gt;) {
+    let mut users = state.users.lock().unwrap();
+    let user = User {
+        id: users.len() as u32 + 1,
+        name: payload.name,
+    };
+    users.push(user.clone());
+    (StatusCode::CREATED, Json(user))
+}
+
+async fn get_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;u32&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let users = state.users.lock().unwrap();
+    users
+        .iter()
+        .find(|user| user.id == id)
+        .cloned()
+        .map(Json)
+        .ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn update_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;u32&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let mut users = state.users.lock().unwrap();
+    let user = users
+        .iter_mut()
+        .find(|user| user.id == id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    user.name = payload.name;
+    Ok(Json(user.clone()))
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+            </div>
+          </details>
+
+          <p><code>cargo build</code> でビルドします。sqlx と依存クレートのコンパイルがあるため、初回は 10 秒ほどかかります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   ...</span><span class="terminal__line">   Compiling sqlx-core v0.9.0</span><span class="terminal__line">   Compiling sqlx-sqlite v0.9.0</span><span class="terminal__line">   Compiling sqlx-macros-core v0.9.0</span><span class="terminal__line">   Compiling sqlx-macros v0.9.0</span><span class="terminal__line">   Compiling sqlx v0.9.0</span><span class="terminal__line">   Compiling database v0.1.0 (/path/to/05-database)</span><span class="terminal__line">warning: field `pool` is never read</span><span class="terminal__line">  --&gt; src/main.rs:30:5</span><span class="terminal__line">   |</span><span class="terminal__line">28 | struct AppState {</span><span class="terminal__line">   |        -------- field in this struct</span><span class="terminal__line">29 |     users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,</span><span class="terminal__line">30 |     pool: SqlitePool,</span><span class="terminal__line">   |     ^^^^</span><span class="terminal__line">   |</span><span class="terminal__line">   = note: `AppState` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis</span><span class="terminal__line">   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default</span><span class="terminal__line"></span><span class="terminal__line">warning: `database` (bin "database") generated 1 warning</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.73s</span></pre>
+          </div>
+
+          <p><code>pool</code> をまだどのハンドラも使っていないため、<code>never read</code> の警告が出ます。ステップ 4 でハンドラから使い始めると消えるので、ここでは気にせず進めます。<code>app.db</code> がまだないことを確かめてから、サーバーを起動します（<code>cargo run</code> でも同じ警告が表示されます）。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls *.db</span><span class="terminal__line">zsh: no matches found: *.db</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   ...</span><span class="terminal__line">     Running `target/debug/database`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>サーバーを動かしたまま、2 つ目のターミナルでファイルを確認します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -la *.db</span><span class="terminal__line">-rw-r--r--@ 1 kazuki  staff  0  9月 26 18:28 app.db</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>起動後に <code>app.db</code>（サイズ 0 の空ファイル）ができていれば OK です。<code>ls *.db</code> のエラー表示はシェルによって異なります。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">マイグレーションでテーブルを作る</h3>
+        </div>
+        <div class="step__body">
+          <p><code>users</code> テーブルを作る SQL を「マイグレーション」として用意し、サーバーの起動時に実行します。プロジェクト直下に <code>migrations</code> ディレクトリを作り、次のファイルを新規作成してください。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">SQL</span>
+              <span class="code-block__filename">migrations/0001_create_users.sql</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-sql">CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL
+);</code></pre>
+          </div>
+
+          <p><code>id</code> は <code>INTEGER PRIMARY KEY AUTOINCREMENT</code> なので、行を追加すると SQLite が番号を振ります。次に、<code>main</code> で接続した直後にマイグレーションを実行します。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">      let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")</span><span class="diff-line">          .await</span><span class="diff-line">          .unwrap();</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     sqlx::migrate!().run(&amp;pool).await.unwrap();</span><span class="diff-line"> </span><span class="diff-line">      let state = AppState {</span></pre>
+          </div>
+
+          <ul>
+            <li><code>sqlx::migrate!()</code>: コンパイル時に、プロジェクト直下の <code>migrations/</code> にある SQL ファイルを実行ファイルへ埋め込むマクロです。sqlx の CLI ツール（sqlx-cli）は使いません。</li>
+            <li><code>.run(&amp;pool)</code>: まだ適用していないマイグレーションだけを実行します。適用した記録は、sqlx が作る <code>_sqlx_migrations</code> テーブルに残ります。</li>
+            <li>ファイル名は <code>&lt;番号&gt;_&lt;説明&gt;.sql</code> の形にします。番号の小さい順に適用されます。</li>
+          </ul>
+
+          <p>ステップ 2 で作った空の <code>app.db</code> はそのままでかまいません。<code>cargo build</code> してから <code>cargo run</code> で起動します（<code>pool</code> の警告はまだ出ます）。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling database v0.1.0 (/path/to/05-database)</span><span class="terminal__line">warning: field `pool` is never read</span><span class="terminal__line">   ...</span><span class="terminal__line">warning: `database` (bin "database") generated 1 warning</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.89s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   ...</span><span class="terminal__line">     Running `target/debug/database`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>2 つ目のターミナルで、<code>sqlite3</code> コマンドを使って <code>app.db</code> の中を確かめます。<code>.tables</code> はテーブルの一覧、<code>.schema</code> はテーブルの定義を表示するコマンドです。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 app.db '.tables'</span><span class="terminal__line">_sqlx_migrations  users</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 app.db '.schema users'</span><span class="terminal__line">CREATE TABLE users (</span><span class="terminal__line">    id INTEGER PRIMARY KEY AUTOINCREMENT,</span><span class="terminal__line">    name TEXT NOT NULL</span><span class="terminal__line">);</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 app.db 'SELECT version, description, success FROM _sqlx_migrations'</span><span class="terminal__line">1|create users|1</span></pre>
+          </div>
+
+          <p><code>users</code> テーブルに加えて <code>_sqlx_migrations</code> テーブルができました。ファイル名の番号 <code>0001</code> は <code>version</code> の <code>1</code> として、<code>create_users</code> は <code>description</code> の <code>create users</code> として記録されています。サーバーを止めてもう一度 <code>cargo run</code> で起動し、同じ <code>SELECT</code> を実行しても行は 1 件のままです。適用済みのマイグレーションは再実行されません。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>.tables</code> に <code>_sqlx_migrations</code> と <code>users</code> が表示されれば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">一覧と取得を DB から返す（GET /users、GET /users/{id}）</h3>
+        </div>
+        <div class="step__body">
+          <p>ここからハンドラを 1 つずつ DB に置き換えます。まずは読み取り（Read）の <code>GET /users</code> と <code>GET /users/{id}</code> です。<code>POST</code> と <code>PUT</code> はまだ <code>Vec</code> を使うので、<code>AppState</code> の <code>users</code> はこのステップでは残します。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- #[derive(Clone, Serialize)]</span><span class="diff-line diff-line--add">+ #[derive(Clone, Serialize, sqlx::FromRow)]</span><span class="diff-line">  struct User {</span><span class="diff-line diff-line--remove">-     id: u32,</span><span class="diff-line diff-line--add">+     id: i64,</span><span class="diff-line">      name: String,</span><span class="diff-line">  }</span><span class="diff-line">  ...</span><span class="diff-line diff-line--remove">- async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Json&lt;Vec&lt;User&gt;&gt; {</span><span class="diff-line diff-line--remove">-     let users = state.users.lock().unwrap();</span><span class="diff-line diff-line--remove">-     Json(users.clone())</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, StatusCode&gt; {</span><span class="diff-line diff-line--add">+     let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users ORDER BY id")</span><span class="diff-line diff-line--add">+         .fetch_all(&amp;state.pool)</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--add">+     Ok(Json(users))</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line"> </span><span class="diff-line">  async fn create_user(</span><span class="diff-line">  ...</span><span class="diff-line">      let user = User {</span><span class="diff-line diff-line--remove">-         id: users.len() as u32 + 1,</span><span class="diff-line diff-line--add">+         id: users.len() as i64 + 1,</span><span class="diff-line">          name: payload.name,</span><span class="diff-line">      };</span><span class="diff-line">  ...</span><span class="diff-line">  async fn get_user(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--remove">-     Path(id): Path&lt;u32&gt;,</span><span class="diff-line diff-line--add">+     Path(id): Path&lt;i64&gt;,</span><span class="diff-line">  ) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {</span><span class="diff-line diff-line--remove">-     let users = state.users.lock().unwrap();</span><span class="diff-line diff-line--remove">-     users</span><span class="diff-line diff-line--remove">-         .iter()</span><span class="diff-line diff-line--remove">-         .find(|user| user.id == id)</span><span class="diff-line diff-line--remove">-         .cloned()</span><span class="diff-line diff-line--remove">-         .map(Json)</span><span class="diff-line diff-line--remove">-         .ok_or(StatusCode::NOT_FOUND)</span><span class="diff-line diff-line--add">+     let user = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users WHERE id = ?")</span><span class="diff-line diff-line--add">+         .bind(id)</span><span class="diff-line diff-line--add">+         .fetch_optional(&amp;state.pool)</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--add">+     user.map(Json).ok_or(StatusCode::NOT_FOUND)</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  async fn update_user(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--remove">-     Path(id): Path&lt;u32&gt;,</span><span class="diff-line diff-line--add">+     Path(id): Path&lt;i64&gt;,</span><span class="diff-line">      Json(payload): Json&lt;CreateUser&gt;,</span></pre>
+          </div>
+
+          <ul>
+            <li><code>#[derive(sqlx::FromRow)]</code>: 取得した行を <code>User</code> に変換できるようにします。<code>SELECT id, name</code> の列名が、同じ名前のフィールドに入ります。</li>
+            <li><code>id: i64</code>: SQLite の <code>INTEGER</code> 列は 64 ビットの符号付き整数を格納できるので、Rust 側も同じ範囲の <code>i64</code> で受け取ります。パスパラメーター <code>Path&lt;i64&gt;</code> と、<code>create_user</code> の <code>as i64</code> も合わせて変えます。</li>
+            <li><code>sqlx::query_as::&lt;_, User&gt;(SQL)</code>: 結果を <code>User</code> として受け取るクエリを作ります。SQL の <code>?</code> には <code>.bind(id)</code> で値を渡します。</li>
+            <li><code>fetch_all</code> は全ての行を <code>Vec</code> で、<code>fetch_optional</code> は 0 件か 1 件の行を <code>Option</code> で返します。<code>None</code> のときは 04 と同じく 404 にします。</li>
+            <li>DB のエラーは <code>map_err</code> で 500（<code>INTERNAL_SERVER_ERROR</code>）に変え、<code>?</code> で返します。そのため <code>list_users</code> の戻り値も <code>Result</code> にしています。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Extension, Json, Router,
+    extract::{Path, Query, Request, State},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post, put},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sqlx::SqlitePool;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+#[derive(Clone, Serialize, sqlx::FromRow)]
+struct User {
+    id: i64,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,
+    pool: SqlitePool,
+}
+
+#[derive(Clone)]
+struct AppConfig {
+    app_name: String,
+}
+
+#[tokio::main]
+async fn main() {
+    let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")
+        .await
+        .unwrap();
+
+    sqlx::migrate!().run(&amp;pool).await.unwrap();
+
+    let state = AppState {
+        users: Arc::new(Mutex::new(vec![
+            User {
+                id: 1,
+                name: "alice".to_string(),
+            },
+            User {
+                id: 2,
+                name: "bob".to_string(),
+            },
+        ])),
+        pool,
+    };
+
+    let protected_users = Router::new()
+        .route("/users", post(create_user))
+        .route("/users/{id}", put(update_user))
+        .route_layer(middleware::from_fn(require_api_key));
+
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users))
+        .route("/users/{id}", get(get_user))
+        .merge(protected_users)
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found)
+        .layer(Extension(AppConfig {
+            app_name: "Handson Axum".to_string(),
+        }))
+        .layer(middleware::from_fn(log_request))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn log_request(req: Request, next: Next) -&gt; Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = Instant::now();
+
+    let response = next.run(req).await;
+
+    let elapsed = start.elapsed();
+    println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());
+    response
+}
+
+async fn require_api_key(req: Request, next: Next) -&gt; Response {
+    let is_valid = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        == Some("secret");
+
+    if !is_valid {
+        return (StatusCode::UNAUTHORIZED, "invalid or missing x-api-key").into_response();
+    }
+
+    next.run(req).await
+}
+
+async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {
+    format!("Hello from {}", config.app_name)
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, StatusCode&gt; {
+    let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users ORDER BY id")
+        .fetch_all(&amp;state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(users))
+}
+
+async fn create_user(
+    State(state): State&lt;AppState&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; (StatusCode, Json&lt;User&gt;) {
+    let mut users = state.users.lock().unwrap();
+    let user = User {
+        id: users.len() as i64 + 1,
+        name: payload.name,
+    };
+    users.push(user.clone());
+    (StatusCode::CREATED, Json(user))
+}
+
+async fn get_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let user = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&amp;state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    user.map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn update_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let mut users = state.users.lock().unwrap();
+    let user = users
+        .iter_mut()
+        .find(|user| user.id == id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    user.name = payload.name;
+    Ok(Json(user.clone()))
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+            </div>
+          </details>
+
+          <p><code>cargo build</code> でビルドします。<code>pool</code> を使うハンドラができたので、警告は消えます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling database v0.1.0 (/path/to/05-database)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.08s</span></pre>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">もし <code>internal compiler error</code> が出たら</p>
+              <p>型を変更した直後のビルドが、<code>error: internal compiler error</code> で始まるエラーになって失敗する場合もあります（執筆時に 1 度発生しました）。これはコードの誤りではなく、インクリメンタルコンパイルのキャッシュの問題です。メッセージ中の <code>note: as a workaround, ...</code> の行に回避策が書かれています。そのとおり <code>cargo clean -p database</code> を実行します。その後 <code>cargo build</code> し直すと解消します。</p>
+            </div>
+          </div>
+
+          <p><code>cargo run</code> で起動し、2 つ目のターミナルから確かめます。この時点の <code>POST /users</code> はまだ <code>Vec</code> に追加するだけで DB には書き込まないので、データは <code>sqlite3</code> で直接入れます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 2</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:37:38 GMT</span><span class="terminal__line"></span><span class="terminal__line">[]</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 app.db "INSERT INTO users (name) VALUES ('alice')"</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 25</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:37:38 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"}]</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/1</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:37:38 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/999</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:37:38 GMT</span></pre>
+          </div>
+
+          <p>04 の初期データ（alice と bob）は返らず、最初は空の配列 <code>[]</code> です。<code>sqlite3</code> で入れた行には、<code>AUTOINCREMENT</code> によって <code>id</code> の <code>1</code> が振られています。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>空の一覧、<code>sqlite3</code> で入れた後の 1 件、<code>/users/999</code> の 404 を確認できれば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">ユーザーを DB に追加する（POST /users）</h3>
+        </div>
+        <div class="step__body">
+          <p>次は作成（Create）の <code>POST /users</code> です。<code>INSERT</code> に <code>RETURNING</code> 句を付けて、追加した行をそのまま受け取ります。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  async fn create_user(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line">      Json(payload): Json&lt;CreateUser&gt;,</span><span class="diff-line diff-line--remove">- ) -&gt; (StatusCode, Json&lt;User&gt;) {</span><span class="diff-line diff-line--remove">-     let mut users = state.users.lock().unwrap();</span><span class="diff-line diff-line--remove">-     let user = User {</span><span class="diff-line diff-line--remove">-         id: users.len() as i64 + 1,</span><span class="diff-line diff-line--remove">-         name: payload.name,</span><span class="diff-line diff-line--remove">-     };</span><span class="diff-line diff-line--remove">-     users.push(user.clone());</span><span class="diff-line diff-line--remove">-     (StatusCode::CREATED, Json(user))</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;(StatusCode, Json&lt;User&gt;), StatusCode&gt; {</span><span class="diff-line diff-line--add">+     let user = sqlx::query_as::&lt;_, User&gt;("INSERT INTO users (name) VALUES (?) RETURNING id, name")</span><span class="diff-line diff-line--add">+         .bind(&amp;payload.name)</span><span class="diff-line diff-line--add">+         .fetch_one(&amp;state.pool)</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--add">+     Ok((StatusCode::CREATED, Json(user)))</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <ul>
+            <li><code>RETURNING id, name</code>: <code>INSERT</code> した行の列を結果として返します（SQLite 3.35 以降で使えます）。<code>SELECT</code> と同じように <code>query_as</code> で <code>User</code> に変換できます。</li>
+            <li><code>fetch_one</code>: ちょうど 1 行を受け取ります。<code>INSERT</code> は必ず 1 行を追加するので、<code>Option</code> ではなく <code>User</code> がそのまま返ります。</li>
+            <li><code>id</code> は DB が振るので、04 の「件数 + 1」の計算は不要になりました。</li>
+          </ul>
+
+          <p><code>cargo build</code> してから <code>cargo run</code> で起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling database v0.1.0 (/path/to/05-database)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.00s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s</span><span class="terminal__line">     Running `target/debug/database`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>2 つ目のターミナルから <code>bob</code> を追加します。04 の API キー認証はそのまま掛かっているので、キーなしとキーありの両方を送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -d '{"name":"bob"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 28</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:02 GMT</span><span class="terminal__line"></span><span class="terminal__line">invalid or missing x-api-key</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"bob"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 21</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:02 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":2,"name":"bob"}</span></pre>
+          </div>
+
+          <p>ここで、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めて、もう一度 <code>cargo run</code> で起動してください。起動し直したら、一覧を取得します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 47</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:06 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]</span></pre>
+          </div>
+
+          <p>04 では再起動すると追加したユーザーが消えましたが、今回は <code>app.db</code> に保存されているので残っています。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>POST</code> が <code>201 Created</code> と <code>{"id":2,"name":"bob"}</code> を返し、再起動後の一覧に <code>bob</code> が残っていれば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">更新と削除を実装し、Vec と Mutex を取り除く（PUT / DELETE /users/{id}）</h3>
+        </div>
+        <div class="step__body">
+          <p>最後に、更新（Update）の <code>PUT /users/{id}</code> を DB に置き換え、削除（Delete）の <code>DELETE /users/{id}</code> を追加します。これで <code>users</code>（<code>Vec</code>）を使うハンドラがなくなるので、<code>AppState</code> から <code>users</code> と、<code>Arc</code> / <code>Mutex</code> の <code>use</code> も削除します。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use sqlx::SqlitePool;</span><span class="diff-line">  use std::collections::HashMap;</span><span class="diff-line diff-line--remove">- use std::sync::{Arc, Mutex};</span><span class="diff-line">  use std::time::Instant;</span><span class="diff-line">  ...</span><span class="diff-line">  #[derive(Clone)]</span><span class="diff-line">  struct AppState {</span><span class="diff-line diff-line--remove">-     users: Arc&lt;Mutex&lt;Vec&lt;User&gt;&gt;&gt;,</span><span class="diff-line">      pool: SqlitePool,</span><span class="diff-line">  }</span><span class="diff-line">  ...</span><span class="diff-line">      sqlx::migrate!().run(&amp;pool).await.unwrap();</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     let state = AppState {</span><span class="diff-line diff-line--remove">-         users: Arc::new(Mutex::new(vec![</span><span class="diff-line diff-line--remove">-             User {</span><span class="diff-line diff-line--remove">-                 id: 1,</span><span class="diff-line diff-line--remove">-                 name: "alice".to_string(),</span><span class="diff-line diff-line--remove">-             },</span><span class="diff-line diff-line--remove">-             User {</span><span class="diff-line diff-line--remove">-                 id: 2,</span><span class="diff-line diff-line--remove">-                 name: "bob".to_string(),</span><span class="diff-line diff-line--remove">-             },</span><span class="diff-line diff-line--remove">-         ])),</span><span class="diff-line diff-line--remove">-         pool,</span><span class="diff-line diff-line--remove">-     };</span><span class="diff-line diff-line--add">+     let state = AppState { pool };</span><span class="diff-line"> </span><span class="diff-line">      let protected_users = Router::new()</span><span class="diff-line">          .route("/users", post(create_user))</span><span class="diff-line diff-line--remove">-         .route("/users/{id}", put(update_user))</span><span class="diff-line diff-line--add">+         .route("/users/{id}", put(update_user).delete(delete_user))</span><span class="diff-line">          .route_layer(middleware::from_fn(require_api_key));</span><span class="diff-line">  ...</span><span class="diff-line">  async fn update_user(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line">      Path(id): Path&lt;i64&gt;,</span><span class="diff-line">      Json(payload): Json&lt;CreateUser&gt;,</span><span class="diff-line">  ) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {</span><span class="diff-line diff-line--remove">-     let mut users = state.users.lock().unwrap();</span><span class="diff-line diff-line--remove">-     let user = users</span><span class="diff-line diff-line--remove">-         .iter_mut()</span><span class="diff-line diff-line--remove">-         .find(|user| user.id == id)</span><span class="diff-line diff-line--remove">-         .ok_or(StatusCode::NOT_FOUND)?;</span><span class="diff-line diff-line--remove">-     user.name = payload.name;</span><span class="diff-line diff-line--remove">-     Ok(Json(user.clone()))</span><span class="diff-line diff-line--add">+     let user =</span><span class="diff-line diff-line--add">+         sqlx::query_as::&lt;_, User&gt;("UPDATE users SET name = ? WHERE id = ? RETURNING id, name")</span><span class="diff-line diff-line--add">+             .bind(&amp;payload.name)</span><span class="diff-line diff-line--add">+             .bind(id)</span><span class="diff-line diff-line--add">+             .fetch_optional(&amp;state.pool)</span><span class="diff-line diff-line--add">+             .await</span><span class="diff-line diff-line--add">+             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--add">+     user.map(Json).ok_or(StatusCode::NOT_FOUND)</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ async fn delete_user(</span><span class="diff-line diff-line--add">+     State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--add">+     Path(id): Path&lt;i64&gt;,</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;StatusCode, StatusCode&gt; {</span><span class="diff-line diff-line--add">+     let result = sqlx::query("DELETE FROM users WHERE id = ?")</span><span class="diff-line diff-line--add">+         .bind(id)</span><span class="diff-line diff-line--add">+         .execute(&amp;state.pool)</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--add">+     if result.rows_affected() == 0 {</span><span class="diff-line diff-line--add">+         Err(StatusCode::NOT_FOUND)</span><span class="diff-line diff-line--add">+     } else {</span><span class="diff-line diff-line--add">+         Ok(StatusCode::NO_CONTENT)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line"> </span><span class="diff-line">  async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {</span></pre>
+          </div>
+
+          <ul>
+            <li><code>update_user</code>: <code>UPDATE ... RETURNING</code> で更新後の行を受け取ります。<code>?</code> には <code>.bind</code> を呼んだ順に値が入ります。該当する行がなければ結果は 0 行なので、<code>fetch_optional</code> が <code>None</code> を返し、404 になります。</li>
+            <li><code>delete_user</code>: 行を返さない SQL なので、<code>query_as</code> ではなく <code>sqlx::query</code> と <code>execute</code> を使います。<code>DELETE</code> は該当する行がなくてもエラーにならず、「0 行を削除した」という結果になります。そこで <code>rows_affected()</code>（影響を受けた行数）が 0 なら 404、それ以外は本文なしの <code>204 No Content</code> を返します。</li>
+            <li>ルーティング: 03 や 04 の前半で使った <code>get(list_users).post(create_user)</code> のように、<code>put(update_user).delete(delete_user)</code> と同じパスへメソッドを並べます。<code>protected_users</code> に追加したので、<code>DELETE</code> にも API キー認証が掛かります。</li>
+            <li><code>Arc</code> / <code>Mutex</code> の <code>use</code> を消し忘れると、未使用の <code>import</code> の警告が出ます。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体（このレッスンの完成形）を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Extension, Json, Router,
+    extract::{Path, Query, Request, State},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post, put},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sqlx::SqlitePool;
+use std::collections::HashMap;
+use std::time::Instant;
+
+#[derive(Clone, Serialize, sqlx::FromRow)]
+struct User {
+    id: i64,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    pool: SqlitePool,
+}
+
+#[derive(Clone)]
+struct AppConfig {
+    app_name: String,
+}
+
+#[tokio::main]
+async fn main() {
+    let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")
+        .await
+        .unwrap();
+
+    sqlx::migrate!().run(&amp;pool).await.unwrap();
+
+    let state = AppState { pool };
+
+    let protected_users = Router::new()
+        .route("/users", post(create_user))
+        .route("/users/{id}", put(update_user).delete(delete_user))
+        .route_layer(middleware::from_fn(require_api_key));
+
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users))
+        .route("/users/{id}", get(get_user))
+        .merge(protected_users)
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found)
+        .layer(Extension(AppConfig {
+            app_name: "Handson Axum".to_string(),
+        }))
+        .layer(middleware::from_fn(log_request))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn log_request(req: Request, next: Next) -&gt; Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = Instant::now();
+
+    let response = next.run(req).await;
+
+    let elapsed = start.elapsed();
+    println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());
+    response
+}
+
+async fn require_api_key(req: Request, next: Next) -&gt; Response {
+    let is_valid = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        == Some("secret");
+
+    if !is_valid {
+        return (StatusCode::UNAUTHORIZED, "invalid or missing x-api-key").into_response();
+    }
+
+    next.run(req).await
+}
+
+async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {
+    format!("Hello from {}", config.app_name)
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, StatusCode&gt; {
+    let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users ORDER BY id")
+        .fetch_all(&amp;state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(users))
+}
+
+async fn create_user(
+    State(state): State&lt;AppState&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; Result&lt;(StatusCode, Json&lt;User&gt;), StatusCode&gt; {
+    let user = sqlx::query_as::&lt;_, User&gt;("INSERT INTO users (name) VALUES (?) RETURNING id, name")
+        .bind(&amp;payload.name)
+        .fetch_one(&amp;state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok((StatusCode::CREATED, Json(user)))
+}
+
+async fn get_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let user = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&amp;state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    user.map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn update_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {
+    let user =
+        sqlx::query_as::&lt;_, User&gt;("UPDATE users SET name = ? WHERE id = ? RETURNING id, name")
+            .bind(&amp;payload.name)
+            .bind(id)
+            .fetch_optional(&amp;state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    user.map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn delete_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;StatusCode, StatusCode&gt; {
+    let result = sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(id)
+        .execute(&amp;state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if result.rows_affected() == 0 {
+        Err(StatusCode::NOT_FOUND)
+    } else {
+        Ok(StatusCode::NO_CONTENT)
+    }
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+            </div>
+          </details>
+
+          <p><code>cargo build</code> してから <code>cargo run</code> で起動します。<code>app.db</code> には、ステップ 5 までに入れた <code>alice</code>（<code>id</code> 1）と <code>bob</code>（<code>id</code> 2）が残っています。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling database v0.1.0 (/path/to/05-database)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.01s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s</span><span class="terminal__line">     Running `target/debug/database`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>2 つ目のターミナルから、<code>bob</code> の更新、存在しない <code>id</code> の更新、削除を順に試します。最後にもう 1 人追加して、一覧と DB の中身を確認します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/2 -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"bobby"}'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:18 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":2,"name":"bobby"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/999 -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"x"}'</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:18 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X DELETE http://127.0.0.1:3000/users/2</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 28</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:23 GMT</span><span class="terminal__line"></span><span class="terminal__line">invalid or missing x-api-key</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X DELETE http://127.0.0.1:3000/users/2 -H 'x-api-key: secret'</span><span class="terminal__line">HTTP/1.1 204 No Content</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:23 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X DELETE http://127.0.0.1:3000/users/999 -H 'x-api-key: secret'</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:23 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"carol"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:23 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":3,"name":"carol"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 49</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:23 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"},{"id":3,"name":"carol"}]</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 app.db 'SELECT * FROM users'</span><span class="terminal__line">1|alice</span><span class="terminal__line">3|carol</span></pre>
+          </div>
+
+          <p>削除した <code>id</code> の 2 は再利用されず、<code>carol</code> には 3 が振られました。04 の「件数 + 1」の方法では、削除の後に <code>id</code> が重複するおそれがありましたが、DB に採番を任せればその心配はありません。1 つ目のターミナルには、次のログが出ています。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（サーバー側の出力）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line">listening on 127.0.0.1:3000</span><span class="terminal__line">PUT /users/2 -&gt; 200 OK (1.468667ms)</span><span class="terminal__line">PUT /users/999 -&gt; 404 Not Found (304.833µs)</span><span class="terminal__line">DELETE /users/2 -&gt; 401 Unauthorized (27.833µs)</span><span class="terminal__line">DELETE /users/2 -&gt; 204 No Content (1.052ms)</span><span class="terminal__line">DELETE /users/999 -&gt; 404 Not Found (182.125µs)</span><span class="terminal__line">POST /users -&gt; 201 Created (901.834µs)</span><span class="terminal__line">GET /users -&gt; 200 OK (304.709µs)</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>PUT</code> が更新後の JSON を返し、<code>DELETE</code> が <code>204 No Content</code>、存在しない <code>id</code> が 404、キーなしの <code>DELETE</code> が 401 になれば OK です。<code>sqlite3</code> の結果が API の一覧と一致することも確かめてください。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">SQL の誤りと接続文字列の誤りを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>DB を使うコードでよく起きる 2 つの失敗を、わざと起こして確かめます。サーバーを止めた状態で始めてください。</p>
+
+          <p><strong>(a) SQL の列名を間違える。</strong><code>list_users</code> の SQL の <code>name</code> を <code>nmae</code> に変え、エラーの中身が見えるように <code>map_err</code> で <code>eprintln!</code> を呼びます。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, StatusCode&gt; {</span><span class="diff-line diff-line--remove">-     let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users ORDER BY id")</span><span class="diff-line diff-line--add">+     let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, nmae FROM users ORDER BY id")</span><span class="diff-line">          .fetch_all(&amp;state.pool)</span><span class="diff-line">          .await</span><span class="diff-line diff-line--remove">-         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--add">+         .map_err(|e| {</span><span class="diff-line diff-line--add">+             eprintln!("query error: {e}");</span><span class="diff-line diff-line--add">+             StatusCode::INTERNAL_SERVER_ERROR</span><span class="diff-line diff-line--add">+         })?;</span><span class="diff-line">      Ok(Json(users))</span><span class="diff-line">  }</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling database v0.1.0 (/path/to/05-database)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.65s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   ...</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>ビルドは通ります。2 つ目のターミナルから一覧を取得します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 500 Internal Server Error</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:34 GMT</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（サーバー側の出力）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line">listening on 127.0.0.1:3000</span><span class="terminal__line">query error: error returned from database: (code: 1) no such column: nmae</span><span class="terminal__line">GET /users -&gt; 500 Internal Server Error (428.167µs)</span></pre>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">SQL の誤りはコンパイル時には見つからない</p>
+              <p><code>query_as</code> に渡す SQL はただの文字列です。そのため列名を間違えてもビルドは通り、リクエストを処理する段階で初めて 500 が返ります。クライアントには原因が返らないため、サーバー側でエラーの内容をログに出すことが重要です。sqlx には、ビルド時に DB へ接続して SQL を検査する <code>sqlx::query!</code> マクロもありますが、このレッスンでは使いません。</p>
+            </div>
+          </div>
+
+          <p>確認できたらサーバーを止め、SQL を <code>name</code> に、<code>map_err</code> を <code>.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</code> に戻してください。</p>
+
+          <p><strong>(b) 接続文字列の <code>?mode=rwc</code> を外す。</strong><code>app.db</code> を削除してから、接続文字列を次のように変えて起動します。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">-     let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")</span><span class="diff-line diff-line--add">+     let pool = SqlitePool::connect("sqlite://app.db")</span><span class="diff-line">          .await</span><span class="diff-line">          .unwrap();</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -f app.db*</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   Compiling database v0.1.0 (/path/to/05-database)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.65s</span><span class="terminal__line">     Running `target/debug/database`</span><span class="terminal__line"></span><span class="terminal__line">thread 'main' (...) panicked at src/main.rs:40:10:</span><span class="terminal__line">called `Result::unwrap()` on an `Err` value: Database(SqliteError { code: 14, message: "unable to open database file" })</span><span class="terminal__line">note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls app.db*</span><span class="terminal__line">zsh: no matches found: app.db*</span></pre>
+          </div>
+
+          <p>今度はリクエストを送る前に、起動の時点でプロセスが終了します。<code>src/main.rs:40</code> は <code>SqlitePool::connect(...)</code> の <code>.unwrap()</code> の行で、<code>app.db</code> も作られていません。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>unable to open database file</code> が出たら <code>?mode=rwc</code> を疑う</p>
+              <p>メッセージは「ファイルを開けない」という一般的な内容で、<code>?mode=rwc</code> がないことは書かれていません。<code>?mode=rwc</code> を付けない接続では、存在しないファイルは作られません。DB ファイルがまだない環境で起動する場合は、接続文字列を確認しましょう。</p>
+            </div>
+          </div>
+
+          <p>確認できたら、接続文字列を <code>"sqlite://app.db?mode=rwc"</code> に戻してください。2 つの失敗を並べると、次のように検出されるタイミングが異なります。</p>
+
+          <table>
+            <thead>
+              <tr><th>失敗</th><th>ビルド</th><th>起動</th><th>検出されるタイミング</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>(a) SQL の列名の誤り</td><td>通る</td><td>できる</td><td>そのクエリを実行したリクエストで 500</td></tr>
+              <tr><td>(b) <code>?mode=rwc</code> の付け忘れ</td><td>通る</td><td>パニックで終了</td><td>起動時（DB ファイルがない場合）</td></tr>
+            </tbody>
+          </table>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>(a) で 500 とサーバー側の <code>no such column: nmae</code> を、(b) で <code>unable to open database file</code> のパニックを確認できれば OK です。2 か所とも元に戻し、(a) で起動したサーバーも止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">ビルド・Lint・フォーマットを確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>仕上げに、ビルド・静的解析（Clippy）・書式の確認をまとめて行います。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling database v0.1.0 (/path/to/05-database)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.72s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy --all-targets</span><span class="terminal__line">   ...</span><span class="terminal__line">    Checking sqlx v0.9.0</span><span class="terminal__line">    Checking database v0.1.0 (/path/to/05-database)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.55s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span></pre>
+          </div>
+
+          <p><code>cargo fmt --check</code> は何も表示せずに終わります。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">rustfmt による <code>update_user</code> の折り返し</p>
+              <p><code>update_user</code> の <code>let user =</code> の直後で改行する書き方は、rustfmt の整形結果に合わせたものです。<code>sqlx::query_as::&lt;_, User&gt;(</code> の後で SQL を改行するなど別の形に手で折り返すと、<code>cargo fmt --check</code> が差分を表示します。差分が出たら <code>cargo fmt</code> を実行して整形してください。</p>
+            </div>
+          </div>
+
+          <p>最後に、DB ファイルを消した状態から起動しても動くことを確かめます。ステップ 7 の (b) で <code>app.db</code> は削除済みです。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -f app.db*</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s</span><span class="terminal__line">     Running `target/debug/database`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 2</span><span class="terminal__line">date: Sat, 26 Sep 2026 09:38:55 GMT</span><span class="terminal__line"></span><span class="terminal__line">[]</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 app.db '.tables'</span><span class="terminal__line">_sqlx_migrations  users</span></pre>
+          </div>
+
+          <p>起動時に <code>app.db</code> が作られ、マイグレーションで <code>users</code> テーブルも作り直されました。データを消して最初からやり直したいときは、サーバーを止めて <code>rm -f app.db*</code> を実行すれば済みます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo build</code> と <code>cargo clippy --all-targets</code> がエラーや警告を出さずに終わり、<code>cargo fmt --check</code> が何も表示しなければ OK です。DB ファイルがない状態から起動して <code>[]</code> が返れば完成です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">04 のプロジェクトをコピーし、<code>Cargo.toml</code> の <code>name</code> を <code>database</code> に変えて起動できた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>cargo add</code> で sqlx を追加し、<code>SqlitePool</code> を <code>AppState</code> に持たせた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>.gitignore</code> で <code>app.db*</code> をコミットの対象から外した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>sqlx::migrate!</code> で起動時に <code>users</code> テーブルを作り、<code>_sqlx_migrations</code> に記録されることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>FromRow</code> と <code>query_as</code> で、<code>GET /users</code> と <code>GET /users/{id}</code> を DB から返した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>INSERT ... RETURNING</code> で追加したユーザーが、再起動しても残ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>UPDATE ... RETURNING</code> と <code>rows_affected()</code> で、更新と削除を実装し、該当する行がないときは 404 を返した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">SQL の列名の誤りは実行時の 500、<code>?mode=rwc</code> の付け忘れは起動時のパニックになることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>cargo build</code>・<code>cargo clippy --all-targets</code>・<code>cargo fmt --check</code> が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">起動時に <code>unable to open database file</code> でパニックする</p>
+          <p>接続文字列が <code>"sqlite://app.db?mode=rwc"</code> になっているか確認してください。ステップ 7 の (b) と同じエラーです。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>GET /users</code> などが 500 を返す</p>
+          <p>SQL の列名やテーブル名に誤りがないか確認してください。ステップ 7 の (a) のように、<code>map_err</code> の中でエラーを <code>eprintln!</code> すると原因がサーバー側に表示されます。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>internal compiler error</code> でビルドが失敗する</p>
+          <p><code>cargo clean -p database</code> を実行してから、もう一度 <code>cargo build</code> してください（ステップ 4 を参照）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">データを最初の状態に戻したい</p>
+          <p>サーバーを止めて <code>rm -f app.db*</code> を実行します。次の起動時に、マイグレーションで空の <code>users</code> テーブルが作り直されます（ステップ 8 を参照）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">コードを変えたのに結果が変わらない</p>
+          <p><code>cargo run</code> で起動したサーバーは、ソースコードを保存しても変更を反映しません。各ステップでコードを変えたら、前のサーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めてから <code>cargo run</code> し直してください。止め忘れたまま別のターミナルで起動すると、ポート 3000 が使用中のエラーになります（01 の「つまずきポイント」を参照）。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        sqlx の <code>SqlitePool</code> で SQLite に接続し、<code>sqlx::migrate!</code> で起動時にテーブルを作りました。
+        <code>FromRow</code> と <code>query_as</code> で行を構造体として受け取り、<code>RETURNING</code> と <code>rows_affected()</code> を使って CRUD の API を実装しました。
+        データは <code>app.db</code> に保存されるので、サーバーを再起動しても残ります。
+        SQL の誤りは実行時の 500 として、接続文字列の誤りは起動時のパニックとして現れることも確かめました。
+        次の項目では、独自のエラー型とバリデーションを実装します。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/05-database</code> の <code>axum/05-database/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../04-state-middleware/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">04: 共有状態とミドルウェア</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">06: エラーハンドリングとバリデーション</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
