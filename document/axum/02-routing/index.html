@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02: ルーティングとハンドラ | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">02</li>
+        </ol>
+        <h1 class="lesson-title">ルーティングとハンドラ</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 01 で最小の Axum サーバーを動かし、次にエンドポイントを増やしたい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法（関数・タプル・パターンによる分解）、<code>cargo run</code> と <code>curl</code> の基本操作ができること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../01-hello-axum/index.html">01: Hello Axum: 最小の Web サーバーを起動する</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>1 つのパスに <code>GET</code> と <code>POST</code> の 2 つのハンドラを登録し、404 と 405 の違いを確かめる</li>
+          <li><code>{id}</code> 構文のパスパラメーターを <code>Path&lt;u32&gt;</code> で受け取り、型に合わない値が 400 になることを確かめる</li>
+          <li>複数のパスパラメーターをタプルで受け取る</li>
+          <li>クエリパラメーターを <code>Query&lt;HashMap&lt;String, String&gt;&gt;</code> で受け取る</li>
+          <li>ハンドラを名前付きの関数に整理し、<code>fallback</code> で 404 の本文を返す</li>
+          <li>axum 0.7 以前の <code>:id</code> 構文を書くと起動時に panic することを確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        01 で作った最小のサーバーに、ユーザー一覧・ユーザー詳細・検索などのエンドポイントを足していきます。
+        パスやクエリ文字列から値を取り出す仕組み（エクストラクター）の <code>Path</code> と <code>Query</code> を使い、ハンドラの引数として値を受け取れるようにします。
+      </p>
+
+      <p>このレッスンの完成時には、サーバーが次のルートへ応答します。</p>
+
+      <table>
+        <thead>
+          <tr><th>メソッド</th><th>パス</th><th>返す内容</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/</code></td><td><code>Hello, Axum!</code></td></tr>
+          <tr><td>GET</td><td><code>/health</code></td><td><code>ok</code></td></tr>
+          <tr><td>GET</td><td><code>/users</code></td><td><code>list users</code></td></tr>
+          <tr><td>POST</td><td><code>/users</code></td><td><code>create user</code></td></tr>
+          <tr><td>GET</td><td><code>/users/{id}</code></td><td><code>user {id}</code>（<code>id</code> が数値でなければ 400）</td></tr>
+          <tr><td>GET</td><td><code>/users/{user_id}/posts/{post_id}</code></td><td><code>user {user_id} post {post_id}</code></td></tr>
+          <tr><td>GET</td><td><code>/search</code></td><td>受け取ったクエリパラメーターの一覧</td></tr>
+          <tr><td>（上記以外）</td><td>どれにもマッチしないパス</td><td>404 と本文 <code>Not Found</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Rust（rustc）1.98.1 / cargo 1.98.1 / axum 0.8.9 / tokio 1.53.1（Rust edition 2024）で動作を確認しています。
+            バージョンは執筆時点（2026年9月）のものです。依存クレートは 01 から追加しません。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">01 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            01 の完成コードをそのまま出発点にします。<code>01-hello-axum</code> ディレクトリがある場所で、次のコマンドを実行してください。
+            ビルド結果の <code>target/</code> はコピーせず、<code>Cargo.toml</code>・<code>Cargo.lock</code>・<code>src/</code> だけを新しいディレクトリ <code>02-routing</code> にコピーします。
+            コマンドは何も表示せずに終わります。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir 02-routing</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 01-hello-axum/Cargo.toml 01-hello-axum/Cargo.lock 01-hello-axum/src 02-routing/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 02-routing</span></pre>
+          </div>
+
+          <p>次に、<code>Cargo.toml</code> の <code>name</code> を <code>hello-axum</code> から <code>routing</code> に変更します。変更するのはこの 1 行だけです。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "hello-axum"</span><span class="diff-line diff-line--add">+ name = "routing"</span><span class="diff-line">  version = "0.1.0"</span></pre>
+          </div>
+
+          <p>変更後の <code>Cargo.toml</code> は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TOML</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-toml">[package]
+name = "routing"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.9"
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread"] }</code></pre>
+          </div>
+
+          <p><code>Cargo.lock</code> を書き換える必要はありません。次のビルドで、cargo が新しいパッケージ名に合わせて自動で更新します。<code>src/main.rs</code> も 01 の完成形のまま使います。サーバーを起動して、01 と同じように動くことを確かめます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   ...</span><span class="terminal__line">   Compiling axum v0.8.9</span><span class="terminal__line">   Compiling routing v0.1.0 (/path/to/02-routing)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.12s</span><span class="terminal__line">     Running `target/debug/routing`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p><code>target/</code> をコピーしていないので、初回は依存クレートのコンパイルから始まります（出力の途中は省略しています）。サーバーを動かしたまま別のターミナルを開き、<code>/</code> と <code>/health</code> にリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 12</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:03:30 GMT</span><span class="terminal__line"></span><span class="terminal__line">Hello, Axum!</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 2</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:03:30 GMT</span><span class="terminal__line"></span><span class="terminal__line">ok</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Running `target/debug/routing`</code> が表示され、<code>/</code>・<code>/health</code> が 01 と同じ内容を返せば OK です。以降のコマンドは全て <code>02-routing</code> ディレクトリで実行します。確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">/users に GET と POST を登録する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>/users</code> というパスに、<code>GET</code> なら <code>list users</code>、<code>POST</code> なら <code>create user</code> を返すハンドラを登録します。
+            <code>src/main.rs</code> を次のように変更してください。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- use axum::{Router, routing::get};</span><span class="diff-line diff-line--add">+ use axum::{</span><span class="diff-line diff-line--add">+     Router,</span><span class="diff-line diff-line--add">+     routing::{get, post},</span><span class="diff-line diff-line--add">+ };</span><span class="diff-line"> </span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  ...</span><span class="diff-line">      let app = Router::new()</span><span class="diff-line">          .route("/", get(|| async { "Hello, Axum!" }))</span><span class="diff-line diff-line--remove">-         .route("/health", get(|| async { "ok" }));</span><span class="diff-line diff-line--add">+         .route("/health", get(|| async { "ok" }))</span><span class="diff-line diff-line--add">+         .route(</span><span class="diff-line diff-line--add">+             "/users",</span><span class="diff-line diff-line--add">+             get(|| async { "list users" }).post(|| async { "create user" }),</span><span class="diff-line diff-line--add">+         );</span><span class="diff-line"> </span><span class="diff-line">      let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")</span></pre>
+          </div>
+
+          <p>
+            <code>get(...)</code> の戻り値に <code>.post(...)</code> をつなげると、1 つのパスにメソッドごとのハンドラをまとめて登録できます。
+            <code>use</code> 文には <code>post</code> も追加しています。
+          </p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Rust</span>
+                  <span class="code-block__filename">src/main.rs</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><code class="language-rust">use axum::{
+    Router,
+    routing::{get, post},
+};
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(|| async { "Hello, Axum!" }))
+        .route("/health", get(|| async { "ok" }))
+        .route(
+            "/users",
+            get(|| async { "list users" }).post(|| async { "create user" }),
+        );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}</code></pre>
+              </div>
+            </div>
+          </details>
+
+          <p>保存したらサーバーを起動します。今回は警告（warning）が 1 つ出ます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   Compiling routing v0.1.0 (/path/to/02-routing)</span><span class="terminal__line">warning: unused import: `post`</span><span class="terminal__line"> --&gt; src/main.rs:3:20</span><span class="terminal__line">  |</span><span class="terminal__line">3 |     routing::{get, post},</span><span class="terminal__line">  |                    ^^^^</span><span class="terminal__line">  |</span><span class="terminal__line">  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default</span><span class="terminal__line"></span><span class="terminal__line">warning: `routing` (bin "routing") generated 1 warning (run `cargo fix --bin "routing" -p routing` to apply 1 suggestion)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.38s</span><span class="terminal__line">     Running `target/debug/routing`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">メソッドチェーンの <code>.post</code> に <code>use</code> は不要</p>
+              <p>
+                <code>get(...).post(...)</code> の <code>.post</code> は <code>get(...)</code> が返す値のメソッドなので、<code>routing::post</code> を <code>use</code> しなくても呼べます。
+                <code>use</code> した <code>post</code> 関数はどこでも使っていないため、「unused import」という警告になりました。警告なのでサーバーは起動します。<code>use</code> 文は次のステップで書き換えるときに整理します。
+              </p>
+            </div>
+          </div>
+
+          <p>2 つ目のターミナルから、<code>GET</code>・<code>POST</code>・<code>DELETE</code> の 3 つのメソッドで <code>/users</code> にリクエストを送ります。<code>curl</code> の <code>-X</code> でメソッドを指定できます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 10</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:03:51 GMT</span><span class="terminal__line"></span><span class="terminal__line">list users</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 11</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:03:51 GMT</span><span class="terminal__line"></span><span class="terminal__line">create user</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X DELETE http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 405 Method Not Allowed</span><span class="terminal__line">allow: GET,HEAD,POST</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:03:51 GMT</span></pre>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">404 と 405 の違い</p>
+              <p>
+                01 で見たとおり、ルートに登録していないパスへのリクエストは <code>404 Not Found</code> になります。
+                一方、パスは登録済みでもメソッドに対応するハンドラがない場合は <code>405 Method Not Allowed</code> になります。
+                405 のレスポンスには、そのパスが受け付けるメソッドの一覧が <code>allow</code> ヘッダーで返ります。
+                登録したのは <code>GET</code> と <code>POST</code> だけですが、<code>allow</code> には <code>HEAD</code> も含まれています。<code>GET</code> を登録すると <code>HEAD</code> リクエストにも応答するためです。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>GET</code> で <code>list users</code>、<code>POST</code> で <code>create user</code> が返り、<code>DELETE</code> が <code>405</code> と <code>allow: GET,HEAD,POST</code> になれば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">パスパラメーターを受け取る（/users/{id}）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>/users/42</code> のように、パスの一部に ID を含むルートを追加します。
+            ルートのパスに <code>{id}</code> と書くと、その部分に来た値をハンドラで受け取れます。
+            今回はハンドラを名前付きの関数 <code>get_user</code> として <code>main</code> の外に書きます。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- use axum::{</span><span class="diff-line diff-line--remove">-     Router,</span><span class="diff-line diff-line--remove">-     routing::{get, post},</span><span class="diff-line diff-line--remove">- };</span><span class="diff-line diff-line--add">+ use axum::{Router, extract::Path, routing::get};</span><span class="diff-line"> </span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  ...</span><span class="diff-line">              "/users",</span><span class="diff-line">              get(|| async { "list users" }).post(|| async { "create user" }),</span><span class="diff-line diff-line--remove">-         );</span><span class="diff-line diff-line--add">+         )</span><span class="diff-line diff-line--add">+         .route("/users/{id}", get(get_user));</span><span class="diff-line"> </span><span class="diff-line">      let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")</span><span class="diff-line">  ...</span><span class="diff-line">      axum::serve(listener, app).await.unwrap();</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; String {</span><span class="diff-line diff-line--add">+     format!("user {id}")</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <p>変更点は次の 3 つです。</p>
+
+          <ul>
+            <li><code>use</code> 文: 使っていない <code>post</code> を外し、<code>extract::Path</code> を追加します。これでステップ 2 の警告も消えます。</li>
+            <li><code>.route("/users/{id}", get(get_user))</code>: <code>{id}</code> の部分がパスパラメーターです。</li>
+            <li><code>get_user</code> 関数: 引数を <code>Path(id): Path&lt;u32&gt;</code> と書くと、パスの <code>{id}</code> の値が <code>u32</code> に変換されて <code>id</code> に入ります。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Rust</span>
+                  <span class="code-block__filename">src/main.rs</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><code class="language-rust">use axum::{Router, extract::Path, routing::get};
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(|| async { "Hello, Axum!" }))
+        .route("/health", get(|| async { "ok" }))
+        .route(
+            "/users",
+            get(|| async { "list users" }).post(|| async { "create user" }),
+        )
+        .route("/users/{id}", get(get_user));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; String {
+    format!("user {id}")
+}</code></pre>
+              </div>
+            </div>
+          </details>
+
+          <p>サーバーを起動します。今度は警告が出ません。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   Compiling routing v0.1.0 (/path/to/02-routing)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s</span><span class="terminal__line">     Running `target/debug/routing`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>数値の ID と、数値として読めない値の 2 通りでリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/42</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 7</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:04:12 GMT</span><span class="terminal__line"></span><span class="terminal__line">user 42</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/abc</span><span class="terminal__line">HTTP/1.1 400 Bad Request</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 42</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:04:12 GMT</span><span class="terminal__line"></span><span class="terminal__line">Invalid URL: Cannot parse `abc` to a `u32`</span></pre>
+          </div>
+
+          <p>
+            <code>id</code> の型を <code>u32</code> にしたので、<code>abc</code> のように変換できない値が来ると、ハンドラが呼ばれる前に Axum が <code>400 Bad Request</code> を返します。
+            ハンドラの中で文字列を数値に変換する処理を書く必要はありません。
+            なお、エラー本文の文言は Axum の既定のものです。独自の文言に変える方法は、このレッスンでは扱いません。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/users/42</code> で <code>user 42</code>、<code>/users/abc</code> で <code>400 Bad Request</code> が返れば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">複数のパスパラメーターを受け取る</h3>
+        </div>
+        <div class="step__body">
+          <p>ユーザーごとの投稿を表す <code>/users/{user_id}/posts/{post_id}</code> を追加します。パスパラメーターが 2 つある場合は、<code>Path</code> の型をタプルにして受け取ります。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">              get(|| async { "list users" }).post(|| async { "create user" }),</span><span class="diff-line">          )</span><span class="diff-line diff-line--remove">-         .route("/users/{id}", get(get_user));</span><span class="diff-line diff-line--add">+         .route("/users/{id}", get(get_user))</span><span class="diff-line diff-line--add">+         .route("/users/{user_id}/posts/{post_id}", get(get_user_post));</span><span class="diff-line"> </span><span class="diff-line">      let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")</span><span class="diff-line">  ...</span><span class="diff-line">      format!("user {id}")</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {</span><span class="diff-line diff-line--add">+     format!("user {user_id} post {post_id}")</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <p><code>Path((user_id, post_id)): Path&lt;(u32, u32)&gt;</code> は、パス内の並び順どおり、1 つ目の値を <code>user_id</code>、2 つ目の値を <code>post_id</code> に入れます。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">パラメーターの数とタプルの要素数をそろえる</p>
+              <p>パスの <code>{...}</code> の数と、タプルの要素数は一致させてください。数が合わなくてもコンパイルと起動は通り、リクエストした時点で <code>500 Internal Server Error</code> が返ります。Step 7 の起動時の panic とは違い、実行時まで検出されない点に注意しましょう。</p>
+              <p>たとえば型を <code>Path&lt;(u32, u32, u32)&gt;</code> にして同じ URL にリクエストすると、次のようになります。</p>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal（2 つ目）</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/3/posts/99</span><span class="terminal__line">HTTP/1.1 500 Internal Server Error</span><span class="terminal__line">...</span><span class="terminal__line"></span><span class="terminal__line">Wrong number of path arguments for `Path`. Expected 3 but got 2</span></pre>
+              </div>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Rust</span>
+                  <span class="code-block__filename">src/main.rs</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><code class="language-rust">use axum::{Router, extract::Path, routing::get};
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(|| async { "Hello, Axum!" }))
+        .route("/health", get(|| async { "ok" }))
+        .route(
+            "/users",
+            get(|| async { "list users" }).post(|| async { "create user" }),
+        )
+        .route("/users/{id}", get(get_user))
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; String {
+    format!("user {id}")
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}</code></pre>
+              </div>
+            </div>
+          </details>
+
+          <p>サーバーを起動し、2 つ目のターミナルからリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   Compiling routing v0.1.0 (/path/to/02-routing)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.41s</span><span class="terminal__line">     Running `target/debug/routing`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/3/posts/99</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 14</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:04:38 GMT</span><span class="terminal__line"></span><span class="terminal__line">user 3 post 99</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/users/3/posts/99</code> で <code>user 3 post 99</code> が返り、2 つの値が正しい順に入っていれば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">クエリパラメーターを受け取る（/search）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>/search?q=axum</code> のような、URL の <code>?</code> 以降に付くクエリパラメーターを受け取るルートを追加します。
+            クエリパラメーターは <code>Query</code> で受け取ります。今回は、キーと値の組をまとめて <code>HashMap&lt;String, String&gt;</code> に入れて、そのまま文字列にして返します。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- use axum::{Router, extract::Path, routing::get};</span><span class="diff-line diff-line--add">+ use axum::{</span><span class="diff-line diff-line--add">+     Router,</span><span class="diff-line diff-line--add">+     extract::{Path, Query},</span><span class="diff-line diff-line--add">+     routing::get,</span><span class="diff-line diff-line--add">+ };</span><span class="diff-line diff-line--add">+ use std::collections::HashMap;</span><span class="diff-line"> </span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  ...</span><span class="diff-line">          )</span><span class="diff-line">          .route("/users/{id}", get(get_user))</span><span class="diff-line diff-line--remove">-         .route("/users/{user_id}/posts/{post_id}", get(get_user_post));</span><span class="diff-line diff-line--add">+         .route("/users/{user_id}/posts/{post_id}", get(get_user_post))</span><span class="diff-line diff-line--add">+         .route("/search", get(search));</span><span class="diff-line"> </span><span class="diff-line">      let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")</span><span class="diff-line">  ...</span><span class="diff-line">      format!("user {user_id} post {post_id}")</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {</span><span class="diff-line diff-line--add">+     format!("search params: {params:?}")</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <p><code>HashMap</code> は標準ライブラリの型なので、<code>use std::collections::HashMap;</code> を追加しています。<code>{params:?}</code> は、<code>HashMap</code> の中身をデバッグ表示の形式で文字列にします。変更後の <code>src/main.rs</code> の全体は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Router,
+    extract::{Path, Query},
+    routing::get,
+};
+use std::collections::HashMap;
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(|| async { "Hello, Axum!" }))
+        .route("/health", get(|| async { "ok" }))
+        .route(
+            "/users",
+            get(|| async { "list users" }).post(|| async { "create user" }),
+        )
+        .route("/users/{id}", get(get_user))
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; String {
+    format!("user {id}")
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}</code></pre>
+          </div>
+
+          <p>サーバーを起動し、クエリパラメーターが 1 つ・2 つ・なしの 3 通りでリクエストを送ります。URL に <code>?</code> や <code>&amp;</code> を含むので、シェルに解釈されないよう URL をダブルクォートで囲みます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   Compiling routing v0.1.0 (/path/to/02-routing)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.49s</span><span class="terminal__line">     Running `target/debug/routing`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i "http://127.0.0.1:3000/search?q=axum"</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 28</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:05:01 GMT</span><span class="terminal__line"></span><span class="terminal__line">search params: {"q": "axum"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i "http://127.0.0.1:3000/search?q=axum&amp;limit=10"</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 43</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:05:01 GMT</span><span class="terminal__line"></span><span class="terminal__line">search params: {"limit": "10", "q": "axum"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i "http://127.0.0.1:3000/search"</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 17</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:05:01 GMT</span><span class="terminal__line"></span><span class="terminal__line">search params: {}</span></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">表示の順番はクエリ文字列の順番と一致しない</p>
+              <p>
+                <code>HashMap</code> はキーの順番を保持しないため、2 つ目のリクエストでは、クエリ文字列では後ろ側の <code>limit</code> が先に表示されています。実行するたびに順番が変わることもあります。
+                また、クエリパラメーターがないリクエストもエラーにはならず、空の <code>HashMap</code>（<code>{}</code>）が渡されます。
+                特定のパラメーターを必須にするには、パラメーターに対応する構造体と <code>serde</code> を使います。これは次の項目以降で扱います。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>3 つのリクエストがどれも <code>200 OK</code> になり、送ったクエリパラメーターが本文に表示されれば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">ハンドラを整理し、fallback で 404 の本文を返す</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ルートが増えてきたので、<code>main</code> の中に無名のクロージャで書いていたハンドラも、全て名前付きの関数に分けます。
+            あわせて、どのルートにもマッチしないリクエストに本文付きの 404 を返すようにします。
+          </p>
+
+          <p>変更する前に、登録していないパス <code>/nope</code> にリクエストを送り、今の 404 の本文が空であることを確認しておきます。Step 5 の状態でサーバーを起動し、2 つ目のターミナルで実行してください。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/nope</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:05:16 GMT</span></pre>
+          </div>
+
+          <p>確認できたらサーバーを止め、<code>src/main.rs</code> を次のように変更します。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">      Router,</span><span class="diff-line">      extract::{Path, Query},</span><span class="diff-line diff-line--add">+     http::StatusCode,</span><span class="diff-line">      routing::get,</span><span class="diff-line">  };</span><span class="diff-line">  ...</span><span class="diff-line">  async fn main() {</span><span class="diff-line">      let app = Router::new()</span><span class="diff-line diff-line--remove">-         .route("/", get(|| async { "Hello, Axum!" }))</span><span class="diff-line diff-line--remove">-         .route("/health", get(|| async { "ok" }))</span><span class="diff-line diff-line--remove">-         .route(</span><span class="diff-line diff-line--remove">-             "/users",</span><span class="diff-line diff-line--remove">-             get(|| async { "list users" }).post(|| async { "create user" }),</span><span class="diff-line diff-line--remove">-         )</span><span class="diff-line diff-line--add">+         .route("/", get(root))</span><span class="diff-line diff-line--add">+         .route("/health", get(health))</span><span class="diff-line diff-line--add">+         .route("/users", get(list_users).post(create_user))</span><span class="diff-line">          .route("/users/{id}", get(get_user))</span><span class="diff-line">          .route("/users/{user_id}/posts/{post_id}", get(get_user_post))</span><span class="diff-line diff-line--remove">-         .route("/search", get(search));</span><span class="diff-line diff-line--add">+         .route("/search", get(search))</span><span class="diff-line diff-line--add">+         .fallback(not_found);</span><span class="diff-line"> </span><span class="diff-line">      let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")</span><span class="diff-line">  ...</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ async fn root() -&gt; &amp;'static str {</span><span class="diff-line diff-line--add">+     "Hello, Axum!"</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ async fn health() -&gt; &amp;'static str {</span><span class="diff-line diff-line--add">+     "ok"</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ async fn list_users() -&gt; &amp;'static str {</span><span class="diff-line diff-line--add">+     "list users"</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ async fn create_user() -&gt; &amp;'static str {</span><span class="diff-line diff-line--add">+     "create user"</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; String {</span><span class="diff-line">      format!("user {id}")</span><span class="diff-line">  ...</span><span class="diff-line">      format!("search params: {params:?}")</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ async fn not_found() -&gt; (StatusCode, &amp;'static str) {</span><span class="diff-line diff-line--add">+     (StatusCode::NOT_FOUND, "Not Found")</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+
+          <p>変更点は次の 3 つです。</p>
+
+          <ul>
+            <li><code>/</code>・<code>/health</code>・<code>/users</code> のクロージャを、<code>root</code>・<code>health</code>・<code>list_users</code>・<code>create_user</code> の 4 つの関数に置き換えます。ルートの一覧が 1 行ずつ並び、読みやすくなります。</li>
+            <li><code>.fallback(not_found)</code>: どのルートにもマッチしないリクエストを <code>not_found</code> 関数で処理します。</li>
+            <li><code>not_found</code> 関数: <code>(StatusCode, &amp;'static str)</code> のタプルを返すと、1 つ目の要素がステータスコード、2 つ目の要素が本文になります。<code>StatusCode</code> を使うため、<code>use</code> 文に <code>http::StatusCode</code> を追加しています。</li>
+          </ul>
+
+          <p>これでこの項目の完成形です。変更後の <code>src/main.rs</code> の全体は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Router,
+    extract::{Path, Query},
+    http::StatusCode,
+    routing::get,
+};
+use std::collections::HashMap;
+
+#[tokio::main]
+async fn main() {
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users).post(create_user))
+        .route("/users/{id}", get(get_user))
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn root() -&gt; &amp;'static str {
+    "Hello, Axum!"
+}
+
+async fn health() -&gt; &amp;'static str {
+    "ok"
+}
+
+async fn list_users() -&gt; &amp;'static str {
+    "list users"
+}
+
+async fn create_user() -&gt; &amp;'static str {
+    "create user"
+}
+
+async fn get_user(Path(id): Path&lt;u32&gt;) -&gt; String {
+    format!("user {id}")
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+
+          <p>サーバーを起動し、<code>/nope</code> にもう一度リクエストを送ります。既存のルートが変わらず動くことも <code>/</code> で確かめます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   Compiling routing v0.1.0 (/path/to/02-routing)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.43s</span><span class="terminal__line">     Running `target/debug/routing`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/nope</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 9</span><span class="terminal__line">date: Fri, 25 Sep 2026 16:05:37 GMT</span><span class="terminal__line"></span><span class="terminal__line">Not Found</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl http://127.0.0.1:3000/</span><span class="terminal__line">Hello, Axum!</span></pre>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>fallback</code> は 405 には使われない</p>
+              <p><code>fallback</code> が呼ばれるのは、どのルートにもパスがマッチしなかったときだけです。ステップ 2 の <code>DELETE /users</code> のように、パスは登録済みでメソッドだけが対応していない場合は、これまでどおり 405 になります。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/nope</code> が <code>404 Not Found</code> と本文 <code>Not Found</code>（<code>content-length: 9</code>）を返し、<code>/</code> が引き続き <code>Hello, Axum!</code> を返せば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">旧構文 :id を書いて起動時の panic を確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            インターネット上の古い記事では、パスパラメーターを <code>/users/:id</code> のようにコロンで書いている例がよく見つかります。これは axum 0.7 以前の構文です。
+            axum 0.8 でこの書き方をするとどうなるか、あえて試してみます。サーバーを止めた状態で、<code>src/main.rs</code> の 1 行を一時的に書き換えてください。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">          .route("/health", get(health))</span><span class="diff-line">          .route("/users", get(list_users).post(create_user))</span><span class="diff-line diff-line--remove">-         .route("/users/{id}", get(get_user))</span><span class="diff-line diff-line--add">+         .route("/users/:id", get(get_user))</span><span class="diff-line">          .route("/users/{user_id}/posts/{post_id}", get(get_user_post))</span><span class="diff-line">          .route("/search", get(search))</span></pre>
+          </div>
+
+          <p>この状態で <code>cargo run</code> を実行します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   Compiling routing v0.1.0 (/path/to/02-routing)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s</span><span class="terminal__line">     Running `target/debug/routing`</span><span class="terminal__line"></span><span class="terminal__line">thread 'main' (1023283) panicked at src/main.rs:15:10:</span><span class="terminal__line">Path segments must not start with `:`. For capture groups, use `{capture}`. If you meant to literally match a segment starting with a colon, call `without_v07_checks` on the router.</span><span class="terminal__line">note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</span></pre>
+          </div>
+
+          <p>
+            コンパイルは通りますが、<code>listening on ...</code> が表示される前にプロセスが panic して終了します。
+            panic の位置 <code>src/main.rs:15:10</code> は、書き換えた <code>.route("/users/:id", ...)</code> の行です。
+            ルートの書き方の誤りは、リクエストを受けたときではなく、<code>Router</code> を組み立てる時点（サーバーの起動前）で検出されます。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">axum 0.8 のパスパラメーターは <code>{id}</code> で書く</p>
+              <p>
+                axum 0.8 では、パスパラメーターの構文が <code>:id</code> から <code>{id}</code> に変わりました。古い記事のコードをそのまま写すと、このステップと同じ panic になります。
+                エラーメッセージの <code>For capture groups, use `{capture}`.</code> が、<code>{...}</code> 構文を使うよう案内しています。panic したらまずメッセージを読みましょう。
+              </p>
+            </div>
+          </div>
+
+          <p>確認できたら、<code>"/users/:id"</code> を <code>"/users/{id}"</code> に戻してください。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>:id</code> で書くと起動時に <code>Path segments must not start with `:`</code> の panic になり、<code>{id}</code> に戻すとサーバーが起動することを確認してください。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">ビルド・Lint・フォーマットを確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>仕上げに、ビルド・静的解析（Clippy）・書式の確認をまとめて行います。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy --all-targets</span><span class="terminal__line">   ...</span><span class="terminal__line">    Checking axum v0.8.9</span><span class="terminal__line">    Checking routing v0.1.0 (/path/to/02-routing)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.20s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span></pre>
+          </div>
+
+          <p>
+            <code>cargo fmt --check</code> は何も表示せずに終わります。01 では <code>use</code> 文の並び順に差分が出ましたが、今回はこのレッスンのコードをそのまま書いていれば差分は出ません。
+            <code>.route(...)</code> の引数が長くなって 1 行に収まらない場合も、<code>cargo fmt</code> が自動で複数行に折り返すので、手で改行を調整する必要はありません。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo build</code> と <code>cargo clippy --all-targets</code> がエラーや警告を出さずに終わり、<code>cargo fmt --check</code> が何も表示しなければ完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">01 のプロジェクトをコピーし、<code>Cargo.toml</code> の <code>name</code> を <code>routing</code> に変えて起動できた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>get(...).post(...)</code> で 1 つのパスに 2 つのメソッドを登録した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">未登録のパスは 404、未対応のメソッドは 405（<code>allow</code> ヘッダー付き）になる違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>Path&lt;u32&gt;</code> でパスパラメーターを受け取り、数値でない値が 400 になることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">2 つのパスパラメーターを <code>Path&lt;(u32, u32)&gt;</code> のタプルで受け取った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>Query&lt;HashMap&lt;String, String&gt;&gt;</code> でクエリパラメーターを受け取った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">ハンドラを名前付きの関数に分け、<code>fallback</code> で本文付きの 404 を返した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>:id</code> 構文が起動時の panic になり、<code>{id}</code> 構文で書く必要があることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>cargo build</code>・<code>cargo clippy --all-targets</code>・<code>cargo fmt --check</code> が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">コードを変えたのに結果が変わらない</p>
+          <p><code>cargo run</code> で起動したサーバーは、ソースコードを保存しても変更を反映しません。各ステップでコードを変えたら、前のサーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めてから <code>cargo run</code> し直してください。止め忘れたまま別のターミナルで起動すると、ポート 3000 が使用中のエラーになります（01 の「つまずきポイント」を参照）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">起動した直後にサーバーが終了する</p>
+          <p><code>listening on 127.0.0.1:3000</code> が表示されずに <code>panicked at</code> が出る場合は、ルートのパスの書き方を見直してください。<code>:id</code> のようなコロン構文を使っていると、ステップ 7 と同じ panic になります。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>Router</code> に複数のルートとメソッドを登録し、<code>Path</code> でパスパラメーターを、<code>Query</code> でクエリパラメーターをハンドラの引数として受け取れるようにしました。
+        あわせて、404 と 405 の違い、型に合わない値が 400 になること、<code>fallback</code> で 404 の本文を返す方法、axum 0.8 の <code>{id}</code> 構文も確かめました。
+        次の項目では、serde を使って JSON のリクエストとレスポンスを扱います。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/02-routing</code> の <code>axum/02-routing/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../01-hello-axum/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">01: Hello Axum: 最小の Web サーバーを起動する</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">03: JSON リクエスト/レスポンス</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
