@@ -1,0 +1,43 @@
+// 色・余白・ブレークポイント・角丸などをまとめた共通変数（$ 変数のみ）。
+//
+// このファイルには CSS を出力する記述（:root や @media など）を書かない。
+// additionalData により全ての .module.scss にこのファイルが @use されるが、
+// module.scss はそれぞれ別のコンパイル単位としてビルドされるため、
+// ここに :root を書くと module.scss の数だけ CSS が複製されてしまう。
+// 実際の CSS カスタムプロパティの出力は globals.scss（1 回しか @use されない）で行う。
+
+// ブレークポイント（mixins.scss の mq() から使う）
+$breakpoint-sm: 480px;
+$breakpoint-md: 768px;
+$breakpoint-lg: 960px;
+
+// 余白スケール（4px 刻み）
+$space-1: 0.25rem; // 4px
+$space-2: 0.5rem; // 8px
+$space-3: 0.75rem; // 12px
+$space-4: 1rem; // 16px
+$space-6: 1.5rem; // 24px
+$space-8: 2rem; // 32px
+
+// 角丸
+$radius-sm: 6px;
+$radius-full: 999px;
+
+// ライト/ダークで変わらない色（アクセントカラーなど）
+$color-accent: #0070f3;
+
+// ライトテーマの色（globals.scss の :root の既定値に使う）
+$color-bg-light: #ffffff;
+$color-fg-light: #171717;
+$color-border-light: #e5e5e5;
+$color-text-muted-light: #666666;
+$color-text-subtle-light: #888888;
+$color-surface-light: #ffffff;
+
+// ダークテーマの色（globals.scss の prefers-color-scheme / data-theme で使う）
+$color-bg-dark: #0a0a0a;
+$color-fg-dark: #ededed;
+$color-border-dark: #333333;
+$color-text-muted-dark: #a1a1a1;
+$color-text-subtle-dark: #888888;
+$color-surface-dark: #141414;

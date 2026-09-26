@@ -1,0 +1,36 @@
+// サイドバー（200px 固定）+ 本文（残り全部）の 2 カラムを CSS Grid で組む。
+// 768px 以下ではサイドバーを本文の上に積む 1 カラムに切り替える。
+.layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: $space-8;
+
+  @include mq(md) {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sidebar {
+  @include mq(md) {
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: $space-4;
+  }
+}
+
+.sidebarTitle {
+  font-weight: 700;
+  margin-bottom: $space-2;
+}
+
+.sidebarList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: $space-2;
+}
+
+.content {
+  min-width: 0;
+}

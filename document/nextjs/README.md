@@ -47,4 +47,4 @@ src/
 | 04 | [クライアントコンポーネントと状態管理](./04-client-components/index.html) | `"use client"` の使い分けと `useState` などのフック活用ができる | 45分 |
 | 05 | [Storybook でのコンポーネントカタログ構築](./05-storybook/index.html) | Storybook を導入し、コンポーネント単位で開発・確認できる | 45分 |
 | 06 | [スタイリングとレイアウト実装](./06-styling/index.html) | CSS Modules / SCSS を使ったスタイリングができる | 30分 |
-| 07 | テストの導入 | Vitest / Testing Library で基本的なテストを書ける | 45分 |
+| 07 | [テストの導入](./07-testing/index.html) | Vitest / Testing Library で基本的なテストを書ける | 45分 |

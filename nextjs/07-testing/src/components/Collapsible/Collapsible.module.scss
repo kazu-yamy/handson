@@ -1,0 +1,25 @@
+.collapsible {
+  margin-top: $space-8;
+  padding-top: $space-4;
+  border-top: 1px solid var(--color-border);
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 1rem;
+  font-weight: 700;
+
+  @include button-reset;
+  @include focus-ring;
+}
+
+.icon {
+  font-size: 0.75rem;
+  color: var(--color-text-subtle);
+}
+
+.body {
+  margin-top: $space-3;
+}

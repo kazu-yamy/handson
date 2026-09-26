@@ -1,0 +1,46 @@
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border-bottom: 1px solid var(--color-border);
+  padding: $space-4 $space-8;
+  background: var(--color-bg);
+}
+
+.nav {
+  max-width: $breakpoint-lg;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  @include mq(sm) {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: $space-3;
+  }
+}
+
+.list {
+  display: flex;
+  gap: $space-6;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.link {
+  color: var(--color-text-muted);
+  text-decoration: none;
+  font-weight: 500;
+
+  @include focus-ring;
+
+  &:hover {
+    color: var(--color-fg);
+  }
+}
+
+.linkActive {
+  color: var(--color-accent);
+}

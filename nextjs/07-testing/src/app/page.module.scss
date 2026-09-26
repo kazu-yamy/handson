@@ -1,0 +1,23 @@
+.main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: $space-2;
+  text-align: center;
+}
+
+.title {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.version {
+  color: var(--color-text-muted);
+}
+
+.link {
+  margin-top: $space-2;
+  color: var(--color-accent);
+  text-decoration: underline;
+}
