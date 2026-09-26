@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01: 環境構築とプロジェクト作成 | Tauri ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Tauri</li>
+          <li aria-current="page">01</li>
+        </ol>
+        <h1 class="lesson-title">環境構築とプロジェクト作成</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: Next.js トラックの 01（環境構築）を終えた程度の知識がある人。Rust は未経験でも構いません（この項目では Rust のコードを書きません）</li>
+          <li class="lesson-meta__item">📋 前提: macOS、Rust（rustup）と Xcode Command Line Tools がインストール済み、Node.js 24</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: なし（トラック最初の項目）</li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>Tauri の仕組み（Rust 製のネイティブ部分 + OS の WebView）を把握する</li>
+          <li>Next.js を静的エクスポート（<code>output: "export"</code>）してフロントエンドとして用意する</li>
+          <li><code>@tauri-apps/cli</code> を導入し、<code>tauri init</code> で <code>src-tauri/</code> を作成する</li>
+          <li><code>devUrl</code> と <code>frontendDist</code> の関係を理解する</li>
+          <li><code>npm run tauri dev</code> で開発モードを起動し、<code>npm run tauri build -- --debug</code> で <code>.app</code> / <code>.dmg</code> を作る</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        Tauri トラックの最初の項目です。Next.js で作った画面を、Tauri でデスクトップアプリとして動かすところまでをひと通り体験します。
+        以降の項目は、ここで作るプロジェクト（Next.js の静的エクスポート + <code>src-tauri/</code>）を前提に進めます。
+      </p>
+
+      <h3 id="what-is-tauri">Tauri とは</h3>
+      <p>
+        Tauri は、Web の技術（HTML / CSS / JavaScript）で画面を作り、デスクトップアプリとして配布するためのフレームワークです。
+        アプリ本体は Rust で書かれたネイティブの実行ファイルで、画面の表示には OS に組み込まれている WebView（macOS では WebKit）を使います。
+      </p>
+      <p>
+        同じ目的のフレームワークに Electron があります。Electron はブラウザーエンジン（Chromium）と Node.js をアプリごとに同梱しますが、Tauri は OS の WebView を使うため、ブラウザーエンジンを同梱しません。
+        その分、配布物が小さくなります。このレッスンで作るデバッグビルドの <code>.dmg</code> は約 7.5 MB です。
+      </p>
+
+      <h3 id="architecture">Next.js を組み込む構成</h3>
+      <p>
+        Tauri のアプリに Node.js のサーバーは含まれません。そこで Next.js を静的エクスポートし、できあがった HTML / JS / CSS を WebView に読み込ませます。
+        Tauri の設定ファイル <code>tauri.conf.json</code> では、開発時と本番ビルド時で読み込む先を切り替えます。
+      </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">npm run tauri dev / build の流れ</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">npm run tauri dev
+  ├─ beforeDevCommand: npm run dev  → Next.js 開発サーバー（http://localhost:3000）
+  └─ cargo run                      → ネイティブウィンドウの WebView が devUrl を表示
+
+npm run tauri build
+  ├─ beforeBuildCommand: npm run build → out/（静的な HTML / JS / CSS）
+  └─ cargo build + バンドル            → frontendDist（../out）を同梱した .app / .dmg</code></pre>
+</div>
+
+      <table>
+        <thead>
+        <tr><th>コマンド</th><th>読み込む先（設定キー）</th><th>事前に実行されるコマンド</th><th>WebView に表示されるもの</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>tauri dev</code></td><td><code>devUrl</code>: <code>http://localhost:3000</code></td><td><code>beforeDevCommand</code>: <code>npm run dev</code></td><td>Next.js の開発サーバーが返すページ</td></tr>
+        <tr><td><code>tauri build</code></td><td><code>frontendDist</code>: <code>../out</code></td><td><code>beforeBuildCommand</code>: <code>npm run build</code></td><td>アプリに同梱した <code>out/</code> の静的ファイル</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Tauri CLI（<code>@tauri-apps/cli</code>）2.11.5 / <code>tauri</code> クレート 2.11.6 / <code>tauri-build</code> 2.6.3 / <code>@tauri-apps/api</code> 2.11.1 /
+            Next.js 16.3.6 / React 19.2.8 / sass 1.105.0 / rustc 1.98.1 / cargo 1.98.1 / rustup 1.29.1 / Node.js 24.21.0 / npm 11.19.0 で動作を確認しています。
+            バージョンは執筆時点（2026年9月）のものです。<code>@latest</code> を指定するため、実行する時期によっては新しいバージョンがインストールされ、出力の内容も多少変わります。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">前提ツールを確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>最初に、Tauri と Next.js のビルドに必要なツールがそろっているかを確認します。ターミナルで次のコマンドを順に実行してください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rustup --version</span><span class="terminal__line">rustup 1.29.1 (d95a37b6a 2026-08-13)</span><span class="terminal__line">info: This is the version for the rustup toolchain manager, not the rustc compiler.</span><span class="terminal__line">info: the currently active `rustc` version is `rustc 1.98.1 (48a229cea 2026-09-01)`</span><span class="terminal__line"><span class="terminal__prompt">$</span> rustc --version</span><span class="terminal__line">rustc 1.98.1 (48a229cea 2026-09-01)</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo --version</span><span class="terminal__line">cargo 1.98.1 (797e8a9bc 2026-08-05)</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcode-select -p</span><span class="terminal__line">/Applications/Xcode.app/Contents/Developer</span><span class="terminal__line"><span class="terminal__prompt">$</span> node -v</span><span class="terminal__line">v24.21.0</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm -v</span><span class="terminal__line">11.19.0</span></pre>
+</div>
+          <ul>
+            <li><code>rustup</code> / <code>rustc</code> / <code>cargo</code>: Rust のツールチェーン管理ツール、コンパイラー、ビルドツールです。Tauri のネイティブ部分（<code>src-tauri/</code>）は <code>cargo</code> でビルドされます。</li>
+            <li><code>xcode-select -p</code>: macOS のビルドツール（Xcode または Command Line Tools）の場所を表示します。上の出力はフル版の Xcode を入れた環境のものです。Command Line Tools だけを入れた環境では、別のパスが表示されます。</li>
+            <li><code>node</code> / <code>npm</code>: Next.js と Tauri CLI の実行に使います。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>6 つのコマンドがすべてバージョン番号（<code>xcode-select -p</code> はパス）を表示すれば準備完了です。<code>command not found</code> や <code>xcode-select: error</code> が出た場合は、該当するツールをインストールしてからやり直してください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">Next.js アプリを作り、静的エクスポートする</h3>
+        </div>
+        <div class="step__body">
+          <p>フロントエンドになる Next.js アプリを作ります。フラグは Next.js トラックの 01 と同じです（各フラグの意味は <a href="../../nextjs/01-setup/index.html">Next.js 01</a> を参照してください）。作業用のディレクトリで次のコマンドを実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npx create-next-app@latest 01-setup --ts --eslint --app --src-dir --no-tailwind --import-alias "@/*" --use-npm --disable-git --agents-md --yes</span><span class="terminal__line">Creating a new Next.js app in /path/to/01-setup.</span><span class="terminal__line"></span><span class="terminal__line">Using npm.</span><span class="terminal__line"></span><span class="terminal__line">Initializing project with template: app</span><span class="terminal__line"></span><span class="terminal__line">（中略）</span><span class="terminal__line"></span><span class="terminal__line">added 345 packages, and audited 346 packages in 15s</span><span class="terminal__line">found 0 vulnerabilities</span><span class="terminal__line"></span><span class="terminal__line">Generating route types...</span><span class="terminal__line">✓ Types generated successfully</span><span class="terminal__line"></span><span class="terminal__line">Skipping git initialization.</span><span class="terminal__line"></span><span class="terminal__line">Success! Created 01-setup at /path/to/01-setup</span></pre>
+</div>
+          <p>以降のコマンドはすべて <code>cd 01-setup</code> で移動してから実行します。続いて Sass を入れ、共通スタイルを <code>src/styles/globals.scss</code> に移します。<code>globals.css</code> の中身は変更せず、場所と拡張子だけを変えます。<code>page.module.css</code> は使わないので削除します（<code>mkdir</code> 以降のコマンドは何も出力しません）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd 01-setup</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm i sass</span><span class="terminal__line">added 8 packages, and audited 354 packages in 679ms</span><span class="terminal__line">found 0 vulnerabilities</span><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p src/styles</span><span class="terminal__line"><span class="terminal__prompt">$</span> mv src/app/globals.css src/styles/globals.scss</span><span class="terminal__line"><span class="terminal__prompt">$</span> rm src/app/page.module.css</span></pre>
+</div>
+          <p><code>layout.tsx</code> で読み込んでいるファイルのパスを、移動先に合わせて <code>@/</code> エイリアス経由の指定に書き換えます。<code>@/</code> は <code>tsconfig.json</code> の <code>"paths": { "@/*": ["./src/*"] }</code> によって <code>./src/*</code> を指すよう設定されているためで、ステップ 2 の <code>create-next-app</code> 実行時に <code>--import-alias "@/*"</code> を指定したことで生成されています。あわせて Google Fonts の読み込みを外し、タイトルと <code>lang</code> を変えます。フォントはこのレッスンの本題ではないため、構成を単純にしておきます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/layout.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import type { Metadata } from "next";</span><span class="diff-line diff-line--remove">- import { Geist, Geist_Mono } from "next/font/google";</span><span class="diff-line diff-line--remove">- import "./globals.css";</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">- const geistSans = Geist({</span><span class="diff-line diff-line--remove">-   variable: "--font-geist-sans",</span><span class="diff-line diff-line--remove">-   subsets: ["latin"],</span><span class="diff-line diff-line--remove">- });</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">- const geistMono = Geist_Mono({</span><span class="diff-line diff-line--remove">-   variable: "--font-geist-mono",</span><span class="diff-line diff-line--remove">-   subsets: ["latin"],</span><span class="diff-line diff-line--remove">- });</span><span class="diff-line diff-line--add">+ import "@/styles/globals.scss";</span><span class="diff-line"> </span><span class="diff-line">  export const metadata: Metadata = {</span><span class="diff-line diff-line--remove">-   title: "Create Next App",</span><span class="diff-line diff-line--remove">-   description: "Generated by create next app",</span><span class="diff-line diff-line--add">+   title: "handson-tauri-01",</span><span class="diff-line diff-line--add">+   description: "Tauri トラック 01: 環境構築とプロジェクト作成",</span><span class="diff-line">  };</span><span class="diff-line"> </span><span class="diff-line">  export default function RootLayout({ children }: LayoutProps&lt;"/"&gt;) {</span><span class="diff-line">    return (</span><span class="diff-line diff-line--remove">-     &lt;html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}&gt;</span><span class="diff-line diff-line--add">+     &lt;html lang="ja"&gt;</span><span class="diff-line">        &lt;body&gt;{children}&lt;/body&gt;</span><span class="diff-line">      &lt;/html&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+          <p>ページ用のスタイル <code>page.module.scss</code> を新しく作ります。<code>.version</code> はステップ 4 でバージョン表示に使います。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/app/page.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.title {
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.version {
+  margin-top: 12px;
+  font-size: 16px;
+  color: var(--foreground);
+  opacity: 0.7;
+}</code></pre>
+</div>
+          <p><code>page.tsx</code> は、中身をすべて次の内容に置き換えます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import styles from "./page.module.scss";
+
+export default function Home() {
+  return (
+    &lt;div className={styles.page}&gt;
+      &lt;h1 className={styles.title}&gt;Hello, Tauri!&lt;/h1&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+</div>
+          <p>最後に、<code>next.config.ts</code> で静的エクスポートを有効にします。この設定が Tauri に組み込むための要です。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">next.config.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import type { NextConfig } from "next";</span><span class="diff-line"> </span><span class="diff-line">  const nextConfig: NextConfig = {</span><span class="diff-line diff-line--remove">-   /* config options here */</span><span class="diff-line diff-line--add">+   output: "export",</span><span class="diff-line diff-line--add">+   images: {</span><span class="diff-line diff-line--add">+     unoptimized: true,</span><span class="diff-line diff-line--add">+   },</span><span class="diff-line">  };</span><span class="diff-line"> </span><span class="diff-line">  export default nextConfig;</span></pre>
+</div>
+          <ul>
+            <li><code>output: "export"</code>: <code>next build</code> の結果を、サーバーなしで配信できる静的ファイル（HTML / JS / CSS）として <code>out/</code> に書き出します。</li>
+            <li><code>images.unoptimized: true</code>: Next.js の <code>&lt;Image&gt;</code> の画像最適化を無効にします。画像最適化はリクエストのたびにサーバーで画像を変換する仕組みのため、サーバーのない静的エクスポートでは使えません。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>output: "export"</code> が必須な理由</p>
+              <p>Tauri は、ビルドした静的ファイルをアプリ本体に同梱し、WebView に読み込ませます。アプリの中に Node.js のサーバーはありません。Next.js の既定のビルド成果物はサーバーで動かす前提なので、そのままでは Tauri に組み込めません。<code>output: "export"</code> を指定して、<code>out/</code> だけで完結する静的ファイルを出力させます。</p>
+            </div>
+          </div>
+          <p>ビルドして <code>out/</code> ができることを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line"></span><span class="terminal__line">&gt; 01-setup@0.1.0 build</span><span class="terminal__line">&gt; next build</span><span class="terminal__line"></span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line">（workspace root の警告は省略）</span><span class="terminal__line">✓ Compiled successfully in 1841ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 746ms ...</span><span class="terminal__line">✓ Generating static pages using 5 workers (4/4) in 198ms</span><span class="terminal__line"></span><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">└ ○ /_not-found</span><span class="terminal__line"></span><span class="terminal__line">○  (Static)  prerendered as static content</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls out</span><span class="terminal__line">__next.__PAGE__.txt</span><span class="terminal__line">__next._full.txt</span><span class="terminal__line">__next._tree.txt</span><span class="terminal__line">_next</span><span class="terminal__line">_not-found</span><span class="terminal__line">_not-found.html</span><span class="terminal__line">_not-found.txt</span><span class="terminal__line">404.html</span><span class="terminal__line">favicon.ico</span><span class="terminal__line">file.svg</span><span class="terminal__line">globe.svg</span><span class="terminal__line">index.html</span><span class="terminal__line">index.txt</span><span class="terminal__line">next.svg</span><span class="terminal__line">vercel.svg</span><span class="terminal__line">window.svg</span></pre>
+</div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">「workspace root」の警告が出る場合</p>
+              <p>親ディレクトリにも <code>package-lock.json</code> があると、<code>⚠ Warning: Next.js inferred your workspace root, but it may not be correct.</code> という警告が出ます。ビルドは成功するので、このレッスンでは無視して構いません。気になる場合は <code>next.config.ts</code> で <code>turbopack.root</code> を設定してください。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run build</code> がエラーなく終わり、<code>out/</code> の中に <code>index.html</code> ができていれば成功です。<code>out/index.html</code> には、ビルド時点で <code>Hello, Tauri!</code> が埋め込まれています。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">Tauri CLI を導入して tauri init を実行する</h3>
+        </div>
+        <div class="step__body">
+          <p>Tauri の CLI（<code>@tauri-apps/cli</code>）を開発用の依存としてプロジェクトに入れます。CLI は npm パッケージとして配布されているので、グローバルにインストールする必要はありません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm i -D @tauri-apps/cli@latest</span><span class="terminal__line">added 2 packages, and audited 356 packages in 2s</span><span class="terminal__line">found 0 vulnerabilities</span><span class="terminal__line"><span class="terminal__prompt">$</span> npx tauri --version</span><span class="terminal__line">tauri-cli 2.11.5</span></pre>
+</div>
+          <p>次に <code>tauri init</code> で、Rust 側のプロジェクト <code>src-tauri/</code> を作ります。対話形式でも作れますが、ここでは設定をすべてフラグで渡します。コマンドは何も出力せずに終わります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npx tauri init --ci \</span><span class="terminal__line">  --app-name "handson-tauri-01" \</span><span class="terminal__line">  --window-title "handson-tauri-01" \</span><span class="terminal__line">  --frontend-dist "../out" \</span><span class="terminal__line">  --dev-url "http://localhost:3000" \</span><span class="terminal__line">  --before-dev-command "npm run dev" \</span><span class="terminal__line">  --before-build-command "npm run build"</span></pre>
+</div>
+          <p>各フラグの意味は次のとおりです（<code>npx tauri init --help</code> の説明に基づきます）。</p>
+          <table>
+            <thead>
+            <tr><th>フラグ</th><th>意味</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>--ci</code></td><td>値の入力プロンプトを出さない（非対話で実行する）</td></tr>
+            <tr><td><code>--app-name</code></td><td>アプリ名。<code>tauri.conf.json</code> の <code>productName</code> になる</td></tr>
+            <tr><td><code>--window-title</code></td><td>ウィンドウのタイトル</td></tr>
+            <tr><td><code>--frontend-dist</code></td><td>本番ビルドで同梱する Web 資産の場所（<code>src-tauri/</code> からの相対パス）。ステップ 2 の <code>out/</code> を指す</td></tr>
+            <tr><td><code>--dev-url</code></td><td>開発時に表示する開発サーバーの URL</td></tr>
+            <tr><td><code>--before-dev-command</code></td><td><code>tauri dev</code> の前に実行するコマンド（Next.js の開発サーバー起動）</td></tr>
+            <tr><td><code>--before-build-command</code></td><td><code>tauri build</code> の前に実行するコマンド（静的エクスポート）</td></tr>
+            </tbody>
+          </table>
+          <p>生成された <code>src-tauri/</code> の主なファイルと役割は次のとおりです。</p>
+          <table>
+            <thead>
+            <tr><th>ファイル</th><th>役割</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>tauri.conf.json</code></td><td>Tauri の設定。アプリ名・ID・ウィンドウ・ビルド時に使うフロントエンドなど</td></tr>
+            <tr><td><code>Cargo.toml</code></td><td>Rust パッケージの定義と依存クレート（<code>tauri</code> 2.11.6、<code>tauri-build</code> 2.6.3、<code>tauri-plugin-log</code> など）</td></tr>
+            <tr><td><code>Cargo.lock</code></td><td>依存クレートの確定バージョン。<code>tauri init</code> では生成されず、ステップ 5 の初回 <code>cargo build</code>（<code>tauri dev</code> 経由）で作られる</td></tr>
+            <tr><td><code>build.rs</code></td><td>ビルドスクリプト。<code>tauri_build::build()</code> を呼ぶだけ</td></tr>
+            <tr><td><code>src/main.rs</code></td><td>実行ファイルの入口。<code>app_lib::run()</code> を呼ぶだけ</td></tr>
+            <tr><td><code>src/lib.rs</code></td><td>アプリ本体。ウィンドウを作ってイベントループを回す</td></tr>
+            <tr><td><code>capabilities/default.json</code></td><td>フロントエンドに許可する権限の定義（<code>main</code> ウィンドウに <code>core:default</code> を許可）</td></tr>
+            <tr><td><code>icons/</code></td><td>既定のアプリアイコン一式（<code>.png</code> / <code>.icns</code> / <code>.ico</code> など）</td></tr>
+            <tr><td><code>.gitignore</code></td><td>ビルド成果物の <code>/target/</code> と、自動生成される <code>/gen/schemas</code> を Git の対象外にする</td></tr>
+            </tbody>
+          </table>
+          <p>中心になる <code>tauri.conf.json</code> の全文です。<code>build</code> に、<code>tauri init</code> のフラグで渡した値が入っています。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">JSON</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-json">{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "handson-tauri-01",
+  "version": "0.1.0",
+  "identifier": "com.tauri.dev",
+  "build": {
+    "frontendDist": "../out",
+    "devUrl": "http://localhost:3000",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "handson-tauri-01",
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}</code></pre>
+</div>
+          <p><code>lib.rs</code> の全文です。このレッスンでは Rust のコードを書きません。<code>tauri::Builder</code> がアプリを組み立て、<code>tauri::generate_context!()</code> が <code>tauri.conf.json</code> の内容を取り込む、という流れだけ押さえておきましょう。デバッグビルドのときだけログ用のプラグイン（<code>tauri_plugin_log</code>）を有効にしています。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+  tauri::Builder::default()
+    .setup(|app| {
+      if cfg!(debug_assertions) {
+        app.handle().plugin(
+          tauri_plugin_log::Builder::default()
+            .level(log::LevelFilter::Info)
+            .build(),
+        )?;
+      }
+      Ok(())
+    })
+    .run(tauri::generate_context!())
+    .expect("error while running tauri application");
+}</code></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">開発時のバイナリ名は <code>app</code></p>
+              <p><code>Cargo.toml</code> の <code>[package]</code> の <code>name</code> は <code>app</code> です。そのため、開発時に起動する実行ファイルは <code>target/debug/app</code> になります。<code>productName</code>（<code>handson-tauri-01</code>）はバンドル名（<code>.app</code> や <code>.dmg</code>）や、Info.plist の <code>CFBundleName</code> などに使われます。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>プロジェクト直下に <code>src-tauri/</code> ができていることを確認します。<code>tauri.conf.json</code> の <code>build.frontendDist</code> が <code>../out</code>、<code>build.devUrl</code> が <code>http://localhost:3000</code> になっていることを確認してください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">設定を調整して @tauri-apps/api を使う</h3>
+        </div>
+        <div class="step__body">
+          <p>生成された設定を調整し、ページから Tauri の API を呼び出してみます。まず <code>identifier</code> を変更します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    "version": "0.1.0",</span><span class="diff-line diff-line--remove">-   "identifier": "com.tauri.dev",</span><span class="diff-line diff-line--add">+   "identifier": "com.handson.tauri01",</span><span class="diff-line">    "build": {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>identifier</code> は必ず変更する</p>
+              <p><code>identifier</code> はアプリを一意に識別する逆ドメイン形式の ID（例: <code>com.handson.tauri01</code>）です。<code>--app-name</code> を指定しても、<code>tauri init</code> は既定値の <code>com.tauri.dev</code> のまま生成しますが、この既定値のままだと <code>tauri build</code>（ステップ 6）が「<code>The default value `com.tauri.dev` is not allowed</code>」というエラーで失敗します。macOS のバンドル ID や各ストアへの登録にも使われるため、公開する場合はこの値を使います。</p>
+            </div>
+          </div>
+          <p><code>npm run tauri ...</code> で CLI を呼べるように、<code>package.json</code> にスクリプトを追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      "dev": "next dev",</span><span class="diff-line">      "build": "next build",</span><span class="diff-line">      "start": "next start",</span><span class="diff-line diff-line--remove">-     "lint": "eslint"</span><span class="diff-line diff-line--add">+     "lint": "eslint",</span><span class="diff-line diff-line--add">+     "tauri": "tauri"</span><span class="diff-line">    },</span><span class="diff-line">    "dependencies": {</span><span class="diff-line">      "@tauri-apps/api": "^2.11.1",</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>フロントエンドから Tauri の機能を呼ぶためのパッケージ <code>@tauri-apps/api</code> を入れます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm i @tauri-apps/api</span><span class="terminal__line">added 1 package, and audited 357 packages in 646ms</span><span class="terminal__line">found 0 vulnerabilities</span></pre>
+</div>
+          <p><code>page.tsx</code> を変更し、<code>@tauri-apps/api/app</code> の <code>getVersion</code> でアプリのバージョンを取得して表示します。<code>useEffect</code> と <code>useState</code> を使うので、ファイル先頭に <code>"use client"</code> を付けてクライアントコンポーネントにします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+ "use client";</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ import { useEffect, useState } from "react";</span><span class="diff-line diff-line--add">+ import { getVersion } from "@tauri-apps/api/app";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line"> </span><span class="diff-line">  export default function Home() {</span><span class="diff-line diff-line--add">+   const [version, setVersion] = useState("読み込み中...");</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+   useEffect(() =&gt; {</span><span class="diff-line diff-line--add">+     getVersion()</span><span class="diff-line diff-line--add">+       .then((v) =&gt; setVersion(`Tauri アプリのバージョン: ${v}`))</span><span class="diff-line diff-line--add">+       .catch(() =&gt; setVersion("ブラウザで実行中（Tauri API は利用できません）"));</span><span class="diff-line diff-line--add">+   }, []);</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">    return (</span><span class="diff-line">      &lt;div className={styles.page}&gt;</span><span class="diff-line">        &lt;h1 className={styles.title}&gt;Hello, Tauri!&lt;/h1&gt;</span><span class="diff-line diff-line--add">+       &lt;p className={styles.version}&gt;{version}&lt;/p&gt;</span><span class="diff-line">      &lt;/div&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@tauri-apps/api</code> はブラウザでは動かない</p>
+              <p><code>getVersion</code> などの関数は、内部で <code>window.__TAURI_INTERNALS__</code> を呼び出します。この値は Tauri の WebView の中でだけ注入されます。<code>npm run dev</code> で起動した Next.js のページを通常のブラウザで開くと、呼び出しは reject されます。そのため <code>.catch()</code> でブラウザ用の表示（<code>ブラウザで実行中（Tauri API は利用できません）</code>）を用意しています。</p>
+            </div>
+          </div>
+          <p>続いて、ESLint の対象から Rust のビルド成果物を外します。<code>src-tauri/target/</code> には、次のステップ以降の Rust のビルドで JavaScript のファイルも生成されます。これが ESLint の対象に入ると、<code>npm run lint</code> がエラー（実装時は 10 errors / 2 warnings）になります。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">eslint.config.mjs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      ".next/**",</span><span class="diff-line">      "out/**",</span><span class="diff-line">      "build/**",</span><span class="diff-line">      "next-env.d.ts",</span><span class="diff-line diff-line--add">+     // Tauri のビルド生成物（Cargo のビルドキャッシュ）は対象外にする</span><span class="diff-line diff-line--add">+     "src-tauri/target/**",</span><span class="diff-line">    ]),</span><span class="diff-line">  ]);</span><span class="diff-line"> </span><span class="diff-line">  export default eslintConfig;</span></pre>
+</div>
+          <p>最後に、<code>tauri init</code> が生成した Rust のコードを整形します。生成直後のコードは 2 スペースインデントで、rustfmt の既定（4 スペース）と合わないため、<code>cargo fmt --check</code> が差分を報告します。<code>src-tauri/</code> に移動して確認し、<code>cargo fmt</code> で整形します（<code>cargo fmt</code> は何も出力しません）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span><span class="terminal__line">Diff in /path/to/01-setup/src-tauri/build.rs:1:</span><span class="terminal__line"> fn main() {</span><span class="terminal__line">-  tauri_build::build()</span><span class="terminal__line">+    tauri_build::build()</span><span class="terminal__line"> }</span><span class="terminal__line">（lib.rs と main.rs の差分は省略）</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span></pre>
+</div>
+          <p>整形で変わるのはインデントだけで、コードの内容は変わりません。ここまでできたら、もう一度ビルドして型チェックと静的エクスポートが通ることを確認します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line"></span><span class="terminal__line">&gt; 01-setup@0.1.0 build</span><span class="terminal__line">&gt; next build</span><span class="terminal__line"></span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line">（workspace root の警告は省略）</span><span class="terminal__line">✓ Compiled successfully in 231ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 582ms ...</span><span class="terminal__line">✓ Generating static pages using 5 workers (4/4) in 197ms</span><span class="terminal__line"></span><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">└ ○ /_not-found</span><span class="terminal__line"></span><span class="terminal__line">○  (Static)  prerendered as static content</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run build</code> がエラーなく終わり、2 回目の <code>cargo fmt --check</code> が何も出力しなければ OK です。<code>package.json</code> の <code>dependencies</code> に <code>"@tauri-apps/api": "^2.11.1"</code> が追加されていることも確認しておきましょう。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">npm run tauri dev で開発モードを起動する</h3>
+        </div>
+        <div class="step__body">
+          <p>開発モードでアプリを起動します。<code>tauri dev</code> は、まず <code>beforeDevCommand</code>（<code>npm run dev</code>）で Next.js の開発サーバーを起動します。<code>devUrl</code>（<code>http://localhost:3000</code>）へ接続できるようになったら、Rust 側をビルドしてネイティブのウィンドウを開きます。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">先にポート 3000 の空きを確認する</p>
+              <p><code>tauri dev</code> は <code>devUrl</code> の応答を待たずに起動します。ポート 3000 を別のプロセスが使っていると、WebView にはその別のアプリの画面が表示されてしまいます。起動前に <code>lsof -iTCP:3000 -sTCP:LISTEN</code> で空いていることを確認してください（何も表示されなければ空いています）。Next.js のページが出ないときは、まずポート 3000 の使用状況を確認してください。</p>
+            </div>
+          </div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri dev</span><span class="terminal__line"></span><span class="terminal__line">&gt; 01-setup@0.1.0 tauri</span><span class="terminal__line">&gt; tauri dev</span><span class="terminal__line"></span><span class="terminal__line">     Running BeforeDevCommand (`npm run dev`)</span><span class="terminal__line"></span><span class="terminal__line">&gt; 01-setup@0.1.0 dev</span><span class="terminal__line">&gt; next dev</span><span class="terminal__line"></span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line">- Local:         http://localhost:3000</span><span class="terminal__line">- Network:       http://192.168.x.x:3000</span><span class="terminal__line">✓ Ready in 185ms</span><span class="terminal__line">（workspace root の警告は省略）</span><span class="terminal__line">✓ Running next.config.ts took 14ms</span><span class="terminal__line"></span><span class="terminal__line">     Running DevCommand (`cargo  run --no-default-features --color always --`)</span><span class="terminal__line">        Info Watching /path/to/01-setup/src-tauri for changes...</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">     Locking 436 packages to latest compatible versions</span><span class="terminal__line">（依存クレートのダウンロードとコンパイルの進捗は省略）</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 35.02s</span><span class="terminal__line">     Running `target/debug/app`</span><span class="terminal__line"> GET / 200 in 833ms (next.js: 741ms, application-code: 92ms)</span></pre>
+</div>
+          <p>出力は要点だけを抜粋しています。前半が Next.js の開発サーバー、<code>Running DevCommand</code> 以降が Rust 側のビルドと起動です。<code>Finished `dev` profile ... in 35.02s</code> はコンパイルにかかった時間で、<code>Running `target/debug/app`</code> でアプリが起動します。直後の <code>GET / 200</code> は、ウィンドウの WebView が開発サーバーからページを取得したログです。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">初回のコンパイルは時間がかかる</p>
+              <p>初回は Rust の依存クレート約 350 個をすべてビルドするため、数十秒かかります（執筆環境では 35.02 秒）。2 回目以降は差分だけをビルドするので短くなります。止まって見えても、進捗表示が進んでいれば待ってください。</p>
+            </div>
+          </div>
+          <p>ウィンドウが開いたら、表示を確認します。ウィンドウ（800×600）に、見出し「Hello, Tauri!」と、<code>tauri.conf.json</code> の <code>version</code> に基づく「Tauri アプリのバージョン: 0.1.0」が表示されます。</p>
+          <p>確認できたら、<code>tauri dev</code> を実行しているターミナルで <kbd>Ctrl</kbd> + <kbd>C</kbd> を押して止めます。アプリ・Tauri CLI・Next.js の開発サーバーがすべて終了し、ポート 3000 も解放されます。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">プロセスが残った場合</p>
+              <p><kbd>Ctrl</kbd> + <kbd>C</kbd> で止まらない場合は、次のコマンドでアプリ・Tauri CLI・Next.js の開発サーバーを個別に止めてください。開発時に起動するのは <code>target/debug/app</code> なので、<code>pgrep -fl handson-tauri-01</code> では見つかりません。<code>pgrep -fl "target/debug/app"</code> のようにバイナリのパスで探してください。</p>
+            </div>
+          </div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> pkill -f "target/debug/app"</span><span class="terminal__line"><span class="terminal__prompt">$</span> pkill -f "node_modules/.bin/tauri"</span><span class="terminal__line"><span class="terminal__prompt">$</span> pkill -f "node_modules/.bin/next dev"</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ターミナルに <code>Running `target/debug/app`</code> が表示され、ウィンドウ（800×600）に「Hello, Tauri!」と「Tauri アプリのバージョン: 0.1.0」が表示されれば成功です。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">npm run tauri build -- --debug でアプリをビルドする</h3>
+        </div>
+        <div class="step__body">
+          <p>最後に、配布できる形のアプリ（<code>.app</code> と <code>.dmg</code>）をビルドします。<code>npm run tauri build</code> に <code>--</code> を挟んで <code>--debug</code> を渡し、デバッグビルドにします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri build -- --debug</span><span class="terminal__line"></span><span class="terminal__line">&gt; 01-setup@0.1.0 tauri</span><span class="terminal__line">&gt; tauri build --debug</span><span class="terminal__line"></span><span class="terminal__line">        Info Looking up installed tauri packages to check mismatched versions...</span><span class="terminal__line">     Running beforeBuildCommand `npm run build`</span><span class="terminal__line"></span><span class="terminal__line">&gt; 01-setup@0.1.0 build</span><span class="terminal__line">&gt; next build</span><span class="terminal__line"></span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line">（workspace root の警告は省略）</span><span class="terminal__line">✓ Compiled successfully in 202ms</span><span class="terminal__line">（中略）</span><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">└ ○ /_not-found</span><span class="terminal__line"></span><span class="terminal__line">○  (Static)  prerendered as static content</span><span class="terminal__line"></span><span class="terminal__line">（Rust のコンパイル進捗は省略）</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.71s</span><span class="terminal__line">       Built application at: /path/to/01-setup/src-tauri/target/debug/app</span><span class="terminal__line">    Bundling handson-tauri-01.app (/path/to/01-setup/src-tauri/target/debug/bundle/macos/handson-tauri-01.app)</span><span class="terminal__line">    Bundling handson-tauri-01_0.1.0_aarch64.dmg (/path/to/01-setup/src-tauri/target/debug/bundle/dmg/handson-tauri-01_0.1.0_aarch64.dmg)</span><span class="terminal__line">     Running bundle_dmg.sh</span><span class="terminal__line">    Finished 2 bundles at:</span><span class="terminal__line">        /path/to/01-setup/src-tauri/target/debug/bundle/macos/handson-tauri-01.app</span><span class="terminal__line">        /path/to/01-setup/src-tauri/target/debug/bundle/dmg/handson-tauri-01_0.1.0_aarch64.dmg</span></pre>
+</div>
+          <p><code>beforeBuildCommand</code>（<code>npm run build</code>）で <code>out/</code> を作り直し、Rust 側をビルドします。そのうえで、<code>frontendDist</code>（<code>../out</code>）を同梱した 2 つのバンドルを作っています。ステップ 5 のビルド結果を再利用するため、コンパイルは 14.71 秒で終わりました（コマンド全体では約 40 秒）。生成物を確認します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls src-tauri/target/debug/bundle/macos/</span><span class="terminal__line">handson-tauri-01.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls src-tauri/target/debug/bundle/dmg/</span><span class="terminal__line">bundle_dmg.sh</span><span class="terminal__line">handson-tauri-01_0.1.0_aarch64.dmg</span><span class="terminal__line">icon.icns</span></pre>
+</div>
+          <p><code>.dmg</code> の大きさは 7,462,242 バイト（約 7.5 MB）でした。ファイル名の <code>aarch64</code> は Apple シリコン向けであることを表します。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">なぜ <code>--debug</code> を付けるのか</p>
+              <p><code>--debug</code> を付けない <code>tauri build</code> は、最適化を行うリリースビルド（<code>cargo build --release</code>）になり、ビルド時間が大幅に長くなります。このレッスンの目的は「ビルドが通り、<code>.app</code> ができること」の確認なので、デバッグビルドで十分です。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">未署名の <code>.app</code> と Gatekeeper</p>
+              <p>今回のビルドはコード署名をしていません。未署名の <code>.app</code> を Finder から開いたり、ほかの Mac に配ったりすると、macOS の Gatekeeper に警告される場合があります。このレッスンでは生成物ができたことの確認までにとどめ、動作確認はステップ 5 の <code>tauri dev</code> で行います。署名と公証は 05（パッケージングと配布）で扱います。</p>
+            </div>
+          </div>
+          <p>仕上げに、ステップ 4 で追加した ESLint の除外設定が効いていることを確かめます。<code>src-tauri/target/</code> にビルド成果物ができた状態でも、エラーなく終わります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 01-setup@0.1.0 lint</span><span class="terminal__line">&gt; eslint</span><span class="terminal__line"></span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Finished 2 bundles at:</code> に続いて <code>handson-tauri-01.app</code> と <code>handson-tauri-01_0.1.0_aarch64.dmg</code> のパスが表示されます。<code>ls</code> で両方が見つかれば成功です。<code>npm run lint</code> もエラーなく終わることを確認してください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rustup</code>・<code>rustc</code>・<code>cargo</code>・<code>xcode-select</code>・<code>node</code>・<code>npm</code> がそろっていることを確認した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>next.config.ts</code> に <code>output: "export"</code> を設定し、<code>npm run build</code> で <code>out/</code> ができることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>npx tauri init --ci</code> で <code>src-tauri/</code> を作り、<code>devUrl</code> と <code>frontendDist</code> の役割を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>identifier</code> を既定値から変更した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>@tauri-apps/api</code> の <code>getVersion</code> を呼び、ブラウザ用のフォールバックを用意した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>npm run tauri dev</code> でウィンドウを開き、確認後にプロセスを止めた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>npm run tauri build -- --debug</code> で <code>.app</code> と <code>.dmg</code> ができた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>cargo fmt --check</code> と <code>npm run lint</code> がエラーなく終わった</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ウィンドウに別のアプリの画面が表示される</p>
+              <p>ポート 3000 を別のプロセス（ほかの Next.js の開発サーバーなど）が使っていると、<code>tauri dev</code> は待たずに起動し、WebView にはその 3000 番を占有している別のアプリの画面が表示されます。Next.js のページが出ないときは、<code>lsof -iTCP:3000 -sTCP:LISTEN</code> で使用中のプロセスを確認し、止めてから起動し直してください。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>npm run lint</code> が <code>src-tauri/target/</code> の中でエラーになる</p>
+              <p><code>eslint.config.mjs</code> の <code>globalIgnores</code> に <code>src-tauri/target/**</code> を追加し忘れたとします。すると Rust のビルドを一度でも実行した後は、ビルドキャッシュ内の生成 JS を ESLint が解析してエラーになります。ステップ 4 の設定を確認してください。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">2 回目以降の起動は速くなる</p>
+              <p>初回の <code>tauri dev</code> は依存クレートをすべてビルドするため数十秒かかりますが、2 回目以降は差分だけをビルドします。ステップ 6 のビルドでは、コンパイルが 14.71 秒で終わりました。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>AGENTS.md</code> と <code>CLAUDE.md</code> について</p>
+              <p><code>create-next-app</code> の <code>--agents-md</code> によって生成される、AI のコーディング支援向けの説明ファイルです。アプリの動作には関係しないので、削除しても影響はありません。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        Next.js を静的エクスポートし、<code>tauri init</code> で作った <code>src-tauri/</code> と組み合わせて、デスクトップアプリとして起動・ビルドするところまでを体験しました。
+        開発時は <code>devUrl</code> の開発サーバーを、ビルド時は <code>frontendDist</code> の <code>out/</code> を WebView に表示する、という切り替えがこの構成の要です。
+        次の項目では、<code>tauri.conf.json</code> でウィンドウを設定します。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>tauri/01-setup</code> の <code>tauri/01-setup/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../../index.html">
+          <span class="lesson-nav__direction">← カタログ</span>
+          <span class="lesson-nav__title">ハンズオン教材カタログ</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">02: ウィンドウ設定とビルド</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
