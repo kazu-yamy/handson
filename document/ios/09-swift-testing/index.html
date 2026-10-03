@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>09: Swift Testing | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">09</li>
+        </ol>
+        <h1 class="lesson-title">Swift Testing</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: <code>@Test</code> と <code>#expect</code> でテストを書いたことがあり、増えてきたテストを整理して、失敗の原因を読み取りやすくしたい人</li>
+          <li class="lesson-meta__item">📋 前提: 08 で SwiftData に保存する <code>HandsonApp</code> プロジェクトが手元にあること。Swift Testing の <code>@Test</code>・<code>#expect</code>・<code>#expect(throws:)</code>・<code>try #require</code> を使ったことがあること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../08-swiftdata/index.html">08 SwiftData</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>#expect</code> と <code>#require</code> の違いを、失敗したときの出力で確かめる</li>
+          <li><code>@Suite</code> と表示名でテストを整理し、<code>init</code> に共通の準備を書く</li>
+          <li><code>arguments:</code> でパラメータ化テストを書き、全組み合わせと <code>zip</code> を使い分ける</li>
+          <li>トレイト（タグ・無効化・条件付きの実行・課題の関連付け・制限時間・直列実行）を付け、コマンドラインで実行するテストを絞り込む</li>
+          <li><code>withKnownIssue</code> で既知の不具合を記録し、<code>confirmation</code> でコールバックの回数を確かめる</li>
+          <li>XCTest で UI テストを書き、起動引数でメモリ上のデータベースに切り替える</li>
+          <li>コードカバレッジを計測し、ファイルごとの傾向を読む</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        01〜08 では、作った機能を確かめるために <code>@Test</code> と <code>#expect</code> を使ってきました。この項目では、Swift Testing の機能を体系的に学び、既存のテストを整理します。
+        アプリの機能はほとんど変えません。テストを読みやすくまとめ、失敗したときに原因が分かる書き方を身につけます。
+      </p>
+      <p>
+        <code>#expect</code> と <code>#require</code> から始め、<code>@Suite</code> での整理・パラメータ化・トレイト・既知の問題・UI テスト・カバレッジの順に進めます。1 ステップで扱う概念は 1 つです。
+        完成すると、ユニットテストは 59 から 73 に増え、UI テストが 2 つ加わります。テストの結果は、全てターミナルの出力で確かめます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョンと並行処理の設定</p>
+          <p>
+            macOS 26.6.2 / Xcode 27.0 / Swift 6.4 / iPhone 17（iOS 27.0）のシミュレータは 08 と同じです。バージョンは執筆時点（2026年10月）のものです。Swift Testing は Xcode に含まれているので、追加のパッケージは要りません。
+          </p>
+          <p>
+            アプリターゲットは 08 と同じく、<code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> です。一方、テストターゲット（<code>HandsonAppTests</code>）にはこの設定が無く、テストの型は既定でメインアクターの外（nonisolated）にあります。
+            そのため、メインアクターのコードを呼ぶテストの型には <code>@MainActor</code> を付けます。01 から続けてきた書き方です。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">08 のプロジェクトをコピーする</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            08 の完成コードをそのまま出発点にします。<code>08-swiftdata</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>09-swift-testing</code> にコピーします。
+            プロジェクト名・ターゲット名・Bundle Identifier（<code>com.example.HandsonApp</code>）は変えません。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 08-swiftdata 09-swift-testing</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 09-swift-testing/HandsonApp</span></pre>
+</div>
+
+          <p>以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。コピーしたプロジェクトがそのままビルドでき、08 までの 59 テストが通ることを確かめます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "◇|✔|✘|➜|━|↳|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Suite ConcurrencyTests passed after 4.898 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Suite CounterTests passed after 0.001 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 59 tests in 16 suites passed after 5.986 seconds.</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <ul>
+            <li><code>grep</code> の条件は、Swift Testing が出力する記号（<code>◇</code> 開始、<code>✔</code> 成功、<code>✘</code> 失敗、<code>➜</code> スキップ、<code>━</code> 既知の問題、<code>↳</code> 詳細）と、結果の行だけを残すためのものです。この項目では、全てのテストのコマンドにこの条件を付けます。</li>
+            <li>これまでのテストで使った機能は、<code>@Test</code>・<code>#expect</code>・<code>#expect(throws:)</code>（型と値）・<code>await #expect(throws:)</code>・<code>try #require</code>・<code>Issue.record</code>・<code>@MainActor</code> の struct・<code>async</code> のテストです。<code>arguments:</code>・<code>@Suite</code>・トレイトはまだ使っていません。</li>
+            <li>テストのコマンドは、ビルドを含めて 40 秒前後かかります。テストの実行自体は 6 秒ほどです。</li>
+          </ul>
+
+          <p>Xcode の場合は、<code>09-swift-testing/HandsonApp/HandsonApp.xcodeproj</code> を開き、<kbd>⌘</kbd> + <kbd>U</kbd>（<code>Product</code> &gt; <code>Test</code>）でテストを実行します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> と <code>Test run with 59 tests in 16 suites passed</code> が表示されれば準備完了です。この項目では、ユニットテストを 14 個追加して 73 テスト・21 スイートにします。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">#expect と #require の違いを失敗の出力で確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>#expect</code> と <code>#require</code> は、どちらも条件を確かめるマクロです。違いは、失敗した後にテストを続けるかどうかです。わざと失敗するテストを書いて、出力を比べます。
+            <code>HandsonAppTests</code> フォルダに <code>ExpectRequireTests.swift</code> を追加し、次の内容にします（<code>Targets</code> は <code>HandsonAppTests</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/ExpectRequireTests.swift（わざと失敗させる版）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Testing
+@testable import HandsonApp
+
+struct ExpectRequireTests {
+
+    @Test func expectKeepsGoing() {
+        let item = TodoItem(title: "買い物")
+        #expect(item.title == "牛乳")
+        #expect(item.priority == .high)
+        #expect(item.isDone)
+    }
+
+    @Test func requireStopsHere() throws {
+        let titles: [String] = []
+        let first = try #require(titles.first)
+        #expect(first == "A")
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>expectKeepsGoing()</code>: タイトル・優先度・完了状態の 3 つを、全て間違った値で確かめます。</li>
+            <li><code>requireStopsHere()</code>: 空の配列の <code>first</code>（<code>nil</code>）を <code>try #require</code> で取り出します。<code>#require</code> は失敗するとエラーを投げるので、テスト関数に <code>throws</code> を付けます。</li>
+          </ul>
+
+          <p><code>-only-testing:HandsonAppTests/ExpectRequireTests</code> で、このスイートだけを実行します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests/ExpectRequireTests test 2&gt;&amp;1 | grep -E "◇|✔|✘|➜|━|↳|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">◇ Suite ExpectRequireTests started.</span><span class="terminal__line">◇ Test expectKeepsGoing() started.</span><span class="terminal__line">✘ Test expectKeepsGoing() recorded an issue at ExpectRequireTests.swift:8:9: Expectation failed: item.title == "牛乳"</span><span class="terminal__line">↳ item.title == "牛乳" → false</span><span class="terminal__line">↳   item.title → "買い物"</span><span class="terminal__line">✘ Test expectKeepsGoing() recorded an issue at ExpectRequireTests.swift:9:9: Expectation failed: item.priority == .high</span><span class="terminal__line">↳ item.priority == .high → false</span><span class="terminal__line">↳   item.priority → .medium</span><span class="terminal__line">✘ Test expectKeepsGoing() recorded an issue at ExpectRequireTests.swift:10:9: Expectation failed: item.isDone</span><span class="terminal__line">↳ item.isDone → false</span><span class="terminal__line">↳   item → TodoItem(id: 4092831B-…, title: "買い物", priority: HandsonApp.Priority.medium, status: HandsonApp.Status.todo)</span><span class="terminal__line">↳     id → 4092831B-…</span><span class="terminal__line">↳     title → "買い物"</span><span class="terminal__line">↳     priority → .medium</span><span class="terminal__line">↳     status → .todo</span><span class="terminal__line">↳   isDone → false</span><span class="terminal__line">✘ Test expectKeepsGoing() failed after 0.014 seconds with 3 issues.</span><span class="terminal__line">◇ Test requireStopsHere() started.</span><span class="terminal__line">✘ Test requireStopsHere() recorded an issue at ExpectRequireTests.swift:15:25: Expectation failed: titles.first</span><span class="terminal__line">↳ titles.first → nil</span><span class="terminal__line">↳   titles → []</span><span class="terminal__line">↳   first → nil</span><span class="terminal__line">✘ Test requireStopsHere() failed after 0.002 seconds with 1 issue.</span><span class="terminal__line">✘ Suite ExpectRequireTests failed after 0.017 seconds with 4 issues.</span><span class="terminal__line">✘ Test run with 2 tests in 1 suite failed after 0.018 seconds with 4 issues.</span><span class="terminal__line">** TEST FAILED **</span></pre>
+</div>
+
+          <ul>
+            <li><strong><code>#expect</code> は失敗しても続行します</strong>。<code>expectKeepsGoing()</code> では 3 つの <code>#expect</code> が全て実行され、<code>with 3 issues</code> と 3 件の失敗（issue）が記録されています。</li>
+            <li><strong><code>#require</code> は失敗した時点でテストを中断します</strong>。<code>requireStopsHere()</code> の issue は 1 件だけです。後ろの <code>#expect(first == "A")</code> は実行されていません。</li>
+            <li><code>↳</code> の行には、式の中の値が展開されます。<code>item.title → "買い物"</code> のように、<code>==</code> の左右それぞれの実際の値が分かります。<code>item.isDone</code> のようなプロパティの参照では、元の <code>item</code> の中身まで 1 項目ずつ表示されます。<code>XCTAssertEqual</code> のように比べ方ごとの関数を使い分けなくても、失敗の原因を出力から読み取れます。</li>
+            <li><code>id</code> の値（<code>4092831B-…</code>）は実行ごとに変わります。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>-parallel-testing-enabled NO</code> を付けないと、テストごとの行が出ない</p>
+              <p>
+                <code>-parallel-testing-enabled NO</code> を付けずに実行すると、<code>xcodebuild</code> の標準出力に Swift Testing の <code>✔</code> の行が 1 つも出ませんでした。出たのは <code>** TEST SUCCEEDED **</code> だけです。
+                この項目では、出力を読みながら進めるので、08 と同じく全てのテストのコマンドにこのオプションを付けます。
+              </p>
+            </div>
+          </div>
+
+          <p>出力を確かめたら、ファイルの中身を通る版に置き換えます。<code>@Suite("…")</code> と <code>@Test("…")</code> の文字列は次のステップで説明します。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/ExpectRequireTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Testing
+@testable import HandsonApp
+
+@Suite("#expect と #require")
+struct ExpectRequireTests {
+
+    @Test("#expect は失敗しても続行する（式の中身が展開される）")
+    func expectShowsExpandedValues() {
+        let item = TodoItem(title: "買い物")
+        #expect(item.title == "買い物")
+        #expect(item.priority == .medium)
+        #expect(!item.isDone)
+    }
+
+    @Test("#require は失敗するとテストを中断し、オプショナルをアンラップする")
+    func requireUnwrapsOptional() throws {
+        let titles = ["A", "B"]
+        let first = try #require(titles.first)  // nil なら、ここでテストが終わる
+        #expect(first == "A")
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>try #require(titles.first)</code> は、値が <code>nil</code> でなければアンラップした値（ここでは <code>String</code>）を返します。オプショナルを取り出してから先を確かめたいときに使います。</li>
+            <li>使い分けの目安: 後ろの確認が前提を満たさないと意味が無い（<code>nil</code> のまま続けても無駄な失敗が増える）ときは <code>#require</code>、それ以外は <code>#expect</code> です。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>わざと失敗させた版で、<code>expectKeepsGoing()</code> は <code>with 3 issues</code>、<code>requireStopsHere()</code> は <code>with 1 issue</code> になることを確かめます。通る版に置き換えた後の実行は、次のステップでまとめて行います。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">@Suite と表示名でテストを整理し、init で共通の準備を書く</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            これまでのテストは、関数名がそのまま出力に出ていました。<code>@Suite</code> と <code>@Test</code> に表示名を付けて、出力を読みやすくします。まず <code>ProfileTests.swift</code> を次のように変更します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/ProfileTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Testing</span><span class="diff-line">  @testable import HandsonApp</span><span class="diff-line"> </span><span class="diff-line">  @MainActor</span><span class="diff-line diff-line--add">+ @Suite("Profile")</span><span class="diff-line">  struct ProfileTests {</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func displayNameUsesNicknameWhenPresent() {</span><span class="diff-line diff-line--add">+     @Test("ニックネームがあれば displayName に使う")</span><span class="diff-line diff-line--add">+     func displayNameUsesNicknameWhenPresent() {</span><span class="diff-line">          let profile = Profile(name: "Taro", nickname: "Tarou")</span><span class="diff-line">          #expect(profile.displayName == "Tarou")</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func displayNameFallsBackToName() {</span><span class="diff-line diff-line--add">+     @Test("ニックネームが無ければ name にフォールバックする")</span><span class="diff-line diff-line--add">+     func displayNameFallsBackToName() {</span><span class="diff-line">          let profile = Profile(name: "Taro", nickname: nil)</span><span class="diff-line">          #expect(profile.displayName == "Taro")</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      @Test func greetingWithAndWithoutNickname() {</span><span class="diff-line">          #expect(Profile(name: "Taro", nickname: "T").greeting() == "Hello, T (Taro)!")</span><span class="diff-line">          #expect(Profile(name: "Taro", nickname: nil).greeting() == "Hello, Taro!")</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      @Test func labelAndOptionalChaining() {</span><span class="diff-line">          let none = Profile(name: "Taro", nickname: nil)</span><span class="diff-line">          let some = Profile(name: "Taro", nickname: "tt")</span><span class="diff-line">          #expect(none.label == "(no nickname)")</span><span class="diff-line">          #expect(none.nicknameUppercased == nil)</span><span class="diff-line">          #expect(some.nicknameUppercased == "TT")</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>@Suite("Profile")</code>: テストをまとめる型（スイート）に表示名を付けます。テストを含む型は <code>@Suite</code> が無くてもスイートとして扱われますが、表示名やトレイト（ステップ 5）を付けるときに書きます。</li>
+            <li><code>@Test("…")</code>: テストに表示名を付けます。関数名は変えなくてかまいません。表示名を付けていない残りの 2 つは、比較のためにそのままにしておきます。</li>
+          </ul>
+
+          <p>次に、<code>TodoItemTests.swift</code> にスイートを入れ子にします。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/TodoItemTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Testing</span><span class="diff-line">  @testable import HandsonApp</span><span class="diff-line"> </span><span class="diff-line">  @MainActor</span><span class="diff-line diff-line--add">+ @Suite("TodoItem")</span><span class="diff-line">  struct TodoItemTests {</span><span class="diff-line"> </span><span class="diff-line">      @Test func priorityRawValueAndCases() {</span><span class="diff-line">          #expect(Priority.high.rawValue == 3)</span><span class="diff-line">          #expect(Priority(rawValue: 1) == .low)</span><span class="diff-line">          #expect(Priority(rawValue: 9) == nil)</span><span class="diff-line">          #expect(Priority.allCases.map(\.label) == ["低", "中", "高"])</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      @Test func statusTextForTodo() {</span><span class="diff-line">          let item = TodoItem(title: "買い物")</span><span class="diff-line">          #expect(item.statusText == "未完了")</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      @Test func statusTextForDone() {</span><span class="diff-line">          let date = Date(timeIntervalSince1970: 0)</span><span class="diff-line">          let item = TodoItem(title: "買い物", priority: .high, status: .done(date))</span><span class="diff-line">          #expect(item.statusText.hasPrefix("完了 ("))</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func toggleSwitchesBetweenTodoAndDone() {</span><span class="diff-line diff-line--add">+     // 入れ子のスイート。表示名は「ステータス表示」</span><span class="diff-line diff-line--add">+     @Suite("ステータス表示")</span><span class="diff-line diff-line--add">+     struct StatusText {</span><span class="diff-line diff-line--add">+         @Test("未完了は「未完了」と表示する")</span><span class="diff-line diff-line--add">+         func todo() {</span><span class="diff-line diff-line--add">+             #expect(TodoItem(title: "A").statusText == "未完了")</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+         @Test("完了は「完了 (日付)」と表示する")</span><span class="diff-line diff-line--add">+         func done() {</span><span class="diff-line diff-line--add">+             let item = TodoItem(title: "A", status: .done(Date(timeIntervalSince1970: 0)))</span><span class="diff-line diff-line--add">+             #expect(item.statusText.hasPrefix("完了 ("))</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     @Test("toggle で未完了と完了が入れ替わる")</span><span class="diff-line diff-line--add">+     func toggleSwitchesBetweenTodoAndDone() {</span><span class="diff-line">          var item = TodoItem(title: "買い物")</span><span class="diff-line">          #expect(!item.isDone)</span><span class="diff-line">          item.toggle()</span><span class="diff-line">          #expect(item.isDone)</span><span class="diff-line">          item.toggle()</span><span class="diff-line">          #expect(!item.isDone)</span><span class="diff-line">          #expect(item.statusText == "未完了")</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li>型の中に型を書くと、スイートを入れ子にできます。関連するテストをまとめたいときに使います。</li>
+            <li><code>StatusText</code> は、既存の 2 つのテスト（<code>statusTextForTodo</code> / <code>statusTextForDone</code>）と同じ内容を、入れ子の書き方で書き直した例です。</li>
+            <li>入れ子の型の名前を <code>Status</code> にすると、アプリの <code>Status</code> 型（02 で作った enum）と名前が重なります。そのため <code>StatusText</code> にしています。</li>
+          </ul>
+
+          <p><code>TodoStoreTests.swift</code> では、どのテストでも作っていた <code>TodoStore</code> を、<code>init</code> にまとめます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/TodoStoreTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Testing</span><span class="diff-line">  @testable import HandsonApp</span><span class="diff-line"> </span><span class="diff-line">  @MainActor</span><span class="diff-line diff-line--add">+ @Suite("TodoStore")</span><span class="diff-line">  struct TodoStoreTests {</span><span class="diff-line diff-line--add">+     // @Test ごとに TodoStoreTests のインスタンスが新しく作られるので、</span><span class="diff-line diff-line--add">+     // init が共通のセットアップになる。あるテストが store を変更しても、他のテストには見えない</span><span class="diff-line diff-line--add">+     let store: TodoStore</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func addAppendsItemWithDefaults() async {</span><span class="diff-line diff-line--remove">-         let store = TodoStore()</span><span class="diff-line diff-line--add">+     init() {</span><span class="diff-line diff-line--add">+         store = TodoStore(items: [</span><span class="diff-line diff-line--add">+             TodoItem(title: "A"), TodoItem(title: "B"), TodoItem(title: "C"),</span><span class="diff-line diff-line--add">+         ])</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     @Test("add は既定値（優先度 中・未完了）で末尾に追加する")</span><span class="diff-line diff-line--add">+     func addAppendsItemWithDefaults() async {</span><span class="diff-line">          await store.add(title: "買い物")</span><span class="diff-line diff-line--remove">-         #expect(store.items.count == 1)</span><span class="diff-line diff-line--remove">-         #expect(store.items[0].title == "買い物")</span><span class="diff-line diff-line--remove">-         #expect(store.items[0].priority == .medium)</span><span class="diff-line diff-line--remove">-         #expect(!store.items[0].isDone)</span><span class="diff-line diff-line--add">+         #expect(store.items.count == 4)</span><span class="diff-line diff-line--add">+         #expect(store.items[3].title == "買い物")</span><span class="diff-line diff-line--add">+         #expect(store.items[3].priority == .medium)</span><span class="diff-line diff-line--add">+         #expect(!store.items[3].isDone)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func toggleChangesStatus() {</span><span class="diff-line diff-line--remove">-         let store = TodoStore(items: [TodoItem(title: "買い物")])</span><span class="diff-line diff-line--add">+     @Test("toggle で完了と未完了が入れ替わる")</span><span class="diff-line diff-line--add">+     func toggleChangesStatus() {</span><span class="diff-line">          store.toggle(store.items[0])</span><span class="diff-line">          #expect(store.items[0].isDone)</span><span class="diff-line">          store.toggle(store.items[0])</span><span class="diff-line">          #expect(!store.items[0].isDone)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func toggleIgnoresUnknownItem() {</span><span class="diff-line diff-line--remove">-         let store = TodoStore(items: [TodoItem(title: "買い物")])</span><span class="diff-line diff-line--add">+     @Test("存在しない項目の toggle は何もしない")</span><span class="diff-line diff-line--add">+     func toggleIgnoresUnknownItem() {</span><span class="diff-line">          store.toggle(TodoItem(title: "存在しない"))</span><span class="diff-line diff-line--remove">-         #expect(!store.items[0].isDone)</span><span class="diff-line diff-line--add">+         #expect(store.items.allSatisfy { !$0.isDone })</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func removeDeletesItemsAtOffsets() {</span><span class="diff-line diff-line--remove">-         let store = TodoStore(items: [</span><span class="diff-line diff-line--remove">-             TodoItem(title: "A"), TodoItem(title: "B"), TodoItem(title: "C"),</span><span class="diff-line diff-line--remove">-         ])</span><span class="diff-line diff-line--add">+     @Test("remove は指定位置の項目を削除する")</span><span class="diff-line diff-line--add">+     func removeDeletesItemsAtOffsets() {</span><span class="diff-line">          store.remove(at: IndexSet(integer: 1))</span><span class="diff-line">          #expect(store.items.map(\.title) == ["A", "C"])</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func moveReordersItems() {</span><span class="diff-line diff-line--remove">-         let store = TodoStore(items: [</span><span class="diff-line diff-line--remove">-             TodoItem(title: "A"), TodoItem(title: "B"), TodoItem(title: "C"),</span><span class="diff-line diff-line--remove">-         ])</span><span class="diff-line diff-line--add">+     @Test("move で項目を並べ替える")</span><span class="diff-line diff-line--add">+     func moveReordersItems() {</span><span class="diff-line">          // 先頭の A を末尾（offset 3）へ</span><span class="diff-line">          store.move(from: IndexSet(integer: 0), to: 3)</span><span class="diff-line">          #expect(store.items.map(\.title) == ["B", "C", "A"])</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><strong>Swift Testing は、<code>@Test</code> を 1 つ実行するたびにスイートの型のインスタンスを新しく作ります</strong>。そのため、<code>init</code> が XCTest の <code>setUp</code> に当たる共通の準備になります。</li>
+            <li>どのテストも A・B・C の 3 件から始まります。<code>remove</code> のテストが B を削除しても、<code>add</code> のテストには影響しません。<code>add</code> のテストが <code>count == 4</code>（3 件 + 追加した 1 件）を期待しているのはそのためです。</li>
+            <li><code>store</code> は <code>let</code> ですが、<code>TodoStore</code> はクラスなので、中の <code>items</code> は変更できます。</li>
+          </ul>
+
+          <p>変更した 4 つのスイートを指定して実行します。<code>-only-testing</code> は何回でも並べられます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests/TodoStoreTests -only-testing:HandsonAppTests/TodoItemTests -only-testing:HandsonAppTests/ProfileTests -only-testing:HandsonAppTests/ExpectRequireTests test 2&gt;&amp;1 | grep -E "◇|✔|✘|➜|━|↳|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test "#expect は失敗しても続行する（式の中身が展開される）" passed after 0.001 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Suite "#expect と #require" passed after 0.005 seconds.</span><span class="terminal__line">✔ Test "ニックネームがあれば displayName に使う" passed after 0.001 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test greetingWithAndWithoutNickname() passed after 0.001 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Suite "Profile" passed after 0.001 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test "未完了は「未完了」と表示する" passed after 0.001 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Suite "ステータス表示" passed after 0.005 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Suite "TodoItem" passed after 0.005 seconds.</span><span class="terminal__line">✔ Test "add は既定値（優先度 中・未完了）で末尾に追加する" passed after 0.001 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Suite "TodoStore" passed after 0.001 seconds.</span><span class="terminal__line">✔ Test run with 17 tests in 5 suites passed after 0.013 seconds.</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <ul>
+            <li>表示名を付けたテストは <code>Test "表示名"</code>、付けていないテストは <code>Test greetingWithAndWithoutNickname()</code> のように関数名で出ます。</li>
+            <li><code>xcodebuild</code> の出力では、入れ子のスイートも階層にはならず、<code>Suite "ステータス表示"</code> が 1 行として出ます。スイートの数は、ExpectRequire・Profile・TodoItem・ステータス表示・TodoStore の 5 つです。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Test run with 17 tests in 5 suites passed</code> と表示され、表示名を付けたテストとスイートが <code>"…"</code> で囲まれて出ることを確かめます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">arguments: でパラメータ化テストを書く</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            入力だけが違うテストを何個も書く代わりに、<code>@Test</code> の <code>arguments:</code> に入力を並べます。<code>ValidationTests.swift</code> を次のように変更します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/ValidationTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Testing</span><span class="diff-line">  @testable import HandsonApp</span><span class="diff-line"> </span><span class="diff-line">  @MainActor</span><span class="diff-line diff-line--add">+ @Suite("名前の検証")</span><span class="diff-line">  struct ValidationTests {</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func validNameDoesNotThrow() throws {</span><span class="diff-line diff-line--remove">-         try validate(name: "Taro")</span><span class="diff-line diff-line--add">+     // 1 つのコレクション: 要素ごとに 1 ケースのテストになる</span><span class="diff-line diff-line--add">+     @Test("正しい名前は例外を投げない", arguments: ["Taro", "A", "1234567890"])</span><span class="diff-line diff-line--add">+     func validNameDoesNotThrow(name: String) throws {</span><span class="diff-line diff-line--add">+         try validate(name: name)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func emptyNameThrows() {</span><span class="diff-line diff-line--remove">-         #expect(throws: ValidationError.self) {</span><span class="diff-line diff-line--add">+     @Test("空の名前は .empty を投げる")</span><span class="diff-line diff-line--add">+     func emptyNameThrows() {</span><span class="diff-line diff-line--add">+         #expect(throws: ValidationError.empty) {</span><span class="diff-line">              try validate(name: "")</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func tooLongNameThrowsWithAssociatedValue() {</span><span class="diff-line diff-line--add">+     @Test("長すぎる名前は .tooLong(max: 10) を投げる", arguments: ["12345678901", "あいうえおかきくけこさ"])</span><span class="diff-line diff-line--add">+     func tooLongNameThrowsWithAssociatedValue(name: String) {</span><span class="diff-line">          #expect(throws: ValidationError.tooLong(max: 10)) {</span><span class="diff-line diff-line--remove">-             try validate(name: "12345678901")</span><span class="diff-line diff-line--add">+             try validate(name: name)</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func resultVersion() {</span><span class="diff-line diff-line--remove">-         #expect(validatedName("Taro") == .success("Taro"))</span><span class="diff-line diff-line--remove">-         #expect(validatedName("") == .failure(.empty))</span><span class="diff-line diff-line--add">+     // zip: 入力と期待値を 1 対 1 で対応づける（3 ケース）</span><span class="diff-line diff-line--add">+     @Test("Result 版は入力に対応した結果を返す", arguments: zip(</span><span class="diff-line diff-line--add">+         ["Taro", "", "12345678901"],</span><span class="diff-line diff-line--add">+         [Result&lt;String, ValidationError&gt;.success("Taro"), .failure(.empty), .failure(.tooLong(max: 10))]</span><span class="diff-line diff-line--add">+     ))</span><span class="diff-line diff-line--add">+     func resultVersion(name: String, expected: Result&lt;String, ValidationError&gt;) {</span><span class="diff-line diff-line--add">+         #expect(validatedName(name) == expected)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // 2 つのコレクションをそのまま渡すと全組み合わせ（3 × 2 = 6 ケース）</span><span class="diff-line diff-line--add">+     @Test("全組み合わせ: どんな名前でも 11 文字以上は失敗、10 文字以下は成功", arguments: [1, 10, 11], ["a", "あ"])</span><span class="diff-line diff-line--add">+     func allCombinations(length: Int, character: String) {</span><span class="diff-line diff-line--add">+         let name = String(repeating: character, count: length)</span><span class="diff-line diff-line--add">+         #expect(validatedName(name).isSuccess == (length &lt;= 10))</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ extension Result {</span><span class="diff-line diff-line--add">+     fileprivate var isSuccess: Bool {</span><span class="diff-line diff-line--add">+         if case .success = self { true } else { false }</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><strong>コレクション 1 つ</strong>: <code>arguments: ["Taro", "A", "1234567890"]</code> の要素ごとに、関数が 1 回ずつ呼ばれます。関数は、要素を受け取る引数（<code>name: String</code>）を 1 つ持ちます。1 回の呼び出しを「テストケース」と呼びます。</li>
+            <li><strong><code>zip</code></strong>: 入力と期待値を 1 対 1 で対応させます。3 つの入力に 3 つの期待値で、3 ケースです。期待値の配列は、先頭の要素に <code>Result&lt;String, ValidationError&gt;</code> と型を書きます。執筆時は、型を書かないとビルドが通りませんでした（エラーの文言は記録していません）。</li>
+            <li><strong>コレクション 2 つをそのまま渡す</strong>: <code>arguments: [1, 10, 11], ["a", "あ"]</code> は全ての組み合わせになります。3 × 2 で 6 ケースです。組み合わせの数は掛け算で増えるので、2 つまでにとどめます。</li>
+            <li><code>emptyNameThrows()</code> は、<code>#expect(throws: ValidationError.self)</code>（型だけ）から <code>ValidationError.empty</code>（値）に変えて、どのエラーかまで確かめます。</li>
+            <li>引数に渡す値の型は <code>Sendable</code> である必要があります。<code>String</code>・<code>Int</code>・<code>Result&lt;String, ValidationError&gt;</code> はそのまま使えます。</li>
+          </ul>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests/ValidationTests test 2&gt;&amp;1 | grep -E "◇|✔|✘|➜|━|↳|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">◇ Test case passing 1 argument name → "Taro" to "正しい名前は例外を投げない" started.</span><span class="terminal__line">◇ Test case passing 1 argument name → "A" to "正しい名前は例外を投げない" started.</span><span class="terminal__line">◇ Test case passing 1 argument name → "1234567890" to "正しい名前は例外を投げない" started.</span><span class="terminal__line">✔ Test "正しい名前は例外を投げない" with 3 test cases passed after 0.010 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test "長すぎる名前は .tooLong(max: 10) を投げる" with 2 test cases passed after 0.001 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">◇ Test case passing 2 arguments name → "", expected → failure(HandsonApp.ValidationError.empty) to "Result 版は入力に対応した結果を返す" started.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test "Result 版は入力に対応した結果を返す" with 3 test cases passed after 0.001 seconds.</span><span class="terminal__line">◇ Test "全組み合わせ: どんな名前でも 11 文字以上は失敗、10 文字以下は成功" started.</span><span class="terminal__line">◇ Test case passing 2 arguments length → 1, character → "a" to "全組み合わせ: どんな名前でも 11 文字以上は失敗、10 文字以下は成功" started.</span><span class="terminal__line">◇ Test case passing 2 arguments length → 1, character → "あ" to "全組み合わせ: どんな名前でも 11 文字以上は失敗、10 文字以下は成功" started.</span><span class="terminal__line">◇ Test case passing 2 arguments length → 10, character → "a" to "全組み合わせ: どんな名前でも 11 文字以上は失敗、10 文字以下は成功" started.</span><span class="terminal__line">◇ Test case passing 2 arguments length → 10, character → "あ" to "全組み合わせ: どんな名前でも 11 文字以上は失敗、10 文字以下は成功" started.</span><span class="terminal__line">◇ Test case passing 2 arguments length → 11, character → "a" to "全組み合わせ: どんな名前でも 11 文字以上は失敗、10 文字以下は成功" started.</span><span class="terminal__line">◇ Test case passing 2 arguments length → 11, character → "あ" to "全組み合わせ: どんな名前でも 11 文字以上は失敗、10 文字以下は成功" started.</span><span class="terminal__line">✔ Test "全組み合わせ: どんな名前でも 11 文字以上は失敗、10 文字以下は成功" with 6 test cases passed after 0.005 seconds.</span><span class="terminal__line">✔ Suite "名前の検証" passed after 0.021 seconds.</span><span class="terminal__line">✔ Test run with 5 tests in 1 suite passed after 0.021 seconds.</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <ul>
+            <li>テストケースごとに <code>◇ Test case passing … started.</code> の行が出て、渡した引数の値（<code>name → "Taro"</code>）が分かります。</li>
+            <li>テストの数は関数の単位で数えます。ケースは 3 + 1 + 2 + 3 + 6 = 15 ありますが、結果は <code>5 tests</code> です。</li>
+          </ul>
+
+          <p>
+            わざと失敗させると、どのケースが失敗したかが分かります。<code>validNameDoesNotThrow</code> の <code>arguments:</code> の <code>"A"</code> を <code>""</code> に変えて実行すると、次の行が出ます。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">✘ Test "正しい名前は例外を投げない" recorded an issue with 1 argument name → "" at ValidationTests.swift:9:6: Caught error: .empty</span><span class="terminal__line">✘ Test "正しい名前は例外を投げない" with 3 test cases failed after 0.005 seconds with 1 issue.</span></pre>
+</div>
+
+          <p>失敗した引数（<code>name → ""</code>）と、投げられたエラー（<code>.empty</code>）が 1 行で分かります。確かめたら <code>"A"</code> に戻します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Test run with 5 tests in 1 suite passed</code> と、全組み合わせのテストに <code>with 6 test cases</code> が表示されることを確かめます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">トレイトとタグを付け、実行するテストを絞り込む</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>@Test</code> や <code>@Suite</code> の引数に渡す <code>.tags(…)</code> や <code>.disabled(…)</code> を「トレイト」と呼びます。テストに分類や実行の条件を付けます。
+            まずタグを宣言します。<code>HandsonAppTests</code> フォルダに <code>Tags.swift</code> を追加し、次の内容にします（<code>Targets</code> は <code>HandsonAppTests</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/Tags.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Testing
+
+// タグは Tag の static プロパティとして宣言する。@Tag を付ける
+extension Tag {
+    @Tag static var validation: Self
+    @Tag static var networking: Self
+    @Tag static var slow: Self
+}</code></pre>
+</div>
+
+          <p>主なトレイトを 1 つずつ付けたスイートを作ります。同じフォルダに <code>TraitsTests.swift</code> を追加します。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/TraitsTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import Testing
+@testable import HandsonApp
+
+@MainActor
+@Suite("トレイト")
+struct TraitsTests {
+
+    @Test("タグを付ける", .tags(.validation, .slow))
+    func tagged() {
+        #expect(validatedName("Taro") == .success("Taro"))
+    }
+
+    @Test("条件を満たすときだけ実行する", .enabled(if: ProcessInfo.processInfo.environment["RUN_EXTRA"] != nil))
+    func enabledIf() {
+        #expect(Bool(true))
+    }
+
+    @Test("理由を付けて無効化する", .disabled("API の仕様が決まるまで止める"))
+    func disabled() {
+        #expect(Bool(false))
+    }
+
+    @Test("関連する課題を記録する", .bug("https://example.com/issues/123", "名前の上限を変えたい"))
+    func bug() {
+        #expect(validatedName("Taro") == .success("Taro"))
+    }
+
+    @Test("制限時間を付ける", .timeLimit(.minutes(1)))
+    func timeLimit() async throws {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+}
+
+// 既定では、テストは並列に実行される。.serialized を付けたスイートの中は 1 つずつ順番に実行する
+@Suite("直列実行", .serialized)
+struct SerializedTests {
+    @Test(arguments: [1, 2, 3])
+    func runsOneAtATime(n: Int) async throws {
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(n &gt; 0)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>.tags(.validation, .slow)</code>: テストにタグを付けます。タグは <code>Tags.swift</code> で宣言したものだけ使えます。</li>
+            <li><code>.enabled(if: 条件)</code>: 条件が真のときだけ実行します。ここでは環境変数 <code>RUN_EXTRA</code> があるときだけです。</li>
+            <li><code>.disabled("理由")</code>: テストを実行せず、理由を出力に残します。コメントアウトと違い、ビルドは通り続けるので、コードが古くなりません。</li>
+            <li><code>.bug("URL", "説明")</code>: 関連する課題をテストに結び付けます。テストの成否にかかわらず、課題の URL は xcodebuild の出力に出ません。</li>
+            <li><code>.timeLimit(.minutes(1))</code>: 制限時間を超えたら失敗にします。指定できるのは分の単位だけです。</li>
+            <li><code>.serialized</code>（<code>SerializedTests</code>）: 既定では、テストは並列に実行されます。<code>.serialized</code> を付けたスイートの中は、1 つずつ順番に実行します。共有の資源を使うテストを守るときに使います。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@MainActor</code> を付け忘れると、<code>#expect</code> の中でエラーになる</p>
+              <p>最初は <code>TraitsTests</code> に <code>@MainActor</code> を付けずに書き、ビルドで次のエラーになりました。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">macro expansion #expect:1:32: error: call to main actor-isolated global function 'validatedName' in a synchronous nonisolated context [#ActorIsolatedCall]</span></pre>
+</div>
+              <p>
+                <code>validatedName</code> はアプリターゲットの関数なので、メインアクターに分離されています。一方、テストの型は nonisolated です。01 でテストから <code>greeting(for:)</code> を呼んだときと同じエラーです。テストの型に <code>@MainActor</code> を付けると直ります。
+              </p>
+            </div>
+          </div>
+
+          <p>既存のテストにもタグを付けます。<code>ValidationTests.swift</code>・<code>TodoAPIClientTests.swift</code>・<code>TodoCacheTests.swift</code> を次のように変更します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/ValidationTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  …</span><span class="diff-line"> </span><span class="diff-line">  @MainActor</span><span class="diff-line diff-line--remove">- @Suite("名前の検証")</span><span class="diff-line diff-line--add">+ @Suite("名前の検証", .tags(.validation))</span><span class="diff-line">  struct ValidationTests {</span><span class="diff-line"> </span><span class="diff-line">  …</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/TodoAPIClientTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  …</span><span class="diff-line">  @testable import HandsonApp</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ @Suite(.tags(.networking))</span><span class="diff-line">  struct TodoAPIClientTests {</span><span class="diff-line"> </span><span class="diff-line">  …</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/TodoCacheTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  …</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func repositoryUsesCacheOnSecondFetch() async throws {</span><span class="diff-line diff-line--add">+     @Test(.tags(.slow), .timeLimit(.minutes(1)))</span><span class="diff-line diff-line--add">+     func repositoryUsesCacheOnSecondFetch() async throws {</span><span class="diff-line">          let repository = TodoRepository(delay: .milliseconds(500))</span><span class="diff-line">          let clock = ContinuousClock()</span><span class="diff-line">  …</span></pre>
+</div>
+
+          <ul>
+            <li>スイートに付けたトレイトは、中の全てのテストに引き継がれます。<code>ValidationTests</code> の 5 テストは全て <code>.validation</code> のタグを持ちます。</li>
+            <li><code>repositoryUsesCacheOnSecondFetch</code> は 1 秒ほどかかるテストなので、<code>.slow</code> のタグと制限時間を付けます。</li>
+          </ul>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests/TraitsTests -only-testing:HandsonAppTests/SerializedTests test 2&gt;&amp;1 | grep -E "◇|✔|✘|➜|━|↳|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">◇ Suite "トレイト" started.</span><span class="terminal__line">✔ Test "タグを付ける" passed after 0.001 seconds.</span><span class="terminal__line">➜ Test "条件を満たすときだけ実行する" skipped.</span><span class="terminal__line">➜ Test "理由を付けて無効化する" skipped: "API の仕様が決まるまで止める"</span><span class="terminal__line">✔ Test "関連する課題を記録する" passed after 0.009 seconds.</span><span class="terminal__line">✔ Test "制限時間を付ける" passed after 0.012 seconds.</span><span class="terminal__line">✔ Suite "トレイト" passed after 0.022 seconds.</span><span class="terminal__line">◇ Suite "直列実行" started.</span><span class="terminal__line">✔ Test runsOneAtATime(n:) with 3 test cases passed after 0.318 seconds.</span><span class="terminal__line">✔ Suite "直列実行" passed after 0.319 seconds.</span><span class="terminal__line">✔ Test run with 6 tests in 2 suites passed after 0.342 seconds.</span></pre>
+</div>
+
+          <ul>
+            <li><code>.disabled</code> は <code>➜ … skipped: "理由"</code>、条件を満たさない <code>.enabled(if:)</code> は理由なしの <code>➜ … skipped.</code> になります。スキップしたテストも <code>6 tests</code> に数えられます。</li>
+            <li><code>runsOneAtATime(n:)</code> は 100 ミリ秒待つケースが 3 つで、0.318 秒かかりました。1 つずつ順番に実行されたことが分かります。</li>
+          </ul>
+
+          <p>
+            <strong>実行するテストの絞り込み</strong>: 執筆時の <code>xcodebuild -help</code> には、タグで絞り込むオプションがありませんでした。あるのは <code>-only-testing</code> / <code>-skip-testing</code> / <code>-testPlan</code> / <code>-only-test-configuration</code> です。<code>swift test</code> の <code>--filter</code> は Swift Package 用で、Xcode のプロジェクトには使えません。
+            コマンドラインでは、スイートやテスト関数の単位で絞り込みます。次の例は、時間のかかる 2 つのスイートを除いて実行します。
+            Xcode ではテストプランの Include Tags / Exclude Tags でタグによる絞り込みができます（画面での手順は省略します）。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests -skip-testing:HandsonAppTests/ConcurrencyTests -skip-testing:HandsonAppTests/TodoCacheTests test 2&gt;&amp;1 | grep -E "◇|✔|✘|➜|━|↳|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">➜ Test "条件を満たすときだけ実行する" skipped.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 60 tests in 18 suites passed after 0.423 seconds.</span><span class="terminal__line">…</span></pre>
+</div>
+
+          <ul>
+            <li><code>-only-testing</code> / <code>-skip-testing</code> の書式は <code>ターゲット/スイートの型名</code> です。表示名（<code>"名前の検証"</code>）ではなく、型名（<code>ValidationTests</code>）を書きます。</li>
+            <li>テスト関数を 1 つだけ実行するときは、関数名に括弧を付けます。<code>-only-testing:'HandsonAppTests/ValidationTests/emptyNameThrows()'</code> で <code>Test run with 1 test in 1 suite</code> になりました。括弧はシェルが解釈しないよう、<code>'…'</code> で囲みます。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">括弧を忘れると、0 件のまま成功する</p>
+              <p>
+                <code>-only-testing:HandsonAppTests/ValidationTests/emptyNameThrows</code> のように括弧を付けないと、結果は <code>Test run with 0 tests</code> です。エラーにはならず、テストを 1 つも実行しないまま成功します。テストを絞り込んだときは、件数を必ず確かめてください。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Test run with 6 tests in 2 suites passed</code> と、2 つの <code>➜ … skipped</code> の行が表示されることを確かめます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">withKnownIssue で既知の不具合を記録し、confirmation で呼び出し回数を確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>TodoStore.toggle</code> には不具合があります。項目を <code>title</code> で探すため、同じタイトルが 2 件あると、2 件目を指定しても 1 件目が切り替わります。
+            すぐには直さないけれど、忘れないように記録しておきたい不具合には、<code>withKnownIssue</code> を使います。
+          </p>
+          <p>
+            もう 1 つの題材として、コールバックが呼ばれる回数を確かめます。テストしやすくするために、アプリ側の <code>Models/TodoStore.swift</code> に、完了済みの項目を削除するメソッドを追加します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoStore.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  …</span><span class="diff-line">          items.remove(atOffsets: offsets)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+     // 完了済みの項目をすべて削除する。削除した項目ごとに onRemove を呼ぶ</span><span class="diff-line diff-line--add">+     func removeCompleted(onRemove: (TodoItem) -&gt; Void = { _ in }) {</span><span class="diff-line diff-line--add">+         let completed = items.filter(\.isDone)</span><span class="diff-line diff-line--add">+         items.removeAll(where: \.isDone)</span><span class="diff-line diff-line--add">+         completed.forEach(onRemove)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">      func move(from source: IndexSet, to destination: Int) {</span><span class="diff-line">          items.move(fromOffsets: source, toOffset: destination)</span><span class="diff-line">      }</span><span class="diff-line">  …</span></pre>
+</div>
+
+          <p><code>HandsonAppTests</code> フォルダに <code>KnownIssueAndConfirmationTests.swift</code> を追加します（<code>Targets</code> は <code>HandsonAppTests</code>）。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/KnownIssueAndConfirmationTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import Testing
+@testable import HandsonApp
+
+@MainActor
+@Suite("既知の問題と confirmation")
+struct KnownIssueAndConfirmationTests {
+
+    // TodoStore.toggle は title で項目を探すので、同じタイトルが 2 つあると先頭の項目が切り替わる。
+    // 直すまでの間、この失敗を「既知の問題」として記録する
+    @Test("同じタイトルの 2 件目を toggle できる")
+    func toggleSecondItemWithSameTitle() {
+        let store = TodoStore(items: [TodoItem(title: "A"), TodoItem(title: "A")])
+        withKnownIssue("toggle は title で探すため、同名の項目は先頭が切り替わる") {
+            store.toggle(store.items[1])
+            #expect(store.items[1].isDone)
+        }
+    }
+
+    @Test("完了済みの項目を 1 件削除すると、コールバックが 1 回呼ばれる")
+    func removeCompletedCallsBackOnce() async {
+        let store = TodoStore(items: [
+            TodoItem(title: "A"), TodoItem(title: "B", status: .done(.now)),
+        ])
+        await confirmation("onRemove が呼ばれる", expectedCount: 1) { removed in
+            store.removeCompleted { _ in removed() }
+        }
+        #expect(store.items.map(\.title) == ["A"])
+    }
+
+    @Test("完了済みが無ければ、コールバックは呼ばれない")
+    func removeCompletedNeverCallsBack() async {
+        let store = TodoStore(items: [TodoItem(title: "A")])
+        await confirmation("onRemove は呼ばれない", expectedCount: 0) { removed in
+            store.removeCompleted { _ in removed() }
+        }
+        #expect(store.items.count == 1)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>withKnownIssue("説明") { … }</code>: クロージャの中で起きた失敗を「既知の問題」として記録します。テスト自体は成功の扱いになります。</li>
+            <li><code>confirmation("説明", expectedCount: 1) { removed in … }</code>: クロージャの中で <code>removed()</code> が呼ばれた回数を数え、<code>expectedCount</code> と一致しなければ失敗にします。<code>expectedCount: 0</code> にすると、「呼ばれないこと」を確かめられます。<code>confirmation</code> は <code>async</code> の関数なので、<code>await</code> を付け、テストも <code>async</code> にします。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>import Foundation</code> を忘れると、<code>.now</code> が使えない</p>
+              <p><code>.done(.now)</code> を使うこのファイルで <code>import Foundation</code> を書き忘れると、次のエラーになります。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">error: static property 'now' is not available due to missing import of defining module 'Foundation' [#MemberImportVisibility]</span></pre>
+</div>
+              <p>
+                <code>Date.now</code> は Foundation のメンバーです。05 で <code>import SwiftUI</code> を忘れて <code>remove(atOffsets:)</code> が使えなかったのと同じで、このプロジェクトは <code>MemberImportVisibility</code> が有効です。使うメンバーを定義したモジュールを、ファイルごとに <code>import</code> します。
+              </p>
+            </div>
+          </div>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests/KnownIssueAndConfirmationTests test 2&gt;&amp;1 | grep -E "◇|✔|✘|➜|━|↳|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">◇ Test "同じタイトルの 2 件目を toggle できる" started.</span><span class="terminal__line">━ Test "同じタイトルの 2 件目を toggle できる" recorded a known issue at KnownIssueAndConfirmationTests.swift:16:13: Expectation failed: store.items[1].isDone</span><span class="terminal__line">↳ toggle は title で探すため、同名の項目は先頭が切り替わる</span><span class="terminal__line">↳ store.items[1].isDone → false</span><span class="terminal__line">↳   store.items[1] → TodoItem(id: FD24807E-…, title: "A", priority: HandsonApp.Priority.medium, status: HandsonApp.Status.todo)</span><span class="terminal__line">━ Test "同じタイトルの 2 件目を toggle できる" passed after 0.014 seconds with 1 known issue.</span><span class="terminal__line">✔ Test "完了済みの項目を 1 件削除すると、コールバックが 1 回呼ばれる" passed after 0.001 seconds.</span><span class="terminal__line">✔ Test "完了済みが無ければ、コールバックは呼ばれない" passed after 0.001 seconds.</span><span class="terminal__line">━ Suite "既知の問題と confirmation" passed after 0.015 seconds with 1 known issue.</span><span class="terminal__line">…</span></pre>
+</div>
+
+          <ul>
+            <li>既知の問題は、<code>✔</code> でも <code>✘</code> でもない <code>━</code> の記号で出ます。テストは <code>passed … with 1 known issue</code> と成功の扱いで、<code>↳</code> の最初の行に <code>withKnownIssue</code> に書いた説明が出ます。</li>
+            <li>スイートの行にも <code>━</code> が付き、既知の問題を含むことが分かります。</li>
+          </ul>
+
+          <p>
+            失敗するとどうなるかも見ておきます。執筆時は、一時的なテストファイルに 2 つのテストを書いて実行しました。1 つは「<code>expectedCount: 2</code> の <code>confirmation</code> で 1 回だけ呼ぶ」テスト、もう 1 つは「失敗しなくなった処理を <code>withKnownIssue</code> で包んだ」テストです。出力は次のとおりです（一時的なファイルは削除しました）。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">✘ Test wrongCount() recorded an issue at TmpFailTests.swift:9:27: Confirmation was confirmed 1 time, but expected to be confirmed 2 times</span><span class="terminal__line">↳ onRemove</span><span class="terminal__line">✘ Test knownIssueFixed() recorded an issue at TmpFailTests.swift:15:23: Known issue was not recorded</span><span class="terminal__line">↳ 直ったはず</span><span class="terminal__line">✘ Test run with 5 tests in 2 suites failed after 0.020 seconds with 3 issues (including 1 known issue).</span></pre>
+</div>
+
+          <ul>
+            <li><code>confirmation</code> は、呼ばれた回数と期待した回数を並べて失敗を記録します。</li>
+            <li><strong><code>withKnownIssue</code> の中が失敗しなくなると、<code>Known issue was not recorded</code> でテストが失敗します</strong>。不具合を直したら <code>withKnownIssue</code> を外す、という合図になります。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>既知の問題のテストに <code>━ … passed … with 1 known issue.</code> が表示されることを確かめます。<code>confirmation</code> の 2 つのテストには <code>✔</code> が付きます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">XCTest で UI テストを書き、起動引数でデータベースを切り替える</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            画面を実際に操作して確かめる UI テストを書きます。UI テストのターゲット（<code>HandsonAppUITests</code>）は、01 でプロジェクトを作ったときから XCTest で書かれています。この項目でも UI テストは XCTest で書きます。Apple のドキュメントでも、UI テストには引き続き XCTest を使うよう案内されています。
+            ユニットテスト（Swift Testing）と UI テスト（XCTest）は、同じプロジェクトで共存できます。同じテストターゲットにも両方を書けますが、1 つのテストの中で 2 つの API を混ぜては使いません。
+          </p>
+          <p>
+            UI テストでアプリを起動すると、08 の保存先（<code>default.store</code>）のデータがそのまま表示されます。テストごとに空の状態から始めるため、起動引数 <code>-uiTesting</code> が付いているときだけ、メモリ上のコンテナを使うようにします。<code>HandsonAppApp.swift</code> を次のように変更します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/HandsonAppApp.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  HandsonAppApp.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @main</span><span class="diff-line">  struct HandsonAppApp: App {</span><span class="diff-line diff-line--add">+     private let container: ModelContainer</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     init() {</span><span class="diff-line diff-line--add">+         // UI テストは起動引数 -uiTesting を付けて起動する。</span><span class="diff-line diff-line--add">+         // そのときはメモリ上だけのコンテナを使い、テストごとにまっさらな状態で始める</span><span class="diff-line diff-line--add">+         let isUITesting = ProcessInfo.processInfo.arguments.contains("-uiTesting")</span><span class="diff-line diff-line--add">+         let configuration = ModelConfiguration(isStoredInMemoryOnly: isUITesting)</span><span class="diff-line diff-line--add">+         do {</span><span class="diff-line diff-line--add">+             container = try ModelContainer(for: TodoRecord.self, configurations: configuration)</span><span class="diff-line diff-line--add">+         } catch {</span><span class="diff-line diff-line--add">+             fatalError("ModelContainer を作れませんでした: \(error)")</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">      var body: some Scene {</span><span class="diff-line">          WindowGroup {</span><span class="diff-line">              ContentView()</span><span class="diff-line">          }</span><span class="diff-line diff-line--remove">-         .modelContainer(for: TodoRecord.self)</span><span class="diff-line diff-line--add">+         .modelContainer(container)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>ProcessInfo.processInfo.arguments</code>: アプリの起動引数の配列です。UI テストから渡した <code>-uiTesting</code> がここに入ります。</li>
+            <li><code>ModelConfiguration(isStoredInMemoryOnly:)</code>: 08 のテストで使った、ファイルを作らない設定です。通常の起動では <code>false</code> になるので、これまでどおり <code>default.store</code> に保存します。</li>
+            <li><code>.modelContainer(for: TodoRecord.self)</code> の代わりに、作ったコンテナを <code>.modelContainer(container)</code> で渡します。</li>
+          </ul>
+
+          <p><code>HandsonAppUITests/HandsonAppUITests.swift</code> の中身を、次の内容に置き換えます（テンプレートの <code>testExample</code> は削除します）。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppUITests/HandsonAppUITests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">//
+//  HandsonAppUITests.swift
+//  HandsonAppUITests
+//
+
+import XCTest
+
+// UI テストは XCTest で書く（Apple は UI テストとパフォーマンステストには XCTest を使うよう案内している）
+final class HandsonAppUITests: XCTestCase {
+
+    @MainActor
+    private func launchApp() -&gt; XCUIApplication {
+        let app = XCUIApplication()
+        // アプリ側がこの引数を見て、メモリ上だけのデータベースに切り替える
+        app.launchArguments = ["-uiTesting"]
+        app.launch()
+        return app
+    }
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    @MainActor
+    func testAddedTaskAppearsInList() throws {
+        let app = launchApp()
+        XCTAssertTrue(app.staticTexts["ToDo はまだありません"].waitForExistence(timeout: 5))
+
+        let field = app.textFields["新しいタスク"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("牛乳を買う")
+        app.buttons["追加"].tap()
+
+        XCTAssertTrue(app.staticTexts["牛乳を買う"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["ToDo はまだありません"].exists)
+    }
+
+    @MainActor
+    func testToggleMarksTaskAsDone() throws {
+        let app = launchApp()
+
+        let field = app.textFields["新しいタスク"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("メールを返す")
+        app.buttons["追加"].tap()
+
+        let complete = app.buttons["完了にする"]
+        XCTAssertTrue(complete.waitForExistence(timeout: 5))
+        complete.tap()
+
+        XCTAssertTrue(app.buttons["未完了に戻す"].waitForExistence(timeout: 5))
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>app.launchArguments = ["-uiTesting"]</code>: 起動引数を付けてアプリを起動します。UI テストは<strong>別のプロセスのアプリを操作する</strong>ので、<code>@testable import HandsonApp</code> でアプリのコードを直接呼ぶことはできません。アプリの挙動を変えたいときは、このように起動引数で伝えます。</li>
+            <li>画面の部品は、表示されている文言で探します。<code>textFields["新しいタスク"]</code> はプレースホルダー、<code>buttons["追加"]</code> はボタンの文字です。アイコンだけのボタンは、05 から付けている <code>accessibilityLabel</code> の「完了にする」「未完了に戻す」で探せます。</li>
+            <li><code>waitForExistence(timeout: 5)</code>: 部品が現れるまで最大 5 秒待ちます。画面の更新を待たずに <code>exists</code> を調べると、表示前に判定してしまうことがあります。</li>
+            <li><code>testAddedTaskAppearsInList</code> の最初の確認（「ToDo はまだありません」）は、保存済みのデータが表示されていない、つまりメモリ上のコンテナで起動したことの確認も兼ねます。</li>
+          </ul>
+
+          <p>UI テストのターゲットだけを実行します。シミュレータでアプリが起動し、文字の入力とタップが自動で行われます。ビルドを含めて 1 分ほどかかります。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppUITests test 2&gt;&amp;1 | grep -E "Test Case|Executed|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">Test Case '-[HandsonAppUITests.HandsonAppUITests testAddedTaskAppearsInList]' passed (12.406 seconds).</span><span class="terminal__line">…</span><span class="terminal__line">Test Case '-[HandsonAppUITests.HandsonAppUITests testToggleMarksTaskAsDone]' passed (16.041 seconds).</span><span class="terminal__line">…</span><span class="terminal__line">	 Executed 2 tests, with 0 failures (0 unexpected) in 28.448 (28.451) seconds</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <p>XCTest の結果は、Swift Testing とは違う <code>Test Case '-[クラス名 メソッド名]' passed</code> の形式で出ます。そのため <code>grep</code> の条件も変えています。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Executed 2 tests, with 0 failures</code> と <code>** TEST SUCCEEDED **</code> が表示されることを確かめます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">カバレッジを計測し、完成状態を確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            テストがアプリのコードのどれだけを実行したか（コードカバレッジ）を計測します。<code>-enableCodeCoverage YES</code> を付けてユニットテストを実行し、結果を <code>xcrun xccov</code> で表示します。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -enableCodeCoverage YES -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "Test run with|\.xcresult|\*\* "</span><span class="terminal__line">━ Test run with 73 tests in 21 suites passed after 6.349 seconds with 1 known issue.</span><span class="terminal__line">	…/Logs/Test/Test-HandsonApp-2026.10.04_00-48-44-+0900.xcresult</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun xccov view --report --only-targets "$(ls -td $DD/Logs/Test/*.xcresult | head -1)"</span><span class="terminal__line">ID Name                     # Source Files Coverage</span><span class="terminal__line">-- ------------------------ -------------- ----------------</span><span class="terminal__line">0  HandsonApp.app           20             71.84% (518/721)</span><span class="terminal__line">1  HandsonAppTests.xctest   16             96.97% (640/660)</span><span class="terminal__line">2  HandsonAppUITests.xctest 1              0.00% (0/45)</span></pre>
+</div>
+
+          <ul>
+            <li>テストの結果は <code>.xcresult</code>（結果バンドル）に保存されます。<code>ls -td … | head -1</code> で、いちばん新しいものを渡しています。</li>
+            <li><code>--only-targets</code> はターゲットごとの合計です。アプリ本体（<code>HandsonApp.app</code>）は 71.84% でした。</li>
+            <li><code>HandsonAppTests.xctest</code> はテストコード自体の割合なので、指標にはしません。<code>HandsonAppUITests.xctest</code> の 0% も、UI テストのコードがこの実行では動いていないというだけの意味です。</li>
+          </ul>
+
+          <p><code>--only-targets</code> を外すと、ファイルごとの値が出ます（パスは <code>…/</code> で省略しています）。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun xccov view --report "$(ls -td $DD/Logs/Test/*.xcresult | head -1)"</span><span class="terminal__line">…</span><span class="terminal__line">HandsonApp.app                                     71.84% (518/721)</span><span class="terminal__line">    …/HandsonApp/Views/TodoRow.swift               0.00% (0/71)</span><span class="terminal__line">    …/HandsonApp/Models/TodoRecord.swift           100.00% (12/12)</span><span class="terminal__line">    …</span><span class="terminal__line">    …/HandsonApp/HandsonAppApp.swift               90.48% (19/21)</span><span class="terminal__line">    …/HandsonApp/Views/TodoSection.swift           73.21% (41/56)</span><span class="terminal__line">    …</span><span class="terminal__line">    …/HandsonApp/Models/TodoStore.swift            98.08% (51/52)</span><span class="terminal__line">    …</span><span class="terminal__line">    …/HandsonApp/Models/TodoItem.swift             96.88% (31/32)</span><span class="terminal__line">    …</span><span class="terminal__line">    …/HandsonApp/ContentView.swift                 85.48% (206/241)</span><span class="terminal__line">    …/HandsonApp/Views/ProfileHeader.swift         0.00% (0/50)</span><span class="terminal__line">    …/HandsonApp/Views/TodoDetailView.swift        0.00% (0/27)</span><span class="terminal__line">    …/HandsonApp/Models/TodoRepository.swift       100.00% (36/36)</span><span class="terminal__line">    …/HandsonApp/Models/TodoAPIClient.swift        96.55% (28/29)</span><span class="terminal__line">…</span></pre>
+</div>
+
+          <ul>
+            <li><strong>モデル（<code>Models/</code>）はほぼ 100%</strong> です。<code>TodoRecord</code>・<code>TodoCache</code>・<code>Validation</code>・<code>TodoRepository</code> などは 100%、<code>TodoStore</code>・<code>TodoItem</code>・<code>TodoAPIClient</code> も 96% 以上でした。</li>
+            <li><strong>View（<code>Views/</code>）は 0〜73%</strong> です。<code>TodoRow</code>・<code>ProfileHeader</code>・<code>TodoDetailView</code> は 0% でした。ユニットテストは View を描画しないので、画面の確認は UI テストの役割です。</li>
+            <li><code>ContentView</code> の 85% は、ユニットテストの実行でもアプリ（テストのホスト）が起動して画面が評価されるためと見られます（確かめていません）。UI テストを含めた実行のカバレッジは計測していません。</li>
+            <li>割合を上げること自体を目的にせず、テストが無いファイル（ここでは View）がどこかを知るために使います。</li>
+          </ul>
+
+          <p>完成状態のファイル構成は次のとおりです。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Text</span>
+  <span class="code-block__filename">HandsonApp/</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-plaintext">HandsonApp/
+  HandsonApp/
+    HandsonAppApp.swift                    # この項目で更新（-uiTesting でメモリ上のコンテナ）
+    Models/
+      TodoStore.swift                      # この項目で更新（removeCompleted(onRemove:)）
+      …                                    # ほかは 08 のまま
+    …
+  HandsonAppTests/
+    ExpectRequireTests.swift               # この項目で追加（2 テスト）
+    Tags.swift                             # この項目で追加（タグの宣言）
+    TraitsTests.swift                      # この項目で追加（6 テスト）
+    KnownIssueAndConfirmationTests.swift   # この項目で追加（3 テスト）
+    ProfileTests.swift                     # この項目で更新（@Suite・表示名）
+    TodoItemTests.swift                    # この項目で更新（入れ子のスイート、2 テスト追加）
+    TodoStoreTests.swift                   # この項目で更新（init で共通の準備）
+    ValidationTests.swift                  # この項目で更新（パラメータ化、1 テスト追加、タグ）
+    TodoAPIClientTests.swift               # この項目で更新（タグ）
+    TodoCacheTests.swift                   # この項目で更新（タグ・制限時間）
+    …                                      # ほかは 08 のまま（合計 73 テスト）
+  HandsonAppUITests/
+    HandsonAppUITests.swift                # この項目で更新（XCTest の UI テスト 2 つ）</code></pre>
+</div>
+
+          <p>ビルド、全てのユニットテスト、UI テストを実行してから、シミュレータを止めます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "◇|✔|✘|➜|━|↳|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">━ Test run with 73 tests in 21 suites passed after 6.339 seconds with 1 known issue.</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppUITests test 2&gt;&amp;1 | grep -E "Test Case|Executed|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">	 Executed 2 tests, with 0 failures (0 unexpected) in 23.657 (23.660) seconds</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+</div>
+
+          <p>Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> で、ユニットテストと UI テストの両方を実行します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              ユニットテストで <code>━ Test run with 73 tests in 21 suites passed … with 1 known issue.</code> が表示されることを確かめます。UI テストで <code>Executed 2 tests, with 0 failures</code> が表示されれば完成です。
+              既知の問題が 1 件あるので、全体の行の記号は <code>✔</code> ではなく <code>━</code> になります。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">08 のプロジェクトをコピーしてビルドと 59 テストが通ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>#expect</code> は失敗しても続行し、<code>#require</code> は中断することを、<code>↳</code> で値が展開される出力で確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>@Suite</code> と <code>@Test("表示名")</code> でテストを整理し、<code>init</code> がテストごとに実行されることを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>arguments:</code> でパラメータ化テストを書き、全組み合わせと <code>zip</code> の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">タグ・<code>.disabled</code>・<code>.enabled(if:)</code>・<code>.bug</code>・<code>.timeLimit</code>・<code>.serialized</code> を付け、<code>-only-testing</code> / <code>-skip-testing</code> で実行するテストを絞り込んだ</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>withKnownIssue</code> で既知の不具合を記録し、<code>confirmation</code> でコールバックの回数（0 回を含む）を確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">XCTest で UI テストを書き、起動引数 <code>-uiTesting</code> でメモリ上のコンテナに切り替えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>-enableCodeCoverage YES</code> と <code>xcrun xccov view --report</code> でカバレッジを計測し、73 テストと UI テストが通った後に <code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">テストの結果の行が 1 つも出ない</p>
+          <p><code>xcodebuild</code> に <code>-parallel-testing-enabled NO</code> を付けているかを確かめてください。付けないと、Swift Testing の <code>✔</code> の行が標準出力に出ません（ステップ 2）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Test run with 0 tests</code> で成功してしまう</p>
+          <p><code>-only-testing</code> でテスト関数を指定するときは、<code>'HandsonAppTests/ValidationTests/emptyNameThrows()'</code> のように括弧を付けます。スイートは表示名ではなく型名で指定します（ステップ 5）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>call to main actor-isolated … in a synchronous nonisolated context</code> が出る</p>
+          <p>アプリのコードを呼ぶテストの型に <code>@MainActor</code> が付いているかを確かめてください。テストターゲットの型は既定で nonisolated です（ステップ 5）。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>#expect</code> は失敗しても続行し、<code>#require</code> は中断することを、値が展開される失敗の出力で確かめました。<code>@Suite</code> と表示名でテストを整理し、テストごとに作られるインスタンスの <code>init</code> に共通の準備を書きました。
+        <code>arguments:</code> でパラメータ化テストを書き、トレイトでタグや実行の条件を付けました。<code>withKnownIssue</code> で既知の不具合を記録し、<code>confirmation</code> でコールバックの回数を確かめました。
+        UI テストは XCTest で書き、起動引数でメモリ上のコンテナに切り替えました。カバレッジを計測すると、モデルはほぼ網羅されていて、View はテストが少ないと分かりました。
+        次の項目では、WidgetKit と App Intents を使います。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li>Swift Testing のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/testing">Swift Testing</a> / <a href="https://developer.apple.com/documentation/testing/definingtests">Defining test functions</a> / <a href="https://developer.apple.com/documentation/testing/migratingfromxctest">Migrating a test from XCTest</a></li>
+            <li><a href="https://developer.apple.com/documentation/testing/expectations">Expectations and confirmations</a> / <a href="https://developer.apple.com/documentation/testing/known-issues">Known issues</a> / <a href="https://developer.apple.com/documentation/testing/testing-asynchronous-code">Testing asynchronous code</a></li>
+            <li><a href="https://developer.apple.com/documentation/testing/organizingtests">Organizing test functions with suite types</a> / <a href="https://developer.apple.com/documentation/testing/parameterizedtesting">Implementing parameterized tests</a></li>
+            <li><a href="https://developer.apple.com/documentation/testing/traits">Traits</a> / <a href="https://developer.apple.com/documentation/testing/addingtags">Adding tags to tests</a> / <a href="https://developer.apple.com/documentation/testing/enablinganddisabling">Enabling and disabling tests</a> / <a href="https://developer.apple.com/documentation/testing/associatingbugs">Associating bugs with tests</a> / <a href="https://developer.apple.com/documentation/testing/limitingexecutiontime">Limiting the running time of tests</a> / <a href="https://developer.apple.com/documentation/testing/parallelization">Running tests serially or in parallel</a></li>
+          </ul>
+        </li>
+        <li><a href="https://developer.apple.com/documentation/xctest">XCTest</a></li>
+        <li><a href="https://developer.apple.com/documentation/xcuiautomation/xcuiapplication">XCUIApplication</a>（XCUIAutomation）</li>
+        <li><a href="https://developer.apple.com/documentation/xcode/determining-how-much-code-your-tests-cover">Determining how much code your tests cover</a>（Xcode）</li>
+        <li><a href="https://developer.apple.com/documentation/xcode/organizing-tests-to-improve-feedback">Organizing tests to improve feedback</a>（Xcode）</li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/09-swift-testing</code> の <code>ios/09-swift-testing/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/09-swift-testing/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../08-swiftdata/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">08: SwiftData</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">10: WidgetKit と App Intents</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
