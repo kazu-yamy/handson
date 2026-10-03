@@ -1,0 +1,1460 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05: パッケージングと配布 | Tauri ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Tauri</li>
+          <li aria-current="page">05</li>
+        </ol>
+        <h1 class="lesson-title">パッケージングと配布</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: Tauri 04 を終えた人。<code>tauri build</code> で <code>.app</code> / <code>.dmg</code> を作ったことがある人</li>
+          <li class="lesson-meta__item">📋 前提: 04 と同じ開発環境（macOS）。ステップ 6 は GitHub のリポジトリがあると試せる</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../04-fs-dialog/index.html">04: ファイルシステム API の利用</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>bundle</code> の設定で、OS ごとに作る形式と中身を決める</li>
+          <li><code>[profile.release]</code> でリリースビルドを小さくする</li>
+          <li>Universal バイナリ、コード署名、公証の役割と手順を知る</li>
+          <li>updater プラグインと署名鍵で、自動アップデートの仕組みを組み込む</li>
+          <li>GitHub Actions と tauri-action で、各 OS 向けのビルドと Release を自動化する</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        04 までで、Todo を保存できるデスクトップアプリができました。この項目は Tauri トラックの最後です。ここでは、このアプリを他の人が使える形で配ります。
+        アプリを配るまでには、ビルドのほかにもいくつかの段階があります。
+      </p>
+
+      <h3 id="distribution-flow">配布までの流れ</h3>
+
+      <table>
+        <thead>
+        <tr><th>段階</th><th>やること</th><th>この項目のステップ</th></tr>
+        </thead>
+        <tbody>
+        <tr><td>ビルド</td><td>Rust とフロントエンドをリリース用にビルドする。サイズや対応するアーキテクチャもここで決まる</td><td>2（最適化）、3（Universal）</td></tr>
+        <tr><td>署名</td><td>OS が配布元を確かめられるように、アプリにコード署名を付ける。macOS では公証も受ける</td><td>4</td></tr>
+        <tr><td>パッケージ</td><td>OS ごとのインストーラーや配布形式（<code>.dmg</code>、<code>.msi</code> など）にまとめる</td><td>1</td></tr>
+        <tr><td>配布</td><td>成果物を利用者が取得できる場所に置く。この項目では GitHub Release を使う</td><td>6</td></tr>
+        <tr><td>更新</td><td>配ったアプリに新しいバージョンを届ける。更新ファイルは署名して改ざんを防ぐ</td><td>5</td></tr>
+        </tbody>
+      </table>
+
+
+      <h3 id="bundle-formats">OS ごとの成果物</h3>
+      <p><code>tauri build</code> が作る配布物は OS によって違います。<code>bundle.targets</code> に書く名前と合わせて示します。</p>
+
+      <table>
+        <thead>
+        <tr><th>OS</th><th>形式（<code>targets</code> の名前）</th><th>内容</th><th>この項目</th></tr>
+        </thead>
+        <tbody>
+        <tr><td>macOS</td><td><code>.app</code>（<code>app</code>）/ <code>.dmg</code>（<code>dmg</code>）</td><td>アプリ本体のバンドルと、それを入れたディスクイメージ</td><td>ビルドして確認</td></tr>
+        <tr><td>Windows</td><td><code>.msi</code>（<code>msi</code>、WiX）/ <code>.exe</code>（<code>nsis</code>、NSIS）</td><td>2 種類のインストーラー</td><td>設定のみ<strong>（未実行）</strong></td></tr>
+        <tr><td>Linux</td><td><code>.deb</code>（<code>deb</code>）/ <code>.AppImage</code>（<code>appimage</code>）/ <code>.rpm</code>（<code>rpm</code>）</td><td>Debian 系のパッケージ、単体で動く実行形式、Red Hat 系のパッケージ</td><td>設定のみ<strong>（未実行）</strong></td></tr>
+        </tbody>
+      </table>
+
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">執筆環境で実行していない手順</p>
+          <p>この教材は macOS（Apple Silicon）で執筆しています。次の手順は執筆環境では実行できなかったため、手順の紹介にとどめ、本文の該当箇所に「（未実行）」を付けています。</p>
+          <ul>
+            <li>Windows（NSIS / MSI）と Linux（deb / AppImage / rpm）のビルド</li>
+            <li>Universal バイナリのビルド（<code>x86_64-apple-darwin</code> の target が未インストール）</li>
+            <li>Developer ID による署名と公証（証明書が無い）</li>
+            <li>GitHub Actions の実行と、<code>latest.json</code> を配信して実際に更新させる流れ</li>
+          </ul>
+          <p>また、画面の操作を伴う確認のうち、執筆時に確かめられなかった箇所には「（未実行）」を付けています。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            使用するツールとライブラリのバージョンは 04 と同じです。Tauri 関連は Tauri CLI 2.11.5 / <code>tauri</code> クレート 2.11.6 / <code>@tauri-apps/api</code> 2.11.1 です。そのほかは Next.js 16.3.6 / rustc 1.98.1 / Node.js 24.21.0 / npm 11.19.0 などです。
+            このレッスンでは、次のプラグインを追加します。
+          </p>
+          <ul>
+            <li><code>tauri-plugin-updater</code> 2.12.0 / <code>@tauri-apps/plugin-updater</code> 2.12.0（<code>~2.12.0</code>）: 自動アップデート</li>
+            <li><code>tauri-plugin-process</code> 2.3.1 / <code>@tauri-apps/plugin-process</code> 2.3.1（<code>~2.3.1</code>）: 更新後の再起動</li>
+          </ul>
+          <p>ステップ 6 のワークフローの確認には actionlint 1.7.12 を使いました。バージョンは執筆時点（2026年10月）のものです。</p>
+        </div>
+      </div>
+
+      <h2 id="preparation">準備: 04 のプロジェクトを引き継ぐ</h2>
+      <p>
+        04 で作ったプロジェクトをそのまま出発点にします。本文ではプロジェクトのディレクトリ名を <code>05-packaging</code> として示します。
+        最初に、プロジェクト名に依存する値とバージョンを 05 用に直しておきます。配布物のファイル名やバンドル ID はこれらの値から作られるので、この項目では特に大事な作業です。
+      </p>
+
+      <table>
+        <thead>
+        <tr><th>ファイル</th><th>キー</th><th>04</th><th>05</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>package.json</code></td><td><code>name</code> / <code>version</code></td><td><code>04-fs-dialog</code> / <code>0.4.0</code></td><td><code>05-packaging</code> / <code>0.5.0</code></td></tr>
+        <tr><td><code>package-lock.json</code></td><td><code>name</code> / <code>version</code></td><td><code>04-fs-dialog</code> / <code>0.4.0</code></td><td><code>05-packaging</code> / <code>0.5.0</code>（<code>npm install</code> で更新）</td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>productName</code> / <code>version</code> / <code>identifier</code></td><td><code>handson-tauri-04</code> / <code>0.4.0</code> / <code>com.handson.tauri04</code></td><td><code>handson-tauri-05</code> / <code>0.5.0</code> / <code>com.handson.tauri05</code></td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>app.windows[0].title</code></td><td><code>handson-tauri-04</code></td><td><code>handson-tauri-05</code></td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>bundle.shortDescription</code> / <code>longDescription</code></td><td>04 の説明</td><td>05 の説明</td></tr>
+        <tr><td><code>src-tauri/Cargo.toml</code></td><td><code>[package]</code> の <code>name</code> / <code>version</code></td><td><code>handson-tauri-04</code> / <code>0.4.0</code></td><td><code>handson-tauri-05</code> / <code>0.5.0</code></td></tr>
+        <tr><td><code>src-tauri/Cargo.toml</code></td><td><code>[lib]</code> の <code>name</code></td><td><code>handson_tauri_04_lib</code></td><td><code>handson_tauri_05_lib</code></td></tr>
+        <tr><td><code>src-tauri/src/main.rs</code></td><td>呼び出すクレート</td><td><code>handson_tauri_04_lib::run()</code></td><td><code>handson_tauri_05_lib::run()</code></td></tr>
+        <tr><td><code>src/app/layout.tsx</code></td><td><code>metadata.title</code> / <code>metadata.description</code></td><td><code>handson-tauri-04</code> / 「Tauri トラック 04: ファイルシステム API の利用」</td><td><code>handson-tauri-05</code> / 「Tauri トラック 05: パッケージングと配布」</td></tr>
+        <tr><td><code>src/app/_components/TitleBar/TitleBar.tsx</code></td><td>表示する文字列</td><td><code>handson-tauri-04</code></td><td><code>handson-tauri-05</code></td></tr>
+        </tbody>
+      </table>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line diff-line--remove">-   "name": "04-fs-dialog",</span><span class="diff-line diff-line--remove">-   "version": "0.4.0",</span><span class="diff-line diff-line--add">+   "name": "05-packaging",</span><span class="diff-line diff-line--add">+   "version": "0.5.0",</span><span class="diff-line">    "private": true,</span><span class="diff-line">    "scripts": {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p><code>package-lock.json</code> にも <code>name</code> / <code>version</code> が記録されているので、<code>npm install</code> を実行して更新しておきます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",</span><span class="diff-line diff-line--remove">-   "productName": "handson-tauri-04",</span><span class="diff-line diff-line--remove">-   "version": "0.4.0",</span><span class="diff-line diff-line--remove">-   "identifier": "com.handson.tauri04",</span><span class="diff-line diff-line--add">+   "productName": "handson-tauri-05",</span><span class="diff-line diff-line--add">+   "version": "0.5.0",</span><span class="diff-line diff-line--add">+   "identifier": "com.handson.tauri05",</span><span class="diff-line">    "build": {</span><span class="diff-line">  ...</span><span class="diff-line">        {</span><span class="diff-line diff-line--remove">-         "title": "handson-tauri-04",</span><span class="diff-line diff-line--add">+         "title": "handson-tauri-05",</span><span class="diff-line">          "width": 800,</span><span class="diff-line">  ...</span><span class="diff-line">      "copyright": "© 2026 Handson Materials",</span><span class="diff-line diff-line--remove">-     "shortDescription": "Tauri ハンズオン 04: ファイルシステム API の利用",</span><span class="diff-line diff-line--remove">-     "longDescription": "Tauri トラックの 04 番目の教材で作成するサンプルアプリです。fs プラグインと dialog プラグインでファイルを読み書きし、Todo を保存・復元します。",</span><span class="diff-line diff-line--add">+     "shortDescription": "Tauri ハンズオン 05: パッケージングと配布",</span><span class="diff-line diff-line--add">+     "longDescription": "Tauri トラックの 05 番目の教材で作成するサンプルアプリです。bundle 設定・ビルド最適化・署名・自動アップデート・GitHub Actions による各 OS 向けのリリースを扱います。",</span><span class="diff-line">      "category": "DeveloperTool",</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "handson-tauri-04"</span><span class="diff-line diff-line--remove">- version = "0.4.0"</span><span class="diff-line diff-line--add">+ name = "handson-tauri-05"</span><span class="diff-line diff-line--add">+ version = "0.5.0"</span><span class="diff-line">  description = "A Tauri App"</span><span class="diff-line">  ...</span><span class="diff-line">  [lib]</span><span class="diff-line diff-line--remove">- name = "handson_tauri_04_lib"</span><span class="diff-line diff-line--add">+ name = "handson_tauri_05_lib"</span><span class="diff-line">  crate-type = ["staticlib", "cdylib", "rlib"]</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/main.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  fn main() {</span><span class="diff-line diff-line--remove">-     handson_tauri_04_lib::run();</span><span class="diff-line diff-line--add">+     handson_tauri_05_lib::run();</span><span class="diff-line">  }</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/layout.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  export const metadata: Metadata = {</span><span class="diff-line diff-line--remove">-   title: "handson-tauri-04",</span><span class="diff-line diff-line--remove">-   description: "Tauri トラック 04: ファイルシステム API の利用",</span><span class="diff-line diff-line--add">+   title: "handson-tauri-05",</span><span class="diff-line diff-line--add">+   description: "Tauri トラック 05: パッケージングと配布",</span><span class="diff-line">  };</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/_components/TitleBar/TitleBar.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">        &lt;span className={styles.label} data-tauri-drag-region&gt;</span><span class="diff-line diff-line--remove">-         handson-tauri-04</span><span class="diff-line diff-line--add">+         handson-tauri-05</span><span class="diff-line">        &lt;/span&gt;</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>Rust 側が壊れていないことを <code>cargo check</code> で確かめておきます。執筆時の環境では約 25 秒かかりました。ディレクトリを <code>mv</code> で改名した直後に失敗する場合は、04 と同じく <code>src-tauri</code> で <code>rm -rf target gen</code> を実行してからやり直します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo check</span><span class="terminal__line">（コンパイルの出力は省略。最後に Finished `dev` profile と表示されれば成功）</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span></pre>
+</div>
+
+
+      <h2 id="step-by-step">手順</h2>
+      <p><code>cargo</code> のコマンドは <code>src-tauri</code> で、<code>npm</code> のコマンドはプロジェクトのルートで実行します。<code>src-tauri/target</code> から始まるパスは、プロジェクトのルートから見たパスです（<code>cd src-tauri</code> と書いた箇所を除く）。</p>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">bundle の設定を整理する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>配布物の種類と中身は、<code>tauri.conf.json</code> の <code>bundle</code> で決めます。04 までは <code>"targets": "all"</code> のままでした。この項目では、作る形式を明示し、OS ごとの設定を <code>bundle.macOS</code> / <code>bundle.windows</code> / <code>bundle.linux</code> に分けて書きます。各キーの意味は、<code>node_modules/@tauri-apps/cli/config.schema.json</code> の <code>description</code> で確かめられます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    "bundle": {</span><span class="diff-line">      "active": true,</span><span class="diff-line diff-line--remove">-     "targets": "all",</span><span class="diff-line diff-line--add">+     "targets": [</span><span class="diff-line diff-line--add">+       "app",</span><span class="diff-line diff-line--add">+       "dmg",</span><span class="diff-line diff-line--add">+       "nsis",</span><span class="diff-line diff-line--add">+       "msi",</span><span class="diff-line diff-line--add">+       "deb",</span><span class="diff-line diff-line--add">+       "appimage",</span><span class="diff-line diff-line--add">+       "rpm"</span><span class="diff-line diff-line--add">+     ],</span><span class="diff-line">      "icon": [</span><span class="diff-line">        "icons/32x32.png",</span><span class="diff-line">  ...</span><span class="diff-line">      "longDescription": "Tauri トラックの 05 番目の教材で作成するサンプルアプリです。bundle 設定・ビルド最適化・署名・自動アップデート・GitHub Actions による各 OS 向けのリリースを扱います。",</span><span class="diff-line">      "category": "DeveloperTool",</span><span class="diff-line diff-line--add">+     "macOS": {</span><span class="diff-line diff-line--add">+       "minimumSystemVersion": "10.15",</span><span class="diff-line diff-line--add">+       "dmg": {</span><span class="diff-line diff-line--add">+         "windowSize": {</span><span class="diff-line diff-line--add">+           "width": 660,</span><span class="diff-line diff-line--add">+           "height": 400</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line diff-line--add">+         "appPosition": {</span><span class="diff-line diff-line--add">+           "x": 180,</span><span class="diff-line diff-line--add">+           "y": 170</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line diff-line--add">+         "applicationFolderPosition": {</span><span class="diff-line diff-line--add">+           "x": 480,</span><span class="diff-line diff-line--add">+           "y": 170</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+       }</span><span class="diff-line diff-line--add">+     },</span><span class="diff-line diff-line--add">+     "windows": {</span><span class="diff-line diff-line--add">+       "nsis": {</span><span class="diff-line diff-line--add">+         "installMode": "currentUser",</span><span class="diff-line diff-line--add">+         "languages": [</span><span class="diff-line diff-line--add">+           "Japanese",</span><span class="diff-line diff-line--add">+           "English"</span><span class="diff-line diff-line--add">+         ],</span><span class="diff-line diff-line--add">+         "displayLanguageSelector": false</span><span class="diff-line diff-line--add">+       },</span><span class="diff-line diff-line--add">+       "wix": {</span><span class="diff-line diff-line--add">+         "language": [</span><span class="diff-line diff-line--add">+           "ja-JP",</span><span class="diff-line diff-line--add">+           "en-US"</span><span class="diff-line diff-line--add">+         ]</span><span class="diff-line diff-line--add">+       }</span><span class="diff-line diff-line--add">+     },</span><span class="diff-line diff-line--add">+     "linux": {</span><span class="diff-line diff-line--add">+       "deb": {</span><span class="diff-line diff-line--add">+         "section": "utils",</span><span class="diff-line diff-line--add">+         "priority": "optional"</span><span class="diff-line diff-line--add">+       },</span><span class="diff-line diff-line--add">+       "appimage": {</span><span class="diff-line diff-line--add">+         "bundleMediaFramework": false</span><span class="diff-line diff-line--add">+       },</span><span class="diff-line diff-line--add">+       "rpm": {</span><span class="diff-line diff-line--add">+         "release": "1"</span><span class="diff-line diff-line--add">+       }</span><span class="diff-line diff-line--add">+     },</span><span class="diff-line">      "android": {</span><span class="diff-line">        "debugApplicationIdSuffix": ".debug"</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>追加した主なキーは次のとおりです。</p>
+
+      <table>
+        <thead>
+        <tr><th>キー</th><th>意味</th><th>この項目の値</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>bundle.targets</code></td><td>作る形式。<code>"all"</code>、1 つの文字列、配列のいずれかで書く。指定できるのは <code>app</code> / <code>dmg</code> / <code>nsis</code> / <code>msi</code> / <code>deb</code> / <code>appimage</code> / <code>rpm</code></td><td><code>["app", "dmg", "nsis", "msi", "deb", "appimage", "rpm"]</code></td></tr>
+        <tr><td><code>bundle.macOS.minimumSystemVersion</code></td><td>動作する macOS の最低バージョン。既定値は <code>10.13</code></td><td><code>10.15</code></td></tr>
+        <tr><td><code>bundle.macOS.dmg.windowSize</code> / <code>appPosition</code> / <code>applicationFolderPosition</code></td><td>DMG を開いたときのウィンドウの大きさと、アプリ・アプリケーションフォルダのアイコン位置（ピクセル）</td><td>既定値と同じ値を明示</td></tr>
+        <tr><td><code>bundle.windows.nsis.installMode</code></td><td><code>"currentUser"</code>（既定）は管理者権限なしで <code>%LOCALAPPDATA%</code> 配下に入る。<code>"perMachine"</code> は <code>Program Files</code> に入り、管理者権限を求める。<code>"both"</code> は利用者が選ぶ</td><td><code>"currentUser"</code></td></tr>
+        <tr><td><code>bundle.windows.nsis.languages</code> / <code>displayLanguageSelector</code></td><td>インストーラーの言語。選択画面を出さない（<code>false</code>）ときは OS の言語を使い、一覧にない言語なら先頭の言語を使う</td><td><code>["Japanese", "English"]</code> / <code>false</code></td></tr>
+        <tr><td><code>bundle.windows.wix.language</code></td><td>MSI の言語。配列にすると言語ごとに MSI を作る</td><td><code>["ja-JP", "en-US"]</code></td></tr>
+        <tr><td><code>bundle.linux.deb.section</code> / <code>priority</code></td><td>Debian パッケージのメタデータ</td><td><code>utils</code> / <code>optional</code></td></tr>
+        <tr><td><code>bundle.linux.appimage.bundleMediaFramework</code></td><td>GStreamer を同梱するか。同梱すると 15〜35 MB 増える</td><td><code>false</code></td></tr>
+        <tr><td><code>bundle.linux.rpm.release</code></td><td>RPM の release タグ</td><td><code>"1"</code></td></tr>
+        </tbody>
+      </table>
+
+      <p><code>minimumSystemVersion</code> を変えると、アプリを入れられる Mac の範囲が変わります。実際に配布するときは、サポートしたい OS のバージョンに合わせて決めます。Windows と Linux の設定は、それぞれの OS でビルドしたときに使われます。執筆環境は macOS なので、この 2 つの設定でのビルドは<strong>（未実行）</strong>です（ステップ 6 の GitHub Actions で各 OS のビルドを行う構成にします）。</p>
+      <p>リリースビルドを作ります。かかった時間も見るため <code>time</code> を付けます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> time npm run tauri build</span><span class="terminal__line">（Next.js のビルドと依存クレートのコンパイルは省略）</span><span class="terminal__line">    Finished `release` profile [optimized] target(s) in 53.75s</span><span class="terminal__line">       Built application at: /path/to/05-packaging/src-tauri/target/release/handson-tauri-05</span><span class="terminal__line">    Bundling handson-tauri-05.app (/path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app)</span><span class="terminal__line">    Bundling handson-tauri-05_0.5.0_aarch64.dmg (/path/to/05-packaging/src-tauri/target/release/bundle/dmg/handson-tauri-05_0.5.0_aarch64.dmg)</span><span class="terminal__line">     Running bundle_dmg.sh</span><span class="terminal__line">    Finished 2 bundles at:</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/dmg/handson-tauri-05_0.5.0_aarch64.dmg</span><span class="terminal__line"></span><span class="terminal__line">npm run tauri build  315.77s user 23.02s system 408% cpu 1:22.84 total</span></pre>
+</div>
+
+      <p>最後の行は <code>time</code> の出力です。<code>315.77s user</code> は複数のコアで並列にコンパイルした時間の合計で、実際の待ち時間は <code>1:22.84</code>（1 分 22 秒）です。生成物の大きさを確認します。この値をステップ 2 の比較の基準にします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> du -sh target/release/bundle/macos/handson-tauri-05.app target/release/bundle/dmg/*.dmg</span><span class="terminal__line">11M     target/release/bundle/macos/handson-tauri-05.app</span><span class="terminal__line">3.1M    target/release/bundle/dmg/handson-tauri-05_0.5.0_aarch64.dmg</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -l target/release/handson-tauri-05</span><span class="terminal__line">-rwxr-xr-x@ 1 you  staff  11593584 10月  3 14:13 target/release/handson-tauri-05</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span></pre>
+</div>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">配列に他の OS の形式を書いたとき</p>
+              <p>この教材では <code>targets</code> に 7 つの形式をすべて並べています。macOS でビルドすると作られるのは <code>.app</code> と <code>.dmg</code> だけで、ほかの形式は警告なしで無視されます。CI で全 OS 向けに作るには全形式を列挙しておき、各 OS のジョブが自分の OS で作れる形式を作ります（ステップ 6）。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>出力の <code>Finished 2 bundles at:</code> の下に <code>.app</code> と <code>.dmg</code> の 2 つが並び、<code>bundle/macos/</code> と <code>bundle/dmg/</code> にファイルができていることを確認します。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">リリースビルドを最適化する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>既定のリリースビルドは、実行速度を優先した設定です。配布するデスクトップアプリでは、ダウンロードの大きさも気になります。<code>Cargo.toml</code> に <code>[profile.release]</code> を追加して、サイズを小さくします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  [dev-dependencies]</span><span class="diff-line">  tauri = { version = "2.11.6", features = ["test"] }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ [profile.release]</span><span class="diff-line diff-line--add">+ codegen-units = 1</span><span class="diff-line diff-line--add">+ lto = true</span><span class="diff-line diff-line--add">+ opt-level = "s"</span><span class="diff-line diff-line--add">+ panic = "abort"</span><span class="diff-line diff-line--add">+ strip = true</span></pre>
+</div>
+
+
+      <table>
+        <thead>
+        <tr><th>キー</th><th>意味</th><th>注意</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>codegen-units = 1</code></td><td>クレートを 1 つの単位でコード生成する。並列化をやめる代わりに、クレート全体を見た最適化が効く</td><td>コンパイルの並列度が下がる</td></tr>
+        <tr><td><code>lto = true</code></td><td>リンク時最適化（Link Time Optimization）。依存クレートをまたいで使われないコードを削り、インライン化する</td><td>リンクに時間がかかる</td></tr>
+        <tr><td><code>opt-level = "s"</code></td><td>サイズを優先した最適化。既定のリリースビルドは <code>3</code>（速度優先）</td><td>処理が重いアプリでは <code>3</code> と比べて選ぶ</td></tr>
+        <tr><td><code>strip = true</code></td><td>実行ファイルからシンボル情報を取り除く</td><td>パニック時のバックトレースに関数名が出なくなる</td></tr>
+        <tr><td><code>panic = "abort"</code></td><td>パニックしたら巻き戻し（unwind）をせずに即座に終了する。巻き戻し用のコードが要らなくなる</td><td><code>catch_unwind</code> でパニックを捕まえる処理が効かなくなる</td></tr>
+        </tbody>
+      </table>
+
+      <p>このプロジェクトが <code>catch_unwind</code> を使っていないことを確かめておきます。何も表示されなければ、<code>panic = "abort"</code> にしても影響はありません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rn catch_unwind src-tauri/src</span></pre>
+</div>
+
+      <p>バイナリだけを作る <code>--no-bundle</code> を付けてビルドし、大きさを比べます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> time npm run tauri build -- --no-bundle</span><span class="terminal__line">（中略）</span><span class="terminal__line">    Finished `release` profile [optimized] target(s) in 1m 15s</span><span class="terminal__line">       Built application at: /path/to/05-packaging/src-tauri/target/release/handson-tauri-05</span><span class="terminal__line">npm run tauri build -- --no-bundle  211.89s user 20.13s system 293% cpu 1:19.00 total</span></pre>
+</div>
+
+      <p>執筆時には、<code>opt-level</code> だけを <code>3</code> に変えた案も同じ手順で作って比べました。</p>
+
+      <table>
+        <thead>
+        <tr><th>案</th><th><code>opt-level</code></th><th>実行ファイル（バイト）</th><th>ビルド時間（<code>time</code> の total）</th></tr>
+        </thead>
+        <tbody>
+        <tr><td>基準（ステップ 1、既定の release）</td><td>既定（<code>3</code>）</td><td>11,593,584（約 11 MB）</td><td>1:22.84（バンドル込み）</td></tr>
+        <tr><td>A: LTO + <code>codegen-units = 1</code> + strip + abort</td><td><code>"s"</code></td><td>3,667,280（約 3.5 MB）</td><td>1:19.00（<code>--no-bundle</code>）</td></tr>
+        <tr><td>B: A の <code>opt-level</code> だけ <code>3</code></td><td><code>3</code></td><td>4,574,896（約 4.4 MB）</td><td>1:29.68（<code>--no-bundle</code>）</td></tr>
+        </tbody>
+      </table>
+
+      <p>同じ LTO の設定では <code>"s"</code> のほうが約 20% 小さく、ビルド時間はほぼ同じでした。この項目では A（<code>opt-level = "s"</code>）を採用します。UI が中心のデスクトップアプリでは、CPU の負荷より配布サイズを優先すると考えたためです。重い計算をするアプリでは <code>3</code> を選びます。基準の時間はバンドル込み、A と B は <code>--no-bundle</code> なので、時間の列は目安として見てください。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">最終的な大きさ</p>
+              <p>A と B は、ステップ 5 で updater / process プラグインを追加する前のバイナリです。この項目を終えた時点の実行ファイルは 4,965,024 バイトで、A との差の約 1.3 MB は 2 つのプラグインの分と考えられます（プラグインの追加前後だけを比べる計測はしていません）。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>ls -l src-tauri/target/release/handson-tauri-05</code> で実行ファイルの大きさを見ます。ステップ 1 の 11,593,584 バイトより小さければ完了です。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">Universal バイナリを作る（macOS）</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Apple Silicon の Mac でビルドした <code>.app</code> は arm64 専用です（ステップ 1 の <code>.dmg</code> の名前にも <code>aarch64</code> が入っています）。Intel の Mac にも配るには、arm64 と x86_64 の両方を 1 つにまとめた Universal バイナリを作ります。それには、Rust の 2 つの target（<code>aarch64-apple-darwin</code> と <code>x86_64-apple-darwin</code>）が必要です。入っている target を確かめます（出力は抜粋）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rustup target list --installed</span><span class="terminal__line">aarch64-apple-darwin</span><span class="terminal__line">aarch64-apple-ios</span><span class="terminal__line">aarch64-apple-ios-sim</span><span class="terminal__line">aarch64-linux-android</span><span class="terminal__line">armv7-linux-androideabi</span><span class="terminal__line">i686-linux-android</span><span class="terminal__line">wasm32-unknown-unknown</span><span class="terminal__line">x86_64-apple-ios</span><span class="terminal__line">x86_64-linux-android</span></pre>
+</div>
+
+      <p>執筆環境には <code>x86_64-apple-darwin</code> が入っていませんでした。執筆時はツールを追加でインストールしない方針にしたため、ここから先の手順は<strong>（未実行）</strong>です。手順は次のとおりです。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rustup target add x86_64-apple-darwin</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri build -- --target universal-apple-darwin</span><span class="terminal__line"><span class="terminal__prompt">$</span> lipo -archs src-tauri/target/universal-apple-darwin/release/bundle/macos/handson-tauri-05.app/Contents/MacOS/handson-tauri-05</span></pre>
+</div>
+
+      <p><code>lipo -archs</code> は、実行ファイルに含まれるアーキテクチャを表示するコマンドです。Universal バイナリになっていれば、出力には <code>x86_64</code> と <code>arm64</code> の 2 つが表示されます。表示の順番は環境によって異なるため、ここでは並び順を示しません<strong>（未実行）</strong>。成果物は <code>target/release/</code> ではなく <code>target/universal-apple-darwin/release/</code> の下にできます。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">クロスコンパイルは OS をまたげない</p>
+              <p>Universal バイナリは、同じ Mac に 2 つの target を入れれば作れます。一方、macOS から Windows 向けや Linux 向けをビルドするようなクロスコンパイルは、一般には行えません。Windows 向けは Windows で、Linux 向けは Linux でビルドします。ステップ 6 では、GitHub Actions の matrix で OS ごとにビルドを分けます。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>rustup target list --installed</code> の結果に、<code>aarch64-apple-darwin</code> と <code>x86_64-apple-darwin</code> の両方があるかを確認します。両方そろえば Universal ビルドができます。執筆時は<strong>（未実行）</strong>。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">コード署名と公証（macOS）</h3>
+        </div>
+        <div class="step__body">
+
+          <p>macOS では、配布するアプリにコード署名を付け、Apple の公証（notarization）を受けるのが基本です。署名の無いアプリや、Apple 発行の証明書で署名していないアプリは、Gatekeeper（macOS の実行前チェック）に止められます。まず証明書が無くてもできる ad-hoc 署名でビルドし、Gatekeeper の判定を確かめます。</p>
+      <p><code>bundle.macOS.signingIdentity</code> に <code>"-"</code> を指定すると、ad-hoc 署名になります。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      "category": "DeveloperTool",</span><span class="diff-line">      "macOS": {</span><span class="diff-line diff-line--add">+       "signingIdentity": "-",</span><span class="diff-line">        "minimumSystemVersion": "10.15",</span><span class="diff-line">        "dmg": {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> time npm run tauri build</span><span class="terminal__line">（中略）</span><span class="terminal__line">    Finished `release` profile [optimized] target(s) in 44.62s</span><span class="terminal__line">       Built application at: /path/to/05-packaging/src-tauri/target/release/handson-tauri-05</span><span class="terminal__line">    Bundling handson-tauri-05.app (/path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app)</span><span class="terminal__line">     Signing with identity "-"</span><span class="terminal__line">Signing with identity "-"</span><span class="terminal__line">Signing /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app/Contents/MacOS/handson-tauri-05</span><span class="terminal__line">/path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app/Contents/MacOS/handson-tauri-05: replacing existing signature</span><span class="terminal__line">Signing with identity "-"</span><span class="terminal__line">Signing /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app</span><span class="terminal__line">/path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app: replacing existing signature</span><span class="terminal__line">        Warn skipping app notarization, no APPLE_ID &amp; APPLE_PASSWORD &amp; APPLE_TEAM_ID or APPLE_API_KEY &amp; APPLE_API_ISSUER &amp; APPLE_API_KEY_PATH environment variables found</span><span class="terminal__line">    Bundling handson-tauri-05_0.5.0_aarch64.dmg (/path/to/05-packaging/src-tauri/target/release/bundle/dmg/handson-tauri-05_0.5.0_aarch64.dmg)</span><span class="terminal__line">     Running bundle_dmg.sh</span><span class="terminal__line">    Finished 2 bundles at:</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/dmg/handson-tauri-05_0.5.0_aarch64.dmg</span><span class="terminal__line"></span><span class="terminal__line">npm run tauri build  47.29s user 2.80s system 72% cpu 1:09.00 total</span></pre>
+</div>
+
+      <p><code>Signing with identity "-"</code> で ad-hoc 署名されています。公証は、必要な環境変数が無いため <code>Warn skipping app notarization</code> で飛ばされました。署名の中身を <code>codesign</code> で見ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> codesign -dv --verbose=2 src-tauri/target/release/bundle/macos/handson-tauri-05.app</span><span class="terminal__line">Executable=/path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app/Contents/MacOS/handson-tauri-05</span><span class="terminal__line">Identifier=com.handson.tauri05</span><span class="terminal__line">Format=app bundle with Mach-O thin (arm64)</span><span class="terminal__line">CodeDirectory v=20500 size=7348 flags=0x10002(adhoc,runtime) hashes=223+3 location=embedded</span><span class="terminal__line">Signature=adhoc</span><span class="terminal__line">Info.plist entries=16</span><span class="terminal__line">TeamIdentifier=not set</span><span class="terminal__line">Runtime Version=27.0.0</span><span class="terminal__line">Sealed Resources version=2 rules=13 files=1</span><span class="terminal__line">Internal requirements count=0 size=12</span></pre>
+</div>
+
+      <p><code>Signature=adhoc</code> は、Apple 発行の証明書ではなく ad-hoc で署名されていることを示します。<code>flags=0x10002(adhoc,runtime)</code> の <code>runtime</code> は、Hardened Runtime が有効なことを示します。<code>bundle.macOS.hardenedRuntime</code> の既定値が <code>true</code> だからです。<code>TeamIdentifier=not set</code> は、署名に開発者のチーム ID が入っていないことを表します。</p>
+      <p>続いて、Gatekeeper がこのアプリをどう判定するかを <code>spctl</code> で確かめます。比較のため、システムの計算機アプリも判定します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> spctl --assess --type execute --verbose=4 src-tauri/target/release/bundle/macos/handson-tauri-05.app</span><span class="terminal__line">src-tauri/target/release/bundle/macos/handson-tauri-05.app: rejected</span><span class="terminal__line"><span class="terminal__prompt">$</span> spctl --assess --type open --context context:primary-signature --verbose=4 src-tauri/target/release/bundle/dmg/handson-tauri-05_0.5.0_aarch64.dmg</span><span class="terminal__line">src-tauri/target/release/bundle/dmg/handson-tauri-05_0.5.0_aarch64.dmg: rejected</span><span class="terminal__line">source=no usable signature</span><span class="terminal__line"><span class="terminal__prompt">$</span> spctl --assess --type execute --verbose=4 /System/Applications/Calculator.app</span><span class="terminal__line">/System/Applications/Calculator.app: accepted</span><span class="terminal__line">source=Apple System</span><span class="terminal__line"><span class="terminal__prompt">$</span> spctl --status</span><span class="terminal__line">assessments enabled</span></pre>
+</div>
+
+      <p><code>.app</code> も <code>.dmg</code> も <code>rejected</code>（終了コード 3）で、計算機アプリは <code>accepted</code>（終了コード 0）でした。執筆時には、署名を外したコピーでも <code>rejected</code> / <code>source=no usable signature</code> になることを確かめています。つまり ad-hoc 署名は、Gatekeeper から見ると「使える署名が無い」のと同じ扱いです。</p>
+      <p>このため、ad-hoc 署名のアプリをインターネット経由で配ると、受け取った人の Mac では初回の起動時に止められます。利用者は「システム設定 → プライバシーとセキュリティ」から個別に許可する必要があります。この許可の画面は、環境によって表示される場合があります。</p>
+      <h4>Developer ID による署名と公証<strong>（未実行）</strong></h4>
+      <p>他の人に配るアプリは、Apple Developer Program（有料）で発行される Developer ID Application の証明書で署名し、公証を受けます。執筆環境には証明書が無いため、以下は手順の紹介です。Tauri CLI は、次の環境変数を読み取ります（変数名は CLI に含まれる文字列で確認しました）。</p>
+
+      <table>
+        <thead>
+        <tr><th>環境変数</th><th>用途</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>APPLE_SIGNING_IDENTITY</code></td><td>署名に使う ID。<code>bundle.macOS.signingIdentity</code> と同じ意味（例: <code>Developer ID Application: Name (TEAMID)</code>）</td></tr>
+        <tr><td><code>APPLE_CERTIFICATE</code> / <code>APPLE_CERTIFICATE_PASSWORD</code></td><td>CI で証明書（<code>.p12</code>）を base64 にして渡し、キーチェーンに取り込むため</td></tr>
+        <tr><td><code>APPLE_ID</code> / <code>APPLE_PASSWORD</code> / <code>APPLE_TEAM_ID</code></td><td>公証の認証。<code>APPLE_PASSWORD</code> は Apple ID のパスワードではなく、App 用パスワード</td></tr>
+        <tr><td><code>APPLE_API_KEY</code> / <code>APPLE_API_ISSUER</code> / <code>APPLE_API_KEY_PATH</code></td><td>App Store Connect の API キーによる公証（Apple ID とパスワードの代わり）。CLI に同梱の CHANGELOG では、CI ではこちらでの認証を勧めている</td></tr>
+        </tbody>
+      </table>
+
+      <p>キーチェーンに Developer ID Application の証明書がある場合の流れは次のとおりです。<code>signingIdentity</code> を <code>"Developer ID Application: &lt;名前&gt; (&lt;TEAMID&gt;)"</code> に変え、公証の認証情報を環境変数で渡してビルドします。公証はビルドの途中で行われます（上の <code>Warn skipping app notarization</code> が出た段階です）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export APPLE_ID="you@example.com"</span><span class="terminal__line"><span class="terminal__prompt">$</span> export APPLE_PASSWORD="xxxx-xxxx-xxxx-xxxx"</span><span class="terminal__line"><span class="terminal__prompt">$</span> export APPLE_TEAM_ID="ABCDE12345"</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri build</span><span class="terminal__line"><span class="terminal__prompt">$</span> spctl --assess --type execute --verbose=4 src-tauri/target/release/bundle/macos/handson-tauri-05.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun stapler validate src-tauri/target/release/bundle/macos/handson-tauri-05.app</span></pre>
+</div>
+
+      <p>公証まで通れば、<code>spctl</code> の結果は <code>accepted</code> / <code>source=Notarized Developer ID</code> になります<strong>（未実行）</strong>。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">公証には Developer ID の証明書が要る</p>
+              <p>ad-hoc 署名（<code>"-"</code>）のアプリは公証を受けられません。公証には、Apple Developer Program で発行される Developer ID Application の証明書での署名が必要です。証明書が無いうちは、ad-hoc 署名で自分の Mac で動かすところまでにとどめます。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>codesign -dv</code> の出力に <code>Signature=adhoc</code> があり、<code>spctl --assess</code> が <code>rejected</code> を返すことを確認します。ad-hoc 署名では Gatekeeper を通らないことが分かれば、このステップは完了です。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">自動アップデートを組み込む</h3>
+        </div>
+        <div class="step__body">
+
+          <p>配布したアプリを新しいバージョンに更新できるように、updater プラグインを入れます。updater は、決めておいた URL（エンドポイント）から <code>latest.json</code> を取得し、今より新しいバージョンがあれば更新ファイルをダウンロードして入れ替えます。更新ファイルは秘密鍵で署名し、アプリに埋め込んだ公開鍵で検証します。更新後の再起動には process プラグインを使います。</p>
+      <h4>プラグインを追加する</h4>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri add updater</span><span class="terminal__line">        Info Installing Cargo dependency "tauri-plugin-updater"...</span><span class="terminal__line">        Info Installing NPM dependency "@tauri-apps/plugin-updater@&gt;=2"...</span><span class="terminal__line">        Info Capability matching platforms ["macOS", "windows", "linux"] not found, creating /path/to/05-packaging/src-tauri/capabilities/desktop.json</span><span class="terminal__line">       Added permission `updater:default` to `desktop-capability` at /path/to/05-packaging/src-tauri/capabilities/desktop.json</span><span class="terminal__line">        Info Enabled `plugins &gt; updater &gt; requireSignedVersion` in /path/to/05-packaging/src-tauri/tauri.conf.json</span><span class="terminal__line">        Info Remember to set `plugins &gt; updater &gt; pubkey` and `endpoints`.</span><span class="terminal__line">        Info Adding plugin to /path/to/05-packaging/src-tauri/src/lib.rs</span><span class="terminal__line">        Info Running `cargo fmt`...</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri add process</span><span class="terminal__line">        Info Installing Cargo dependency "tauri-plugin-process"...</span><span class="terminal__line">        Info Installing NPM dependency "@tauri-apps/plugin-process@&gt;=2"...</span><span class="terminal__line">        Info Adding plugin to /path/to/05-packaging/src-tauri/src/lib.rs</span><span class="terminal__line">        Info Running `cargo fmt`...</span></pre>
+</div>
+
+      <p>updater の追加で、デスクトップ用の capability ファイル <code>capabilities/desktop.json</code> が新しく作られ、<code>updater:default</code> が入りました。<code>tauri.conf.json</code> には <code>plugins.updater.requireSignedVersion</code> が追加されます。一方、process の権限は自動では入りません。<code>desktop.json</code> に再起動の権限 <code>process:allow-restart</code> を手で足します。<code>process:default</code> にすると、アプリの終了（<code>exit</code>）まで許可されるので、必要な権限だけにしています。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">JSON</span>
+    <span class="code-block__filename">src-tauri/capabilities/desktop.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-json">{
+  "identifier": "desktop-capability",
+  "platforms": [
+    "macOS",
+    "windows",
+    "linux"
+  ],
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "updater:default",
+    "process:allow-restart"
+  ]
+}</code></pre>
+</div>
+
+      <p><code>tauri add</code> は、Rust 側にも依存とプラグインの登録を追加しています。updater は、デスクトップでだけ使う依存として追加されました。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  tauri-plugin-fs = "2"</span><span class="diff-line">  tauri-plugin-dialog = "2"</span><span class="diff-line diff-line--add">+ tauri-plugin-process = "2"</span><span class="diff-line"> </span><span class="diff-line">  [dev-dependencies]</span><span class="diff-line">  ...</span><span class="diff-line">  panic = "abort"</span><span class="diff-line">  strip = true</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]</span><span class="diff-line diff-line--add">+ tauri-plugin-updater = "2"</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  pub fn run() {</span><span class="diff-line">      tauri::Builder::default()</span><span class="diff-line diff-line--add">+         .plugin(tauri_plugin_process::init())</span><span class="diff-line diff-line--add">+         .plugin(tauri_plugin_updater::Builder::new().build())</span><span class="diff-line">          .plugin(tauri_plugin_dialog::init())</span><span class="diff-line">          .plugin(tauri_plugin_fs::init())</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <h4>npm と crate のバージョンをそろえる</h4>
+      <p>この状態でビルドすると、次のエラーで止まりました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">Error Found version mismatched Tauri packages. Make sure the NPM package and Rust crate versions are on the same major/minor releases:</span><span class="terminal__line">tauri-plugin-updater (v2.12.0) : @tauri-apps/plugin-updater (v2.13.1)</span><span class="terminal__line">tauri-plugin-process (v2.3.1) : @tauri-apps/plugin-process (v2.4.0)</span></pre>
+</div>
+
+      <p>04 と同じ原因です。<code>tauri add</code> は npm 側を <code>@&gt;=2</code> で入れるので、npm には新しいマイナーバージョンが入ります。Rust 側は 2.12.0 / 2.3.1 に解決されているので、npm 側を同じマイナーバージョンに <code>~</code> で固定します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm install @tauri-apps/plugin-updater@~2.12.0 @tauri-apps/plugin-process@~2.3.1</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      "@tauri-apps/plugin-dialog": "~2.7.3",</span><span class="diff-line">      "@tauri-apps/plugin-fs": "~2.5.2",</span><span class="diff-line diff-line--add">+     "@tauri-apps/plugin-process": "~2.3.1",</span><span class="diff-line diff-line--add">+     "@tauri-apps/plugin-updater": "~2.12.0",</span><span class="diff-line">      "next": "16.3.6",</span><span class="diff-line">      "react": "19.2.8",</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p><code>npm install</code> の実行時に <code>npm audit</code> の警告が出る場合もあります。ビルドには影響しないので、この教材では扱いません。</p>
+      <h4>署名鍵を作る</h4>
+      <p>更新ファイルに署名する鍵の組を <code>tauri signer generate</code> で作ります。秘密鍵はリポジトリの外（<code>~/.tauri/</code>）に置きます。ここでは <code>-p ""</code> でパスワードを空にしています。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri signer generate -- -w ~/.tauri/handson-tauri-05.key --ci -p ""</span><span class="terminal__line">Your keypair was generated successfully:</span><span class="terminal__line">Private: /Users/you/.tauri/handson-tauri-05.key (Keep it secret!)</span><span class="terminal__line">Public: /Users/you/.tauri/handson-tauri-05.key.pub</span><span class="terminal__line">---------------------------</span><span class="terminal__line"></span><span class="terminal__line">Environment variables used to sign:</span><span class="terminal__line">- `TAURI_SIGNING_PRIVATE_KEY`: String of your private key</span><span class="terminal__line">- `TAURI_SIGNING_PRIVATE_KEY_PATH`: Path to your private key file</span><span class="terminal__line">- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`:  Your private key password (optional if key has no password)</span><span class="terminal__line"></span><span class="terminal__line">ATTENTION: If you lose your private key OR password, you'll not be able to sign your update package and updates will not work</span></pre>
+</div>
+
+
+          <div class="callout callout--danger">
+            <span class="callout__icon" aria-hidden="true">🚫</span>
+            <div class="callout__body">
+              <p class="callout__title">秘密鍵を失うと更新を配れない</p>
+              <p>アプリには公開鍵が埋め込まれるので、秘密鍵を失ったりパスワードを忘れたりすると、すでに配ったアプリに更新を届けられなくなります（出力の <code>ATTENTION</code> の行）。<code>~/.tauri/</code> の鍵は安全な場所にバックアップしてください。秘密鍵はリポジトリにコミットしません。CI では、鍵の中身を GitHub の Secrets に登録して渡します（ステップ 6）。</p>
+            </div>
+          </div>
+
+      <h4>公開鍵とエンドポイントを設定する</h4>
+<p><code>tauri add updater</code> の時点で <code>plugins.updater.requireSignedVersion</code> は入っています。そこで、設定の差分は 2 つに分けて示します。最初は <code>bundle</code> に更新用のアーカイブを作る指定を足す差分です。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      "android": {</span><span class="diff-line">        "debugApplicationIdSuffix": ".debug"</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--add">+     },</span><span class="diff-line diff-line--add">+     "createUpdaterArtifacts": true</span><span class="diff-line">    },</span><span class="diff-line">    "plugins": {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>次に、既存の <code>plugins.updater</code> に公開鍵とエンドポイントを足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    "plugins": {</span><span class="diff-line">      "updater": {</span><span class="diff-line diff-line--add">+       "pubkey": "&lt;~/.tauri/handson-tauri-05.key.pub の中身&gt;",</span><span class="diff-line diff-line--add">+       "endpoints": [</span><span class="diff-line diff-line--add">+         "https://github.com/&lt;owner&gt;/&lt;repo&gt;/releases/latest/download/latest.json"</span><span class="diff-line diff-line--add">+       ],</span><span class="diff-line">        "requireSignedVersion": true</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+      <table>
+        <thead>
+        <tr><th>キー</th><th>意味</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>bundle.createUpdaterArtifacts</code></td><td><code>true</code> にすると、ビルドで更新用の <code>.app.tar.gz</code> と署名 <code>.sig</code> を作る。<code>"v1Compatible"</code> を指定すると、旧形式の更新ファイルを作る。旧形式の zip は Windows での話で、macOS では v1 でも <code>.app.tar.gz</code> になる</td></tr>
+        <tr><td><code>plugins.updater.pubkey</code></td><td>公開鍵。<code>~/.tauri/handson-tauri-05.key.pub</code> の中身をそのまま貼る</td></tr>
+        <tr><td><code>plugins.updater.endpoints</code></td><td><code>latest.json</code> を取得する URL の一覧。<code>&lt;owner&gt;</code> と <code>&lt;repo&gt;</code> は、自分の GitHub のユーザー名とリポジトリ名に置き換える</td></tr>
+        <tr><td><code>plugins.updater.requireSignedVersion</code></td><td><code>tauri add</code> が追加した。署名に対象のバージョンが入っていない更新を拒否する</td></tr>
+        </tbody>
+      </table>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">公開鍵は自分の鍵に置き換える</p>
+              <p>上の diff では <code>pubkey</code> の値を <code>&lt;~/.tauri/handson-tauri-05.key.pub の中身&gt;</code> と表記しています。自分で作った鍵の <code>.pub</code> の中身を貼ってください。完成コードのブランチには、執筆時に作った公開鍵が入っています。それをそのまま使うと、自分の秘密鍵で署名した更新を検証できません。</p>
+            </div>
+          </div>
+
+      <h4>更新を確認するコンポーネントを作る</h4>
+      <p>「更新を確認」ボタンを押すと <code>check()</code> で <code>latest.json</code> を取得します。新しいバージョンがあれば「インストールして再起動」ボタンを出し、<code>downloadAndInstall()</code> の後に <code>relaunch()</code> で再起動します。構成は ProgressTask と同じく、<code>index.ts</code> の re-export と <code>.module.scss</code> を同じフォルダに置きます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/UpdateChecker/UpdateChecker.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client";
+
+import { useState } from "react";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import styles from "./UpdateChecker.module.scss";
+
+type Status = "idle" | "checking" | "available" | "upToDate" | "installing" | "error";
+
+export function UpdateChecker() {
+  const [status, setStatus] = useState&lt;Status&gt;("idle");
+  const [update, setUpdate] = useState&lt;Update | null&gt;(null);
+  const [message, setMessage] = useState("");
+
+  const handleCheck = async () =&gt; {
+    setStatus("checking");
+    setMessage("");
+    try {
+      // endpoints の latest.json を取得し、現在のバージョンより新しければ Update を返す。
+      const found = await check();
+      if (found) {
+        setUpdate(found);
+        setStatus("available");
+        setMessage(`新しいバージョン ${found.version} があります`);
+      } else {
+        setUpdate(null);
+        setStatus("upToDate");
+        setMessage("最新のバージョンです");
+      }
+    } catch (e) {
+      setStatus("error");
+      setMessage(String(e));
+    }
+  };
+
+  const handleInstall = async () =&gt; {
+    if (!update) return;
+    setStatus("installing");
+    setMessage("ダウンロードとインストールを実行中...");
+    try {
+      // 署名の検証に成功したものだけがインストールされる（pubkey と .sig の照合）。
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch (e) {
+      setStatus("error");
+      setMessage(String(e));
+    }
+  };
+
+  const busy = status === "checking" || status === "installing";
+
+  return (
+    &lt;section className={styles.updateChecker}&gt;
+      &lt;button
+        type="button"
+        className={styles.button}
+        onClick={handleCheck}
+        disabled={busy}
+      &gt;
+        更新を確認
+      &lt;/button&gt;
+
+      {status === "available" &amp;&amp; (
+        &lt;button
+          type="button"
+          className={styles.button}
+          onClick={handleInstall}
+          disabled={busy}
+        &gt;
+          インストールして再起動
+        &lt;/button&gt;
+      )}
+
+      {message &amp;&amp; (
+        &lt;p className={status === "error" ? styles.error : styles.message}&gt;
+          {message}
+        &lt;/p&gt;
+      )}
+    &lt;/section&gt;
+  );
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/components/UpdateChecker/UpdateChecker.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.updateChecker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 32px;
+}
+
+.button {
+  padding: 8px 20px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid var(--foreground);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+
+  &amp;:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.message {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.error {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #d94545;
+  word-break: break-all;
+  text-align: center;
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/UpdateChecker/index.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export { UpdateChecker } from "./UpdateChecker";</code></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import { TodoList } from "@/components/TodoList";</span><span class="diff-line">  import { ProgressTask } from "@/components/ProgressTask";</span><span class="diff-line diff-line--add">+ import { UpdateChecker } from "@/components/UpdateChecker";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">        &lt;TodoList /&gt;</span><span class="diff-line">        &lt;ProgressTask /&gt;</span><span class="diff-line diff-line--add">+       &lt;UpdateChecker /&gt;</span><span class="diff-line">      &lt;/div&gt;</span><span class="diff-line">    );</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>エンドポイントの <code>&lt;owner&gt;</code> / <code>&lt;repo&gt;</code> を置き換えていない状態でボタンを押すと、画面にエラーが表示されます。執筆環境では、次の文言が表示されました。</p>
+      <p><code>Could not fetch a valid release JSON from the remote</code></p>
+      <p>updater 2.12.0 のソース（<code>src/error.rs</code>）には、ほかに次のような文言が定義されています。</p>
+      <ul>
+        <li><code>Updater does not have any endpoints set.</code>: <code>endpoints</code> が空のとき</li>
+                <li><code>The configured updater endpoint must use a secure protocol like `https`.</code>: URL が <code>http://</code> のとき</li>
+      </ul>
+      <h4>署名付きで更新ファイルを作る</h4>
+      <p><code>createUpdaterArtifacts</code> を有効にすると、ビルドの最後に秘密鍵で <code>.sig</code> を作ります。秘密鍵は環境変数 <code>TAURI_SIGNING_PRIVATE_KEY</code> に鍵の中身を入れて渡し、設定ファイルには書きません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/handson-tauri-05.key)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" npm run tauri build</span><span class="terminal__line">（中略）</span><span class="terminal__line">    Bundling /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app.tar.gz (/path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app.tar.gz)</span><span class="terminal__line">    Finished 2 bundles at:</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/dmg/handson-tauri-05_0.5.0_aarch64.dmg</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app.tar.gz (updater)</span><span class="terminal__line"></span><span class="terminal__line">    Finished 1 updater signature at:</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app.tar.gz.sig</span></pre>
+</div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>TAURI_SIGNING_PRIVATE_KEY_PATH</code> では <code>.sig</code> が作られなかった</p>
+              <p><code>tauri signer generate</code> の出力には、鍵のパスを渡す <code>TAURI_SIGNING_PRIVATE_KEY_PATH</code> も載っています。しかし執筆時の CLI では、こちらで渡すと <code>.sig</code> を作る段階で次のエラーになりました。<code>TAURI_SIGNING_PRIVATE_KEY</code> に鍵の中身を渡すと成功します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">Error A public key has been found, but no private key. Make sure to set TAURI_SIGNING_PRIVATE_KEY environment variable.</span></pre>
+</div>
+
+            </div>
+          </div>
+
+      <p>できたファイルは次のとおりです。<code>.app.tar.gz</code> は <code>.app</code> をまとめたもので、updater はこれをダウンロードして入れ替えます。</p>
+
+      <table>
+        <thead>
+        <tr><th>ファイル</th><th>大きさ</th><th>役割</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>bundle/macos/handson-tauri-05.app.tar.gz</code></td><td>約 3.0 MB</td><td>更新用のアーカイブ</td></tr>
+        <tr><td><code>bundle/macos/handson-tauri-05.app.tar.gz.sig</code></td><td>436 バイト</td><td>アーカイブの署名。<code>latest.json</code> の <code>signature</code> に入れる</td></tr>
+        </tbody>
+      </table>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> tar -tzf src-tauri/target/release/bundle/macos/handson-tauri-05.app.tar.gz | head -3</span><span class="terminal__line">handson-tauri-05.app/</span><span class="terminal__line">handson-tauri-05.app/Contents</span><span class="terminal__line">handson-tauri-05.app/Contents/Info.plist</span></pre>
+</div>
+
+      <h4><code>latest.json</code> の形式</h4>
+      <p>エンドポイントには、次の形式の JSON を置きます。updater 2.12 のソースの定義に合わせた例です。ステップ 6 の tauri-action は、<code>includeUpdaterJson</code> の既定値（<code>true</code>）のため、Release にこのファイルを自動で添付します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">JSON</span>
+    <span class="code-block__filename">latest.json（例）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-json">{
+  "version": "0.5.1",
+  "notes": "更新内容",
+  "pub_date": "2026-10-10T00:00:00Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "（.sig ファイルの中身）",
+      "url": "https://github.com/&lt;owner&gt;/&lt;repo&gt;/releases/download/v0.5.1/handson-tauri-05.app.tar.gz"
+    },
+    "darwin-x86_64": { "signature": "…", "url": "…" }
+  }
+}</code></pre>
+</div>
+
+      <p><code>platforms</code> のキーは <code>{OS}-{アーキテクチャ}</code> の形です（<code>darwin-aarch64</code> / <code>darwin-x86_64</code> / <code>linux-x86_64</code> / <code>windows-x86_64</code> など）。<code>version</code> がアプリの今のバージョンより新しくないと、更新は行われません。<code>latest.json</code> を配信して実際に更新させる流れは、執筆時には試していません<strong>（未実行）</strong>。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">モバイルに対応するときは <code>#[cfg(desktop)]</code> で囲む</p>
+              <p><code>tauri-plugin-updater</code> は、<code>Cargo.toml</code> でデスクトップ専用の依存として追加されました。モバイル（iOS / Android）向けのビルドにはこのクレートが無いので、<code>lib.rs</code> の登録の行がコンパイルできません。モバイル対応を始めるときは、この行を <code>#[cfg(desktop)]</code> で囲みます。この教材は macOS のデスクトップだけを対象にしています。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>src-tauri/target/release/bundle/macos/</code> に <code>handson-tauri-05.app.tar.gz</code> と <code>handson-tauri-05.app.tar.gz.sig</code> ができていることを確認します。また、<code>npm run tauri dev</code> で起動し、画面の下に「更新を確認」ボタンが出ることも確かめます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">GitHub Actions で各 OS 向けにビルドする</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Windows 向けは Windows で、Linux 向けは Linux でビルドする必要があります。手元にすべての OS を用意する代わりに、GitHub Actions で OS ごとにビルドし、GitHub Release に成果物を載せます。Tauri 公式の <code>tauri-apps/tauri-action</code> を使います。</p>
+      <p>ワークフローは、実際には<strong>自分のアプリのリポジトリのルート</strong>にある <code>.github/workflows/</code> に置きます。このハンズオンのリポジトリでは、ほかの項目の CI と混ざらないように、プロジェクトの中（<code>05-packaging/.github/workflows/release.yml</code>）に置いています。そのため、この教材のリポジトリではワークフローは動きません。GitHub 上での実行は<strong>（未実行）</strong>です。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">YAML</span>
+    <span class="code-block__filename">.github/workflows/release.yml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-yaml"># このファイルは教材用にプロジェクト内に置いています。
+# 実際に動かすときは、アプリのリポジトリのルートの .github/workflows/ に置きます。
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    permissions:
+      contents: write # tauri-action が GitHub Release を作成・更新するために必要
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            args: ""
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' &amp;&amp; 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -&gt; target
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build and release with tauri-action
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: "handson-tauri-05 v__VERSION__"
+          releaseBody: "変更点は Release の説明を参照してください。"
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}</code></pre>
+</div>
+
+
+      <table>
+        <thead>
+        <tr><th>部分</th><th>内容</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>on.push.tags: "v*"</code></td><td><code>v0.5.0</code> のような <code>v</code> で始まるタグを push したときに動く</td></tr>
+        <tr><td><code>permissions.contents: write</code></td><td>tauri-action が <code>GITHUB_TOKEN</code> で GitHub Release を作成・更新するための権限</td></tr>
+        <tr><td><code>strategy.matrix</code></td><td>macOS（aarch64 / x86_64 の 2 つ）、Ubuntu 22.04、Windows の 4 つのジョブを並列に動かす。<code>fail-fast: false</code> で、1 つが失敗しても残りを続ける</td></tr>
+        <tr><td>Install Linux system dependencies</td><td>Ubuntu のジョブだけで、WebKitGTK（<code>libwebkit2gtk-4.1-dev</code>）などのシステムパッケージを入れる</td></tr>
+        <tr><td>Setup Node.js / Setup Rust</td><td>Node.js 24 と Rust の stable を入れる。macOS のジョブでは 2 つの target も入れる</td></tr>
+        <tr><td>Cache Rust build</td><td><code>src-tauri/target</code> をキャッシュして、2 回目以降のビルドを速くする</td></tr>
+        <tr><td>Build and release with tauri-action</td><td><code>tauri build</code> を実行し、成果物を Release に添付する。<code>tagName</code> などの <code>__VERSION__</code> はアプリのバージョンに置き換わる。<code>releaseDraft: true</code> なので下書きとして作られ、公開は GitHub 上で手動で行う。下書きは <code>releases/latest/download/</code> の対象にならないため、Release を公開した後に初めて updater が動く</td></tr>
+        </tbody>
+      </table>
+
+      <p>リポジトリの Settings → Secrets and variables → Actions に、次の Secrets を登録します。</p>
+
+      <table>
+        <thead>
+        <tr><th>Secret</th><th>値</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>TAURI_SIGNING_PRIVATE_KEY</code></td><td>ステップ 5 の秘密鍵ファイル（<code>~/.tauri/handson-tauri-05.key</code>）の中身</td></tr>
+        <tr><td><code>TAURI_SIGNING_PRIVATE_KEY_PASSWORD</code></td><td>秘密鍵のパスワード（この教材では空）</td></tr>
+        </tbody>
+      </table>
+
+      <p><code>GITHUB_TOKEN</code> は GitHub Actions が自動で用意するので、登録は要りません。macOS の Developer ID 署名と公証も CI で行う場合は、ステップ 4 の <code>APPLE_*</code> の環境変数を Secrets に登録して <code>env</code> に足します<strong>（未実行）</strong>。</p>
+      <p>ワークフローの構文は <code>actionlint</code>（1.7.12）で確認しました。何も表示されず、終了コードは 0 でした。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> actionlint .github/workflows/release.yml</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo $?</span><span class="terminal__line">0</span></pre>
+</div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">tauri-action には <code>contents: write</code> が要る</p>
+              <p><code>permissions</code> で <code>contents: write</code> を与えないと、<code>GITHUB_TOKEN</code> で Release を作れず、tauri-action が失敗します。特に、リポジトリの既定のワークフロー権限が読み取りのみ（新しいリポジトリの既定）の場合に失敗します。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Linux のビルドにはシステムパッケージが要る</p>
+              <p>Linux 版の Tauri は WebView に WebKitGTK を使うので、<code>libwebkit2gtk-4.1-dev</code> などをビルドの前に入れておく必要があります。<code>ubuntu-latest</code> は指す版が時期によって変わるので、パッケージ名がそろっている <code>ubuntu-22.04</code> に固定しています。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">macOS を Universal 1 本にまとめる</p>
+              <p>このワークフローは、macOS の aarch64 と x86_64 を別々のジョブでビルドします。Universal バイナリ 1 本にしたい場合は、macOS のジョブを 1 つにまとめ、<code>args</code> を <code>--target universal-apple-darwin</code> にします。2 つの target は Setup Rust で入れています。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>actionlint .github/workflows/release.yml</code> が何も表示せずに終わることを確認します。自分のアプリのリポジトリで試すときは、ワークフローをルートの <code>.github/workflows/</code> に置きます。Secrets を登録してから <code>v0.5.0</code> のタグを push します<strong>（未実行）</strong>。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">全体を確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、フロントエンドと Rust の両方のチェックを通し、最終の設定でリリースビルドを作ります。まずプロジェクトのルートで実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line"></span><span class="terminal__line">&gt; 05-packaging@0.5.0 build</span><span class="terminal__line">&gt; next build</span><span class="terminal__line"></span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Compiled successfully in 576ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 812ms ...</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Generating static pages using 6 workers (5/5) in 215ms</span><span class="terminal__line">  Finalizing page optimization ...</span><span class="terminal__line"></span><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">├ ○ /_not-found</span><span class="terminal__line">└ ○ /about</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line">○  (Static)  prerendered as static content</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 05-packaging@0.5.0 lint</span><span class="terminal__line">&gt; eslint</span></pre>
+</div>
+
+      <p>続いて <code>src-tauri</code> で Rust 側のチェックをします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy -- -D warnings</span><span class="terminal__line">   Compiling handson-tauri-05 v0.5.0 (/path/to/05-packaging/src-tauri)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.93s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">（コンパイルの出力は省略）</span><span class="terminal__line">running 16 tests</span><span class="terminal__line">test tests::replace_todos_pure_sets_next_id_after_max ... ok</span><span class="terminal__line">test tests::delete_todo_pure_removes_item_and_errors_on_missing_id ... ok</span><span class="terminal__line">test tests::add_todo_pure_assigns_incrementing_ids ... ok</span><span class="terminal__line">test tests::add_todo_pure_trims_and_rejects_blank_title ... ok</span><span class="terminal__line">test tests::todo_serializes_created_at_as_camel_case ... ok</span><span class="terminal__line">test tests::toggle_todo_pure_flips_done_and_errors_on_missing_id ... ok</span><span class="terminal__line">test tests::without_rename_all_key_stays_snake_case ... ok</span><span class="terminal__line">test tests::write_todos_file_reports_io_error_for_missing_directory ... ok</span><span class="terminal__line">test tests::write_todos_file_writes_camel_case_json ... ok</span><span class="terminal__line">test tests::greet_rejects_snake_case_argument_key ... ok</span><span class="terminal__line">test tests::greet_accepts_camel_case_argument_key ... ok</span><span class="terminal__line">test tests::toggle_and_delete_unknown_id_return_error ... ok</span><span class="terminal__line">test tests::add_todo_rejects_empty_title ... ok</span><span class="terminal__line">test tests::set_todos_then_list_todos_round_trip_via_ipc ... ok</span><span class="terminal__line">test tests::add_list_toggle_delete_todo_via_state ... ok</span><span class="terminal__line">test tests::slow_task_emits_progress_events ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span></pre>
+</div>
+
+      <p>テストのコードは 04 から変えていないので、16 件のままです。最終の設定で、署名鍵を渡してリリースビルドを作ります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> time env TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/handson-tauri-05.key)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" npm run tauri build</span><span class="terminal__line">（中略）</span><span class="terminal__line">    Finished 2 bundles at:</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/dmg/handson-tauri-05_0.5.0_aarch64.dmg</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app.tar.gz (updater)</span><span class="terminal__line"></span><span class="terminal__line">    Finished 1 updater signature at:</span><span class="terminal__line">        /path/to/05-packaging/src-tauri/target/release/bundle/macos/handson-tauri-05.app.tar.gz.sig</span><span class="terminal__line"></span><span class="terminal__line">npm run tauri build  55.67s user 2.48s system 72% cpu 1:20.16 total</span></pre>
+</div>
+
+      <p><code>src-tauri/target/release/bundle/</code> の中身は次のとおりです（<code>find</code> の結果から <code>icons</code> と <code>share</code> を除いています）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> find target/release/bundle -maxdepth 3</span><span class="terminal__line">target/release/bundle</span><span class="terminal__line">target/release/bundle/dmg</span><span class="terminal__line">target/release/bundle/dmg/handson-tauri-05_0.5.0_aarch64.dmg</span><span class="terminal__line">target/release/bundle/macos</span><span class="terminal__line">target/release/bundle/macos/handson-tauri-05.app</span><span class="terminal__line">target/release/bundle/macos/handson-tauri-05.app.tar.gz</span><span class="terminal__line">target/release/bundle/macos/handson-tauri-05.app.tar.gz.sig</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span></pre>
+</div>
+
+
+      <table>
+        <thead>
+        <tr><th>項目</th><th>ステップ 1（基準）</th><th>最終</th></tr>
+        </thead>
+        <tbody>
+        <tr><td>実行ファイル <code>target/release/handson-tauri-05</code></td><td>11,593,584 バイト</td><td>4,965,024 バイト（約 57% 減）</td></tr>
+        <tr><td><code>.app</code></td><td>11M</td><td>4.8M</td></tr>
+        <tr><td><code>.dmg</code></td><td>3.1M</td><td>2.4M</td></tr>
+        <tr><td>成果物</td><td><code>.app</code> / <code>.dmg</code></td><td><code>.app</code> / <code>.dmg</code> / <code>.app.tar.gz</code>（3.0M）/ <code>.sig</code>（436 バイト）</td></tr>
+        <tr><td>署名</td><td>なし</td><td>ad-hoc（<code>signingIdentity: "-"</code>）</td></tr>
+        </tbody>
+      </table>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run build</code> から <code>cargo test</code> までが、すべてエラーなく終わることを確認します。<code>npm run tauri build</code> で <code>Finished 2 bundles</code> と <code>Finished 1 updater signature</code> が表示されれば完了です。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>bundle.targets</code> に 7 つの形式を並べ、macOS では <code>.app</code> と <code>.dmg</code> を作った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>bundle.macOS</code> / <code>windows</code> / <code>linux</code> の主な設定の意味を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>[profile.release]</code> の <code>lto</code> / <code>codegen-units</code> / <code>opt-level</code> / <code>strip</code> / <code>panic</code> の意味と、サイズへの効果を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">Universal バイナリに 2 つの target が必要な理由と、クロスコンパイルができない範囲を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">ad-hoc 署名でビルドし、<code>codesign -dv</code> と <code>spctl --assess</code> で署名と Gatekeeper の判定を確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">公証に Developer ID の証明書が必要なことと、使う環境変数を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>tauri signer generate</code> で鍵を作り、秘密鍵をリポジトリの外に置いてバックアップした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">updater / process プラグインを追加し、npm と crate のマイナーバージョンをそろえた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>.app.tar.gz</code> と <code>.sig</code> を作り、<code>latest.json</code> の形式を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-10" class="checklist__input">
+          <label for="check-10" class="checklist__label"><code>release.yml</code> の各ジョブと、必要な Secrets・権限を説明できる</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">他の OS の形式は警告なしで無視される</p>
+              <p>配列に他の OS の形式を書いても、その OS で作れない形式は警告なしで無視されます。CI で全 OS 向けに作るには、全形式を列挙します（ステップ 6）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">macOS から Windows / Linux 向けにはビルドできない</p>
+              <p>OS をまたぐクロスコンパイルは一般に行えません。Universal バイナリは同じ Mac で 2 つの target を入れれば作れますが、片方の target が無いと作れません（ステップ 3）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ad-hoc 署名のアプリは Gatekeeper に止められる</p>
+              <p><code>signingIdentity: "-"</code> の署名は、<code>spctl</code> では <code>rejected</code>（<code>no usable signature</code>）です。インターネット経由で受け取った利用者は、初回の起動時に個別の許可が必要になります（ステップ 4）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">公証には Developer ID Application の証明書が要る</p>
+              <p>ad-hoc 署名では公証できません。公証には有料の Apple Developer Program の証明書が必要です（ステップ 4）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--danger">
+            <span class="callout__icon" aria-hidden="true">🚫</span>
+            <div class="callout__body">
+              <p class="callout__title">updater の秘密鍵を失うと更新を配れない</p>
+              <p>配ったアプリには公開鍵が埋め込まれています。秘密鍵やパスワードを失うと、既存の利用者に更新を届けられません。鍵はバックアップし、リポジトリにはコミットしません（ステップ 5）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Found version mismatched Tauri packages</code> でビルドが止まる</p>
+              <p><code>tauri add</code> は npm 側を <code>&gt;=2</code> で入れます。そのため、Rust の crate とマイナーバージョンがずれる場合があります。エラーに表示された crate のバージョンに合わせて、npm 側を <code>~</code> で固定します（ステップ 5）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">鍵のパス指定では <code>.sig</code> が作られなかった</p>
+              <p>執筆時の CLI では <code>TAURI_SIGNING_PRIVATE_KEY_PATH</code> で鍵を渡すと失敗しました。<code>TAURI_SIGNING_PRIVATE_KEY</code> に鍵の中身を渡します（ステップ 5）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">tauri-action が Release を作れない</p>
+              <p>ワークフローの <code>permissions</code> に <code>contents: write</code> が無いと、Release を作れずに失敗します。既定のワークフロー権限が読み取りのみのリポジトリでは特にこの指定が必要です（ステップ 6）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Linux のジョブが依存パッケージ不足で失敗する</p>
+              <p>Linux のビルドには WebKitGTK（<code>libwebkit2gtk-4.1-dev</code>）などが必要です。ランナーの版は <code>ubuntu-22.04</code> に固定します（ステップ 6）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">パニックの原因が追いにくくなったら</p>
+              <p><code>strip = true</code> と <code>panic = "abort"</code> を付けると、パニック時のバックトレースが読みにくくなります。原因を調べるときは、一時的に外してビルドします（ステップ 2）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>requireSignedVersion</code> で更新が拒否される</p>
+              <p><code>tauri add updater</code> は <code>requireSignedVersion: true</code> を入れます。署名に対象のバージョンが入っていない更新は、エラーで拒否されます。updater のソースには、次の文言が定義されています。</p><p><code>The update signature does not specify the version it was signed for, which `requireSignedVersion` requires. Re-sign and re-publish this release, or disable `requireSignedVersion`.</code></p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>bundle</code> の設定で作る形式と OS ごとの中身を決め、<code>[profile.release]</code> で実行ファイルを約 11.6 MB から約 5.0 MB に小さくしました。
+        ad-hoc 署名では Gatekeeper を通らないことを確かめ、配布に必要な Developer ID の署名と公証の流れを整理しました。
+        updater プラグインと署名鍵で更新の仕組みを組み込み、GitHub Actions で各 OS 向けにビルドして Release を作るワークフローを用意しました。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>tauri/05-packaging</code> の <code>tauri/05-packaging/</code> ディレクトリにあります。updater の秘密鍵は含まれていません。<code>tauri.conf.json</code> の <code>pubkey</code> は執筆時に作った公開鍵なので、自分の鍵の公開鍵に置き換えて使ってください。</p>
+        </div>
+      </div>
+
+      <h2 id="track-summary">Tauri トラックのまとめ</h2>
+      <p>このレッスンで Tauri トラックは終わりです。01〜05 で作ってきたものを振り返ります。</p>
+
+      <table>
+        <thead>
+        <tr><th>項目</th><th>作ったもの・身につけたこと</th></tr>
+        </thead>
+        <tbody>
+        <tr><td>01 環境構築とプロジェクト作成</td><td>Next.js の静的エクスポートをフロントエンドにして <code>tauri init</code> でプロジェクトを作り、<code>tauri dev</code> と <code>tauri build</code> を動かした</td></tr>
+        <tr><td>02 ウィンドウ設定とビルド</td><td><code>app.windows</code> によるウィンドウ設定、透明なタイトルバー、2 つ目のウィンドウ、アイコンとバンドルのメタデータ</td></tr>
+        <tr><td>03 Rust コマンドの呼び出し</td><td><code>#[tauri::command]</code> と <code>invoke</code>、<code>State</code> による状態管理、エラーの返し方、イベントによる進捗通知、テスト</td></tr>
+        <tr><td>04 ファイルシステム API の利用</td><td>fs / dialog プラグインと capabilities の権限・scope、AppData への保存、ダイアログでの書き出しと読み込み</td></tr>
+        <tr><td>05 パッケージングと配布</td><td>bundle の設定、リリースビルドの最適化、署名と公証、自動アップデート、GitHub Actions による各 OS 向けのリリース</td></tr>
+        </tbody>
+      </table>
+
+      <p>次に学ぶとよいテーマは次のとおりです。</p>
+      <ul>
+        <li><strong>マルチウィンドウの状態共有</strong>: 02 で作った 2 つ目のウィンドウと、03 の Rust 側の状態やイベントを組み合わせ、ウィンドウ間で同じデータを扱います。</li>
+        <li><strong><code>tauri-plugin-sql</code> / <code>tauri-plugin-store</code></strong>: 04 では JSON ファイルに保存しました。データが増えたら SQLite を使う sql プラグイン、設定値の保存には store プラグインが候補になります。</li>
+        <li><strong>システムトレイ</strong>: メニューバー（タスクバー）に常駐するアイコンを置き、ウィンドウを閉じても動き続けるアプリを作ります。</li>
+        <li><strong>モバイル（iOS / Android）ターゲット</strong>: Tauri 2 は同じコードからモバイル向けにもビルドできます。ステップ 5 で触れた <code>#[cfg(desktop)]</code> の切り分けが出発点になります。</li>
+        <li><strong>Sidecar</strong>: 別のプログラムの実行ファイルをアプリに同梱し、Rust 側から起動して連携させる仕組みです。</li>
+      </ul>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../04-fs-dialog/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">04: ファイルシステム API の利用</span>
+        </a>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../../index.html">
+          <span class="lesson-nav__direction">Tauri トラックはここまで →</span>
+          <span class="lesson-nav__title">ハンズオン一覧へ戻る</span>
+        </a>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
