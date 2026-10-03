@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01: 環境構築（Xcode 27・Swift 6 言語モード） | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">01</li>
+        </ol>
+        <h1 class="lesson-title">環境構築（Xcode 27・Swift 6 言語モード）</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: iOS アプリ開発が初めてで、Xcode でプロジェクトを作るところから始めたい人</li>
+          <li class="lesson-meta__item">📋 前提: macOS 26.6 以上の Mac に Xcode 27 をインストール済みであること（App Store または developer.apple.com から入手）。シミュレータだけを使うため Apple ID は不要です。ターミナルでの基本的なコマンド操作ができること。Swift の文法は 02 で扱うため、この項目では知らなくても進められます</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: なし（トラック最初の項目）</li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>Xcode とシミュレータのバージョンをターミナルから確認する</li>
+          <li>Xcode の App テンプレートから SwiftUI のプロジェクトを作り、生成されたファイルの役割を知る</li>
+          <li>Swift Language Version を Swift 6 に切り替え、iOS Deployment Target を 18.0 に下げる</li>
+          <li>シミュレータでアプリを起動し、<code>ContentView</code> の変更を反映させる</li>
+          <li>Swift Testing でテストを書き、既定の MainActor 分離によるエラーを直す</li>
+          <li>Swift 6 言語モードのデータ競合チェックがエラーになることを確かめ、<code>xcodebuild</code> でビルドとテストを実行する</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        iOS トラックの最初の項目です。Xcode でアプリのプロジェクトを作り、Swift 6 言語モードに切り替えて、シミュレータでの実行とテストまでを通します。
+        以降の項目は、ここで作るプロジェクト <code>HandsonApp</code> を出発点にして機能を足していきます。
+      </p>
+      <p>
+        操作は Xcode の画面で行います。スクリーンショットは載せず、メニュー名や画面上の項目名（英語表示）を <code>コード書式</code> で示します。
+        あわせて、同じ結果をターミナルから確かめるコマンドとその出力を載せています。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            macOS 26.6.2 / Xcode 27.0（27A266a）/ Swift 6.4 / iOS Simulator SDK 27.0 で動作を確認しています。シミュレータは iPhone 17（iOS 26.5）を使います。
+            バージョンは執筆時点（2026年10月）のものです。
+          </p>
+          <p>
+            この教材の出力は、iOS 26.5 のシミュレータランタイムだけが入った環境で採取しました。iOS 27 のランタイムがある環境では、出力中の 26.5 が 27.0 になります。
+            iOS 27 のランタイムが無い環境では、Xcode 27 の SDK（27.0）とシミュレータの iOS（26.5）がずれるため、ステップ 4 で説明するエラーが起きます。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">Xcode とシミュレータを確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>最初に、Xcode と Swift のバージョンを確認します。ターミナルで次のコマンドを実行してください。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -version</span><span class="terminal__line">Xcode 27.0</span><span class="terminal__line">Build version 27A266a</span><span class="terminal__line"><span class="terminal__prompt">$</span> swift --version</span><span class="terminal__line">swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)</span><span class="terminal__line">Target: arm64-apple-macosx26.0</span></pre>
+          </div>
+
+          <p>続いて、インストールされているシミュレータのランタイム（iOS のバージョン）と、使える iPhone のシミュレータを確認します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl list runtimes</span><span class="terminal__line">== Runtimes ==</span><span class="terminal__line">iOS 26.5 (26.5 - 23F77) - com.apple.CoreSimulator.SimRuntime.iOS-26-5</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl list devices available | grep -i iphone</span><span class="terminal__line">    iPhone 17 Pro (A210DF41-3E21-42A0-AC72-FB8519D09AE3) (Shutdown)</span><span class="terminal__line">    iPhone 17 Pro Max (EAEAB6AC-BC7D-4E5E-B364-88DAD653BCCC) (Shutdown)</span><span class="terminal__line">    iPhone 17e (F7984F6D-C338-4E80-BCF2-570EB7452870) (Shutdown)</span><span class="terminal__line">    iPhone Air (886BEBB3-59CA-4EB7-BF88-ECBF86E1BAF1) (Shutdown)</span><span class="terminal__line">    iPhone 17 (438136B4-B486-4F63-9F99-8B6CD0502AE2) (Shutdown)</span></pre>
+          </div>
+
+          <ul>
+            <li><code>xcrun simctl list runtimes</code>: シミュレータで動かせる iOS のバージョンの一覧です。この環境では iOS 26.5 だけが入っています。</li>
+            <li><code>xcrun simctl list devices available</code>: 利用できるシミュレータの一覧です。このレッスンでは <code>iPhone 17</code> を使います。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">ランタイムが 1 つも表示されない場合</p>
+              <p>
+                <code>== Runtimes ==</code> の下に何も表示されない場合は、Xcode の <code>Xcode</code> &gt; <code>Settings</code> &gt; <code>Components</code> から iOS のランタイムをダウンロードしてください。
+                iOS 27 のランタイムが入っている場合は、デバイス名が上の出力と異なることがあります。その場合は、以降のコマンドの <code>name=iPhone 17</code> を、一覧に表示された iPhone の名前に置き換えてください。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Xcode 27.0</code> と <code>Apple Swift version 6.4</code> が表示され、iOS のランタイムが 1 つ以上、iPhone のシミュレータが 1 台以上あれば準備完了です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">新しいプロジェクトを作る</h3>
+        </div>
+        <div class="step__body">
+          <p>Xcode を起動し、App テンプレートからプロジェクトを作ります。次の順に操作してください。</p>
+
+          <ol>
+            <li>メニューの <code>File</code> &gt; <code>New</code> &gt; <code>Project…</code> を選びます。</li>
+            <li>上部のタブで <code>iOS</code> を選び、<code>App</code> を選んで <code>Next</code> を押します。</li>
+            <li>プロジェクトの設定を次のとおり入力し、<code>Next</code> を押します。
+              <ul>
+                <li><code>Product Name</code>: <code>HandsonApp</code></li>
+                <li><code>Team</code>: <code>None</code></li>
+                <li><code>Organization Identifier</code>: <code>com.example</code>（<code>Bundle Identifier</code> に <code>com.example.HandsonApp</code> と表示されます）</li>
+                <li><code>Interface</code>: <code>SwiftUI</code></li>
+                <li><code>Language</code>: <code>Swift</code></li>
+                <li><code>Testing System</code>: <code>Swift Testing with XCTest UI Tests</code></li>
+                <li><code>Storage</code>: <code>None</code>（<code>Host in CloudKit</code> はオフ）</li>
+              </ul>
+            </li>
+            <li>保存先のフォルダを選びます。<code>Create Git repository on my Mac</code> は<strong>オフ</strong>にして <code>Create</code> を押します。</li>
+          </ol>
+          <!-- 要確認: Product Name・Team・Organization Identifier・Create Git repository の文言は人の確認が必要 -->
+
+          <p>
+            保存先に <code>HandsonApp</code> フォルダが作られ、その中に <code>HandsonApp.xcodeproj</code> ができます。
+            左側のナビゲータには、<code>HandsonApp</code>・<code>HandsonAppTests</code>・<code>HandsonAppUITests</code> の 3 つのフォルダが並びます。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">入力値について</p>
+              <p>
+                <code>HandsonApp</code> はトラックを通して使う名前です。プロジェクト名やターゲット名はテストの <code>@testable import</code> やスキーム名にも使われるため、項目ごとには変えません。
+                <code>com.example</code> はシミュレータで動かすための仮の値です。シミュレータで動かすだけなら、署名用の <code>Team</code> は不要です。
+                Storage は SwiftData を扱う 08 まで使わないため <code>None</code> にします。
+              </p>
+            </div>
+          </div>
+
+          <p>ターミナルでも、ターゲットとスキームを確認しておきます。<code>HandsonApp.xcodeproj</code> があるフォルダ（保存先の <code>HandsonApp</code> フォルダ）に移動してから実行してください。以降のコマンドも全てこのフォルダで実行します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -list -project HandsonApp.xcodeproj</span><span class="terminal__line">Information about project "HandsonApp":</span><span class="terminal__line">    Targets:</span><span class="terminal__line">        HandsonApp</span><span class="terminal__line">        HandsonAppTests</span><span class="terminal__line">        HandsonAppUITests</span><span class="terminal__line"></span><span class="terminal__line">    Build Configurations:</span><span class="terminal__line">        Debug</span><span class="terminal__line">        Release</span><span class="terminal__line"></span><span class="terminal__line">    If no build configuration is specified and -scheme is not passed then "Release" is used.</span><span class="terminal__line"></span><span class="terminal__line">    Schemes:</span><span class="terminal__line">        HandsonApp</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ナビゲータに 3 つのフォルダがあり、<code>xcodebuild -list</code> の <code>Targets</code> に <code>HandsonApp</code>・<code>HandsonAppTests</code>・<code>HandsonAppUITests</code>、<code>Schemes</code> に <code>HandsonApp</code> が表示されれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">生成されたファイルを読む</h3>
+        </div>
+        <div class="step__body">
+          <p>テンプレートが生成したファイルを順に見ていきます。プロジェクトのフォルダ構成は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Text</span>
+              <span class="code-block__filename">HandsonApp/</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext">HandsonApp/
+  HandsonApp.xcodeproj/          # プロジェクトの設定（ターゲット・ビルド設定）
+  HandsonApp/                    # アプリ本体
+    HandsonAppApp.swift
+    ContentView.swift
+    Assets.xcassets/             # 画像や色などのアセット
+  HandsonAppTests/               # ユニットテスト（Swift Testing）
+    HandsonAppTests.swift
+  HandsonAppUITests/             # UI テスト（XCTest）
+    HandsonAppUITests.swift</code></pre>
+          </div>
+
+          <p>以降のコードでは、ファイル先頭のヘッダーコメント（作成者・日付）と説明用コメントを省略しています。<code>HandsonAppApp.swift</code> はアプリのエントリポイントです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/HandsonAppApp.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  HandsonAppApp.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+@main
+struct HandsonAppApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>@main</code>: アプリの実行がここから始まることを示します。</li>
+            <li><code>App</code> プロトコル: アプリ全体を表す型が適合するプロトコルです。<code>body</code> でアプリが持つ画面（<code>Scene</code>）を返します。</li>
+            <li><code>WindowGroup</code>: ウィンドウを表す <code>Scene</code> で、中に <code>ContentView</code> を表示します。</li>
+          </ul>
+
+          <p><code>ContentView.swift</code> は最初に表示される画面です。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  ContentView.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    var body: some View {
+        VStack {
+            Image(systemName: "globe")
+                .imageScale(.large)
+                .foregroundStyle(.tint)
+            Text("Hello, world!")
+        }
+        .padding()
+    }
+}
+
+#Preview {
+    ContentView()
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>View</code> プロトコル: 画面の部品が適合するプロトコルです。<code>body</code> が表示する UI を返します。</li>
+            <li><code>VStack</code>: 中の要素を縦に並べます。地球のアイコン（<code>Image(systemName: "globe")</code>）と文字列（<code>Text</code>）が並びます。</li>
+            <li><code>#Preview</code>: Xcode の Canvas（エディタ右側のプレビュー）に表示する内容です。</li>
+          </ul>
+
+          <p>
+            <code>Assets.xcassets</code> は、アクセントカラー（<code>AccentColor</code>）とアプリアイコン（<code>AppIcon</code>）の置き場所です。この項目では中身を変更しません。
+          </p>
+
+          <p>テストは 2 種類あります。<code>HandsonAppTests.swift</code> は Swift Testing のユニットテストです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppTests/HandsonAppTests.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  HandsonAppTests.swift
+//  HandsonAppTests
+//
+
+import Testing
+@testable import HandsonApp
+
+struct HandsonAppTests {
+
+    @Test func example() async throws {
+        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+    }
+
+}</code></pre>
+          </div>
+
+          <p><code>HandsonAppUITests.swift</code> は XCTest の UI テストで、アプリを起動して画面を操作する処理を自動化するためのものです。テンプレートが生成するコメントと一部のメソッド（<code>tearDownWithError</code>、<code>testLaunchPerformance</code>）は省略しています。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppUITests/HandsonAppUITests.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  HandsonAppUITests.swift
+//  HandsonAppUITests
+//
+
+import XCTest
+
+final class HandsonAppUITests: XCTestCase {
+
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+    }
+
+    @MainActor
+    func testExample() throws {
+        let app = XCUIApplication()
+        app.launch()
+    }
+}</code></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">UI テストはこの項目では実行しない</p>
+              <p>UI テストはシミュレータでアプリを起動して操作するため、実行に時間がかかります。この項目ではユニットテスト（<code>HandsonAppTests</code>）だけを実行し、UI テストは実行しません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">3 つのフォルダは「同期フォルダ」</p>
+              <p>
+                <code>HandsonApp</code>・<code>HandsonAppTests</code>・<code>HandsonAppUITests</code> の 3 つのフォルダは、Xcode の同期フォルダ（<code>project.pbxproj</code> では <code>PBXFileSystemSynchronizedRootGroup</code>）として登録されています。
+                Finder やエディタでフォルダにファイルを追加すると、<code>project.pbxproj</code> を編集しなくてもターゲットに取り込まれます。ステップ 6 で <code>Greeting.swift</code> を追加するときに、この仕組みを使います。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            最後に、ビルド設定の初期値を確認します。プロジェクトの設定は <code>HandsonApp.xcodeproj/project.pbxproj</code> に保存されていますが、直接編集する必要はありません。
+            ここではターミナルから、この項目で扱う 4 つの設定値を表示します。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -target HandsonApp -showBuildSettings | grep -E " (SWIFT_VERSION|IPHONEOS_DEPLOYMENT_TARGET|SWIFT_DEFAULT_ACTOR_ISOLATION|SWIFT_APPROACHABLE_CONCURRENCY) ="</span><span class="terminal__line">    IPHONEOS_DEPLOYMENT_TARGET = 27.0</span><span class="terminal__line">    SWIFT_APPROACHABLE_CONCURRENCY = YES</span><span class="terminal__line">    SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</span><span class="terminal__line">    SWIFT_VERSION = 5.0</span></pre>
+          </div>
+
+          <ul>
+            <li><code>IPHONEOS_DEPLOYMENT_TARGET = 27.0</code>: アプリが動く最小の iOS バージョンです。テンプレートの既定は最新の iOS（27.0）です。</li>
+            <li><code>SWIFT_VERSION = 5.0</code>: Swift の言語モードです。テンプレートの既定は Swift 5 言語モードで、コンパイラー自体は Swift 6.4 でも、Swift 6 言語モードのチェックは有効になっていません。</li>
+            <li><code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code>: アプリのコードを既定でメインアクター（UI を扱うメインスレッド）に分離する設定です。アプリターゲットにだけ付き、テストターゲットには付きません。</li>
+            <li><code>SWIFT_APPROACHABLE_CONCURRENCY = YES</code>: Swift Concurrency を扱いやすくする一連の機能を有効にする設定です。</li>
+          </ul>
+          <p>このほか、全ターゲットに共通して <code>SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES</code>、<code>GENERATE_INFOPLIST_FILE = YES</code>、<code>TARGETED_DEVICE_FAMILY = "1,2"</code>（iPhone と iPad）、<code>MARKETING_VERSION = 1.0</code>、<code>CURRENT_PROJECT_VERSION = 1</code> が設定されています。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>ContentView.swift</code> を開くと、Canvas に地球のアイコンと <code>Hello, world!</code> が表示されます。<!-- 要確認: Canvas の表示は実装ログで未確認（CLI では確かめられない） -->また、ターミナルの出力が <code>IPHONEOS_DEPLOYMENT_TARGET = 27.0</code> と <code>SWIFT_VERSION = 5.0</code> になっていることを確認してください。次のステップでこの 2 つを変更します。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">Swift 6 言語モードと Deployment Target を設定する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            Deployment Target を iOS 18.0 に下げ、3 つのターゲットの Swift Language Version を Swift 6 にします。
+            Deployment Target を下げるのは、最新の iOS 27 だけでなく、それより古い iOS 18 以降の端末もアプリの対象にするためです（このトラックの最小対象は iOS 18 です）。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">iOS 26.5 のシミュレータしか無い環境では、27.0 のままだと動かせない</p>
+              <p>iOS 27 のランタイムが無く、iOS 26.5 のシミュレータしか無い環境で起きる失敗です。既定の 27.0 のまま <code>iPhone 17</code> を指定してビルドすると、次のように実行先（destination）が見つかりません。iOS 26.5 のシミュレータは、iOS 27.0 以上を要求するアプリの実行先として扱われないためです。iOS 27 のランタイムがある環境では、27.0 のままでもビルドできます。</p>
+              <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' build</span><span class="terminal__line">xcodebuild: error: Unable to find a destination matching the provided destination specifier:</span><span class="terminal__line">		{ platform:iOS Simulator, OS:latest, name:iPhone 17 }</span><span class="terminal__line"></span><span class="terminal__line">	Destinations compatible with the "HandsonApp" scheme:</span><span class="terminal__line">		{ platform:iOS, id:dvtdevice-DVTiPhonePlaceholder-iphoneos:placeholder, name:Any iOS Device }</span><span class="terminal__line">		{ platform:iOS Simulator, id:dvtdevice-DVTiOSDeviceSimulatorPlaceholder-iphonesimulator:placeholder, name:Any iOS Simulator Device }</span><span class="terminal__line">	…</span><span class="terminal__line">		{ platform:iOS Simulator, arch:arm64, id:438136B4-…, OS:26.5, name:iPhone 17, error:iPhone 17’s iOS Simulator 26.5 doesn’t match HandsonApp.app’s iOS Simulator 27.0  deployment target. Upgrade iPhone 17’s iOS Simulator version or lower HandsonApp.app’s deployment target. }</span></pre>
+          </div>
+              <p>
+                実行先を特定のシミュレータに限定しない <code>-destination 'generic/platform=iOS Simulator'</code> を指定すれば、ビルドは <code>** BUILD SUCCEEDED **</code> で終わります。
+                ただし、そうしてビルドした <code>.app</code> を <code>xcrun simctl install</code> でシミュレータに入れようとすると、次のように失敗します。
+              </p>
+              <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line">App installation failed: “HandsonApp” Requires a Newer Version of iOS … You need to update this iPhone to iOS 27.0 to install this app. … Have 26.5; need 27.0</span></pre>
+          </div>
+              <p>Xcode の画面でも、同じ理由で実行先に iPhone 17 を選べません。<!-- 要確認: GUI で実行先に iPhone 17 が選べない（または選んでも実行できない）ときの実際の表示 --></p>
+            </div>
+          </div>
+
+          <p>Xcode で次の順に設定します。</p>
+
+          <ol>
+            <li>左のナビゲータの一番上にある青い <code>HandsonApp</code>（プロジェクト）を選びます。</li>
+            <li>中央の <code>PROJECT</code> の <code>HandsonApp</code> を選び、<code>Info</code> タブの <code>Deployment Target</code> にある <code>iOS Deployment Target</code> を <code>18.0</code> にします。</li>
+            <li><code>TARGETS</code> の <code>HandsonApp</code> を選び、<code>Build Settings</code> タブの検索欄に <code>Swift Language Version</code> と入力して、値を <code>Swift 6</code> にします。<!-- 要確認: Swift Language Version のポップアップでの表示名（Swift 6） --></li>
+            <li>同じ操作を <code>HandsonAppTests</code> と <code>HandsonAppUITests</code> でも行います。</li>
+          </ol>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Deployment Target はターゲットではなくプロジェクトで変える</p>
+              <p>
+                <code>PROJECT</code> の設定は全てのターゲットに引き継がれるため、プロジェクトで変えるとテストターゲットにも効きます。
+                アプリターゲットの設定だけを変えると、テストターゲットが 27.0 のまま残ります。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            続いて、同じ <code>Build Settings</code> で並行処理（Concurrency）に関する設定を確認します。
+            アプリターゲットの <code>Default Actor Isolation</code> が <code>MainActor</code>、<code>Approachable Concurrency</code> が <code>Yes</code> になっていれば変更は不要です。
+            <code>Approachable Concurrency</code> は Swift 5 以下の言語モード向けの設定です。Swift 6 に切り替えると <code>Build Settings</code> に表示されなくなる場合があります。
+            <code>Default Actor Isolation</code> はアプリターゲットにだけ設定されています。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Strict Concurrency Checking は設定しなくてよい</p>
+              <p><code>Build Settings</code> には <code>Strict Concurrency Checking</code> という項目もありますが、これは Swift 5 以前の言語モードでだけ効く設定です。Swift 6 言語モードでは、並行処理のチェックは常に最も厳しい <code>complete</code> になるため、設定は不要です。</p>
+            </div>
+          </div>
+
+          <p>この操作で <code>project.pbxproj</code> は次のように変わります（Deployment Target はプロジェクトの Debug / Release の 2 か所、Swift Language Version は 3 ターゲット × Debug / Release の 6 か所）。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（抜粋）</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;</span><span class="diff-line diff-line--add">+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;</span><span class="diff-line diff-line--remove">-				SWIFT_VERSION = 5.0;</span><span class="diff-line diff-line--add">+				SWIFT_VERSION = 6.0;</span></pre>
+          </div>
+
+          <p>アプリターゲットのビルド設定は、変更後に次のようになります。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">pbxproj</span>
+              <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（アプリターゲット Debug の抜粋）</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext">				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";</code></pre>
+          </div>
+
+          <p>
+            ターミナルで設定値を確認し、<code>iPhone 17</code> を指定してビルドします。
+            <code>-derivedDataPath</code> はビルド結果の出力先です。ステップ 5 でビルドした <code>.app</code> の場所を指定するため、変数 <code>DD</code> に出力先のパスを入れておきます。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -target HandsonApp -showBuildSettings | grep -E " (SWIFT_VERSION|IPHONEOS_DEPLOYMENT_TARGET|SWIFT_DEFAULT_ACTOR_ISOLATION|SWIFT_APPROACHABLE_CONCURRENCY) ="</span><span class="terminal__line">    IPHONEOS_DEPLOYMENT_TARGET = 18.0</span><span class="terminal__line">    SWIFT_APPROACHABLE_CONCURRENCY = YES</span><span class="terminal__line">    SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</span><span class="terminal__line">    SWIFT_VERSION = 6.0</span><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+          </div>
+
+          <p>ビルドのログは長いため、末尾以外を省略しています。Xcode の画面では <kbd>⌘</kbd> + <kbd>B</kbd> でビルドできます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>設定値が <code>IPHONEOS_DEPLOYMENT_TARGET = 18.0</code> と <code>SWIFT_VERSION = 6.0</code> になり、<code>iPhone 17</code> を指定したビルドが <code>** BUILD SUCCEEDED **</code> で終われば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">シミュレータで実行し、ContentView を変える</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            Xcode のツールバーで実行先に <code>iPhone 17</code> を選び、<kbd>⌘</kbd> + <kbd>R</kbd> で実行します。
+            シミュレータが起動し、地球のアイコンと <code>Hello, world!</code> が表示されます。
+          </p>
+
+          <p>ターミナルから同じことをする場合は、シミュレータを起動し、ステップ 4 でビルドした <code>.app</code> をインストールして起動します。Xcode の <kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータを起動済みの場合は、すでに起動しているため <code>simctl boot</code> は失敗します。その場合は <code>boot</code> を飛ばしてください。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl boot 'iPhone 17'</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: 74544</span></pre>
+          </div>
+
+          <p><code>launch</code> の出力の末尾の数字はプロセス ID で、実行するたびに変わります。</p>
+
+          <p>次に、画面の文字を変えます。<code>ContentView.swift</code> の <code>Text</code> を次のように書き換えます。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">             Image(systemName: "globe")</span><span class="diff-line">                 .imageScale(.large)</span><span class="diff-line">                 .foregroundStyle(.tint)</span><span class="diff-line diff-line--remove">-            Text("Hello, world!")</span><span class="diff-line diff-line--add">+            Text("Hello, SwiftUI!")</span><span class="diff-line diff-line--add">+                .font(.title)</span><span class="diff-line">         }</span><span class="diff-line">         .padding()</span></pre>
+          </div>
+
+          <p><code>.font(.title)</code> は、文字をタイトル用の大きさにするモディファイア（View の見た目を変えるメソッド）です。変更後の全文は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  ContentView.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    var body: some View {
+        VStack {
+            Image(systemName: "globe")
+                .imageScale(.large)
+                .foregroundStyle(.tint)
+            Text("Hello, SwiftUI!")
+                .font(.title)
+        }
+        .padding()
+    }
+}
+
+#Preview {
+    ContentView()
+}</code></pre>
+          </div>
+
+          <p>保存したら、もう一度 <kbd>⌘</kbd> + <kbd>R</kbd> で実行します。ターミナルの場合は、ビルドし直してからインストールと起動をやり直します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;PID&gt;</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>シミュレータに地球のアイコンと、大きな文字の <code>Hello, SwiftUI!</code> が表示されれば成功です。Canvas のプレビューにも同じ変更が反映されます。<!-- 要確認: Canvas への反映は実装ログで未確認 --></p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">Swift Testing でテストを書く</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            テスト対象の関数を追加します。<code>HandsonApp</code> フォルダに <code>Greeting.swift</code> を作り、次の内容を書きます。
+            Xcode では <code>HandsonApp</code> フォルダを右クリックして新しい Swift ファイルを作れます。<!-- 要確認: Xcode 27 での新規ファイル作成のメニュー名 -->
+            同期フォルダなので、Finder やエディタでファイルを置いても取り込まれます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Greeting.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">func greeting(for name: String) -&gt; String {
+    "Hello, \(name)!"
+}</code></pre>
+          </div>
+
+          <p>続いて、<code>HandsonAppTests.swift</code> の <code>example()</code> を、次のテストに置き換えます。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppTests/HandsonAppTests.swift（失敗する版の抜粋）</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">@Test func greetingContainsName() {
+    #expect(greeting(for: "Swift") == "Hello, Swift!")
+}</code></pre>
+          </div>
+
+          <p>
+            <code>@Test</code> がテスト関数の印で、<code>#expect</code> が条件を確かめるマクロです。
+            ところが、このテストはビルドの段階で失敗します。Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> でテストを実行できますが、ここではターミナルでテストのビルドだけを行い、エラーを確認します。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests build-for-testing</span><span class="terminal__line">…</span><span class="terminal__line">macro expansion #expect:1:32: error: call to main actor-isolated global function 'greeting(for:)' in a synchronous nonisolated context [#ActorIsolatedCall]</span><span class="terminal__line">…/HandsonAppTests/HandsonAppTests.swift:12:59: note: expanded code originates here</span><span class="terminal__line">   |                `- note: add '@MainActor' to make instance method 'greetingContainsName()' part of global actor 'MainActor'</span><span class="terminal__line">HandsonApp.greeting:1:26: note: calls to global function 'greeting(for:)' from outside of its actor context are implicitly asynchronous</span></pre>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">MainActor の関数を nonisolated なテストから呼べない</p>
+              <p>
+                ステップ 3 で見たとおり、アプリターゲットは <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> なので、<code>greeting(for:)</code> もメインアクターに分離されます。
+                一方、テストターゲットにはこの設定がなく、テスト関数はどのアクターにも属さない（nonisolated）状態です。
+                メインアクターの関数を外から同期的に呼ぶことはできないため、エラーになります。エラーの <code>note</code> が示すとおり、テスト関数に <code>@MainActor</code> を付けると解決します。
+              </p>
+              <p><code>@MainActor</code> の詳しい使い分けは、06（async/await と @MainActor）で扱います。</p>
+            </div>
+          </div>
+
+          <p>テスト関数に <code>@MainActor</code> を付けます。修正後の <code>HandsonAppTests.swift</code> の全文は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppTests/HandsonAppTests.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  HandsonAppTests.swift
+//  HandsonAppTests
+//
+
+import Testing
+@testable import HandsonApp
+
+struct HandsonAppTests {
+
+    @Test @MainActor func greetingContainsName() {
+        #expect(greeting(for: "Swift") == "Hello, Swift!")
+    }
+
+}</code></pre>
+          </div>
+
+          <p>テストを実行します。出力が長いため、<code>grep</code> でテストの結果に関する行だけを表示しています。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |Test Suite|✔|✘|\*\* "</span><span class="terminal__line">Test Suite 'All tests' started at 2026-10-03 10:06:14.875.</span><span class="terminal__line">Test Suite 'All tests' passed at 2026-10-03 10:06:14.875.</span><span class="terminal__line">✔ Test greetingContainsName() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite HandsonAppTests passed after 0.001 seconds.</span><span class="terminal__line">✔ Test run with 1 test in 1 suite passed after 0.001 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+          </div>
+
+          <p>
+            <code>-only-testing:HandsonAppTests</code> でユニットテストだけを実行し、<code>-parallel-testing-enabled NO</code> でテストの並列実行を止めています。
+            Xcode の画面では、<kbd>⌘</kbd> + <kbd>U</kbd>、またはテストナビゲータでテストの横にある ◇ のボタンから実行できます。<!-- 要確認: Xcode 27 のテストナビゲータでの実行ボタンの表示 -->
+          </p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">テストが失敗したときの表示を見てみる</p>
+              <p>
+                余裕があれば、<code>#expect</code> の右辺を <code>"Hello, Swift?"</code> などに変えて Xcode で <kbd>⌘</kbd> + <kbd>U</kbd> を実行し、テストが失敗として表示されることを確かめてください。確認したら元に戻します。
+                <!-- 要確認: #expect が失敗したときの Xcode 上の表示（実装ログでは CLI・GUI とも未実施） -->
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>@MainActor</code> がないとビルドエラーになることを確認してください。付けた後は <code>✔ Test greetingContainsName() passed</code> と <code>** TEST SUCCEEDED **</code> が表示されれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">Swift 6 のデータ競合チェックと CLI でのビルド・テスト</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            Swift 6 言語モードに切り替えた効果を確かめます。データ競合（複数の処理が同じ変数を同時に書き換えること）の恐れがあるコードを、確認用のファイルに書いてビルドします。
+            <code>HandsonApp</code> フォルダに <code>RaceSample.swift</code> を作り、次の内容を書きます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/RaceSample.swift（確認用。最後に削除する）</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">var tapCount = 0
+
+func countUpInBackground() {
+    Task.detached {
+        tapCount += 1
+    }
+}</code></pre>
+          </div>
+
+          <p>
+            <code>Task.detached</code> は、呼び出し元のアクターを引き継がない非同期タスクを作ります。
+            一方、グローバル変数 <code>tapCount</code> はアプリターゲットの既定の分離によりメインアクターに属します。メインアクターの外からこの変数を書き換えるコードになっています。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/HandsonApp/RaceSample.swift:5:9: error: main actor-isolated var 'tapCount' can not be mutated from a nonisolated context</span><span class="terminal__line">1 | var tapCount = 0</span><span class="terminal__line">  |     `- note: mutation of this var is only permitted within the actor</span><span class="terminal__line">…</span><span class="terminal__line">5 |         tapCount += 1</span><span class="terminal__line">  |         |- error: main actor-isolated var 'tapCount' can not be mutated from a nonisolated context</span><span class="terminal__line">  |         `- note: consider declaring an isolated method on 'MainActor' to perform the mutation</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+          </div>
+
+          <p>Swift 6 言語モードでは、この書き換えがコンパイルエラーになります。比較のため、<code>SWIFT_VERSION=5.0</code> を引数で上書きして Swift 5 言語モードでビルドしてみます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD SWIFT_VERSION=5.0 build</span><span class="terminal__line">…</span><span class="terminal__line">…/RaceSample.swift:5:9: warning: main actor-isolated var 'tapCount' can not be mutated from a nonisolated context</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+          </div>
+
+          <p>Swift 5 言語モードでは同じ箇所が <code>warning</code> にとどまり、ビルドは成功します。Swift 6 言語モードに切り替えたことで、データ競合の恐れがビルドを止めるエラーとして扱われるようになりました。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Task.detached</code> を <code>Task</code> に直す</p>
+              <p><code>Task { }</code> は呼び出し元のアクター（ここではメインアクター）を引き継いで実行されるため、<code>tapCount</code> をメインアクター上で安全に書き換えられます。次のように直すと、Swift 6 言語モードでもビルドが通ります。</p>
+              <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">HandsonApp/RaceSample.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line"> func countUpInBackground() {</span><span class="diff-line diff-line--remove">-    Task.detached {</span><span class="diff-line diff-line--add">+    Task {</span><span class="diff-line">         tapCount += 1</span><span class="diff-line">     }</span><span class="diff-line"> }</span></pre>
+          </div>
+            </div>
+          </div>
+
+          <p>
+            <code>Task {</code> に直してビルドが通ることを確認したら、<code>RaceSample.swift</code> は削除します。
+            最後に、完成状態でビルドとテストを実行し、シミュレータを止めます。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm HandsonApp/RaceSample.swift</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |Test Suite|✔|✘|\*\* "</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test greetingContainsName() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test run with 1 test in 1 suite passed after 0.001 seconds.</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+          </div>
+
+          <p><code>xcrun simctl shutdown all</code> は、起動中のシミュレータを全て止めます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Task.detached</code> 版が Swift 6 言語モードでエラーになることを確認できましたか。そのうえで、<code>RaceSample.swift</code> を削除した状態で <code>** BUILD SUCCEEDED **</code> と <code>** TEST SUCCEEDED **</code> が表示されれば完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>xcodebuild -version</code> と <code>xcrun simctl list runtimes</code> で Xcode とシミュレータのバージョンを確認した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">App テンプレートから <code>HandsonApp</code> を作り、3 つのターゲットがあることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>@main</code>・<code>App</code>・<code>View</code>・<code>#Preview</code> の役割を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">プロジェクトの iOS Deployment Target を 18.0 に、3 つのターゲットの Swift Language Version を Swift 6 にした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">シミュレータでアプリを起動し、<code>Hello, SwiftUI!</code> への変更を反映させた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">テストに <code>@MainActor</code> が必要な理由を、アプリターゲットの既定の分離から説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>Task.detached</code> のコードが Swift 5 では警告、Swift 6 ではエラーになることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>xcodebuild</code> でビルドとユニットテストが通り、<code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Unable to find a destination matching the provided destination specifier</code> が出る</p>
+          <p>
+            Deployment Target がシミュレータの iOS より新しいと、<code>-destination</code> に指定したシミュレータが実行先として見つかりません。iOS 27 のランタイムが無く、iOS 26.5 のシミュレータしか無い環境で起きます。
+            ステップ 4 の手順で、プロジェクトの <code>iOS Deployment Target</code> を 18.0 に下げたか確認してください。
+            シミュレータ名が違う場合も同じエラーになるため、<code>xcrun simctl list devices available</code> で名前を確かめてください。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">xcodebuild の出力が長くて結果が分からない</p>
+          <p><code>xcodebuild</code> はビルドの全工程を出力します。結果は末尾の <code>** BUILD SUCCEEDED **</code> / <code>** TEST SUCCEEDED **</code>（失敗時は <code>FAILED</code>）で判断してください。ステップ 6 のように <code>grep</code> で必要な行だけに絞ると読みやすくなります。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        Xcode の App テンプレートから SwiftUI のプロジェクトを作り、Swift 6 言語モードと iOS 18.0 の Deployment Target に設定しました。
+        シミュレータでの実行、Swift Testing によるテスト、<code>xcodebuild</code> でのビルドとテストまでを通しました。
+        あわせて、既定の MainActor 分離と Swift 6 のデータ競合チェックがエラーとして現れることも確かめました。
+        次の項目では、iOS 開発に必要な Swift の文法（オプショナル・構造体・プロトコル）を学びます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/01-setup</code> の <code>ios/01-setup/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/01-setup/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../../index.html">
+          <span class="lesson-nav__direction">← カタログ</span>
+          <span class="lesson-nav__title">ハンズオン教材カタログ</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">02: Swift 基礎</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
