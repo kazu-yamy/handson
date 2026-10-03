@@ -34,11 +34,12 @@ Kotlin + Jetpack Compose を使った Android アプリ開発を学ぶトラッ�
 | 02 | [Kotlin 基礎](./02-kotlin-basics/index.html) | Android 開発に必要な Kotlin の文法（null 安全・データクラス・拡張関数）を理解する | 45分 |
 | 03 | [Compose 入門](./03-compose-basics/index.html) | Composable 関数の基本とプレビューを使った UI 構築ができる | 45分 |
 | 04 | [状態と State hoisting](./04-state/index.html) | `remember` / `mutableStateOf` と State hoisting パターンを実装できる | 45分 |
-| 05 | Material3 と LazyColumn | Material3 コンポーネントと `LazyColumn` でリスト UI を構築できる | 45分 |
-| 06 | ViewModel と StateFlow | ViewModel と `StateFlow` を使った状態管理を実装できる | 45分 |
-| 07 | Navigation 3 | Navigation 3 で画面遷移とバックスタック管理を実装できる | 45分 |
-| 08 | Ktor と serialization で API 取得 | Ktor Client と kotlinx.serialization を使った API 通信を実装できる | 45分 |
-| 09 | Room 3 と DataStore | Room 3 でのローカル DB 操作と DataStore での設定保存を実装できる | 45分 |
-| 10 | Hilt | Hilt を使った依存性注入を実装できる | 45分 |
-| 11 | WorkManager | WorkManager を使ったバックグラウンド処理を実装できる | 45分 |
-| 12 | テストとリリースビルド | ユニットテストを書き、リリースビルドを作成できる | 45分 |
+| 05 | [Material3 と LazyColumn](./05-material3-lazycolumn/index.html) | `LazyColumn` で一覧を表示し、`Scaffold` のスロットでスクロール位置に応じたボタンと、削除の取り消し付き Snackbar を実装できる | 45分 |
+| 06 | Material3 の画面部品 | スワイプ削除・スクロールしても上端に残る見出しとフィルタ・ボトムシートとダイアログで一覧の操作を作れる | 45分 |
+| 07 | ViewModel と StateFlow | ViewModel と `StateFlow` を使った状態管理を実装できる | 45分 |
+| 08 | Navigation 3 | Navigation 3 で画面遷移とバックスタック管理を実装できる | 45分 |
+| 09 | Ktor と serialization で API 取得 | Ktor Client と kotlinx.serialization を使った API 通信を実装できる | 45分 |
+| 10 | Room 3 と DataStore | Room 3 でのローカル DB 操作と DataStore での設定保存を実装できる | 45分 |
+| 11 | Hilt | Hilt を使った依存性注入を実装できる | 45分 |
+| 12 | WorkManager | WorkManager を使ったバックグラウンド処理を実装できる | 45分 |
+| 13 | テストとリリースビルド | ユニットテストを書き、リリースビルドを作成できる | 45分 |
