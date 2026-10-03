@@ -1,0 +1,1310 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08: Navigation 3 | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">08</li>
+        </ol>
+        <h1 class="lesson-title">Navigation 3</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 07 で Todo の一覧の状態を ViewModel に移した人</li>
+          <li class="lesson-meta__item">📋 前提: 07 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../07-viewmodel-stateflow/index.html">07: ViewModel と StateFlow</a></li>
+          <li class="lesson-meta__item">🧩 版: Kotlin 2.4.20 / AGP 9.4.1 / Compose BOM 2026.09.00 / Navigation 3 1.2.0 / kotlinx-serialization-core 1.11.0</li>
+          <li class="lesson-meta__item">🌿 完成コード: ブランチ <code>android/08-navigation3</code></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>画面を表すキーとバックスタック（キーのリスト）を作り、<code>NavDisplay</code> と <code>entryProvider</code> で一覧と詳細の 2 画面を行き来できる</li>
+          <li>引数付きのキー（<code>TodoDetail(id)</code>）で詳細画面に Todo を渡し、一覧と同じ ViewModel を使って詳細から完了切替と削除ができる</li>
+          <li><code>rememberNavBackStack</code> と <code>@Serializable</code> で、画面回転とプロセスの再生成の後も開いていた画面を復元できる</li>
+          <li>画面遷移と復元を UI テストで確かめられる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        07 までのアプリは、<code>MainActivity</code> が Todo の一覧（<code>TodoListPage</code>）を直接表示する 1 画面だけでした。
+        この項目では、一覧の行のタイトルを押すと開く「詳細」画面を足し、2 つの画面を行き来できるようにします。画面遷移には、Jetpack の Navigation 3 を使います。</p>
+      <p>前提知識として、04 の State hoisting（状態は下へ、イベントは上へ）を使います。07 の <code>viewModel()</code>・<code>collectAsStateWithLifecycle()</code>・<code>SavedStateHandle</code> も使います。</p>
+
+      <h3 id="navigation3-idea">Navigation 3 の考え方</h3>
+      <p>Navigation 3 で画面遷移を組み立てる部品は、次の 3 つです。</p>
+      <ul>
+        <li><strong>キー</strong>: 画面を表す値です。<code>NavKey</code> を実装した <code>object</code> や <code>data class</code> で作ります。<code>NavKey</code> はメソッドを持たない、印を付けるだけのインターフェースです。引数付きの画面は、引数を <code>data class</code> のプロパティとして持たせます。</li>
+        <li><strong>バックスタック</strong>: キーを並べたリストです。このリストは、アプリが自分で持ちます。進むときはリストにキーを追加し（<code>add</code>）、戻るときは末尾を取り除きます（<code>removeLastOrNull</code>）。</li>
+        <li><strong><code>NavDisplay</code> と <code>entryProvider</code></strong>: <code>entryProvider</code> は「キーの型ごとに、どの画面を出すか」の対応表です。<code>NavDisplay</code> は、バックスタックの末尾のキーを <code>entryProvider</code> で画面に変えて表示します。</li>
+      </ul>
+      <p>画面を切り替える操作は、すべて「リストを書き換える」ことになります。リストが変わると、<code>NavDisplay</code> が末尾のキーに合わせて画面を出し直します。Navigation 3 は、従来の Navigation Compose（<code>androidx.navigation:navigation-compose</code>）とは別のライブラリです。この項目では Navigation Compose は使いません。</p>
+
+      <h3 id="what-we-build">この項目で作るもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>作るもの</th><th>主に変えるファイル</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>キーとバックスタックと <code>NavDisplay</code> で、一覧と詳細の 2 画面を行き来する</td><td><code>TodoKeys.kt</code>・<code>TodoApp.kt</code>・<code>TodoDetailScreen.kt</code>・<code>TodoDetailPage.kt</code>（新規）・<code>TodoRow.kt</code>・<code>TodoListScreen.kt</code>・<code>TodoListPage.kt</code>・<code>MainActivity.kt</code></td></tr>
+            <tr><td>2</td><td>詳細画面で完了切替と削除をできるようにし、一覧と同じデータを見ていることを確かめる</td><td><code>TodoDetailScreen.kt</code>・<code>TodoDetailPage.kt</code></td></tr>
+            <tr><td>3</td><td>バックスタックを保存して、回転とプロセスの再生成の後も詳細を復元する。画面遷移の UI テストを作る</td><td><code>TodoKeys.kt</code>・<code>TodoApp.kt</code>・<code>TodoNavigationTest.kt</code>・<code>TodoNavigationRestorationTest.kt</code>（新規）</td></tr>
+            <tr><td>4</td><td>完成状態のテスト結果を確かめ、エミュレータで操作する</td><td>なし</td></tr>
+            </tbody>
+          </table>
+
+      <p>UI テストは 07 の 56 件から 63 件に増えます。単体テストは 07 と同じ 53 件です。</p>
+
+      <h3 id="versions">使用バージョン</h3>
+      <p>01〜07 と同じく、Kotlin 2.4.20 / AGP 9.4.1 / Compose BOM 2026.09.00 で作成しています。この項目では、次のライブラリと Gradle プラグインを追加します。</p>
+
+          <table>
+            <thead>
+            <tr><th>ライブラリ・プラグイン</th><th>版</th><th>使うもの</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>androidx.navigation3:navigation3-runtime</code></td><td>1.2.0</td><td><code>NavKey</code>・<code>entryProvider</code>・<code>rememberNavBackStack</code></td></tr>
+            <tr><td><code>androidx.navigation3:navigation3-ui</code></td><td>1.2.0</td><td><code>NavDisplay</code></td></tr>
+            <tr><td><code>org.jetbrains.kotlinx:kotlinx-serialization-core</code></td><td>1.11.0</td><td>キーに付ける <code>@Serializable</code>（ステップ 3）</td></tr>
+            <tr><td><code>org.jetbrains.kotlin.plugin.serialization</code>（Gradle プラグイン）</td><td>2.4.20</td><td><code>@Serializable</code> の処理。版は Kotlin 本体と同じ（ステップ 3）</td></tr>
+            </tbody>
+          </table>
+
+      <p>Navigation 3 の 2 つは、執筆時点（2026年10月）の Google Maven で最新の安定版です（その次の <code>1.3.0-alpha01</code> は alpha）。<code>navigation3-ui</code> は <code>navigation3-runtime</code> に依存するので、Version Catalog では同じ版の指定を共用します。<code>kotlinx-serialization-core</code> は、Maven Central で最新の安定版です（その次の <code>1.12.0-RC</code> はリリース候補）。</p>
+
+      <h2 id="prepare">準備</h2>
+      <p>07 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 08 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid07&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid08&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid07&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid08&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span></pre>
+</div>
+
+      <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // Step 1: 変数・関数・文字列テンプレート・when 式</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid07&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid08&quot;</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できる。型は推論されるが、ここでは Int のまま</span><span class="diff-line">  var counter = 0</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          counter = 0</span><span class="diff-line">          assertEquals(1, incrementCounter())</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid07&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid08&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+      <p>パッケージ名（<code>com.handson.android01</code>）は 07 と同じく変えません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">&gt; Task :app:createDebugApkListingFileRedirect</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 5s</span><span class="terminal__line">38 actionable tasks: 38 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+      <p><code>BUILD SUCCESSFUL</code> と表示されれば準備は完了です。かかる時間は、Gradle デーモンが起動済みかどうかで変わります。エミュレータも 07 と同じ手順で起動しておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">emulator-5554	device</span></pre>
+</div>
+
+      <p><code>adb devices</code> に <code>emulator-5554	device</code> と表示されれば、テストとアプリの実行に使えます。</p>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">バックスタックと <code>NavDisplay</code> で一覧と詳細の 2 画面にする</h3>
+        </div>
+        <div class="step__body">
+
+          <p>画面を表すキーを 2 つ（一覧の <code>TodoList</code> と詳細の <code>TodoDetail(id)</code>）作ります。キーを並べたリストをバックスタックとして <code>NavDisplay</code> に渡し、一覧と詳細を行き来できるようにします。一覧の行のタイトルを押すと詳細へ進み、詳細の上部バーの戻るボタンか、システムの戻る操作で一覧へ戻ります。</p>
+          <p>まず、依存を追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  kotlin = &quot;2.4.20&quot;</span><span class="diff-line">  composeBom = &quot;2026.09.00&quot;</span><span class="diff-line">  kotlinxCoroutines = &quot;1.11.0&quot;</span><span class="diff-line diff-line--add">+ navigation3 = &quot;1.2.0&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  androidx-compose-ui-test-junit4 = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-junit4&quot; }</span><span class="diff-line">  androidx-compose-material-icons-core = { group = &quot;androidx.compose.material&quot;, name = &quot;material-icons-core&quot; }</span><span class="diff-line">  androidx-compose-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }</span><span class="diff-line diff-line--add">+ androidx-navigation3-runtime = { group = &quot;androidx.navigation3&quot;, name = &quot;navigation3-runtime&quot;, version.ref = &quot;navigation3&quot; }</span><span class="diff-line diff-line--add">+ androidx-navigation3-ui = { group = &quot;androidx.navigation3&quot;, name = &quot;navigation3-ui&quot;, version.ref = &quot;navigation3&quot; }</span><span class="diff-line">  kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  kotlinx-coroutines-test = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-test&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.lifecycle.runtime.compose)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.runtime.ktx)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.viewmodel.compose)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.navigation3.runtime)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.navigation3.ui)</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">      testImplementation(libs.kotlinx.coroutines.test)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>画面を表すキーを作ります。<code>ui/navigation/TodoKeys.kt</code> を新しく作ります（<code>ui/navigation</code> フォルダも新規）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/navigation/TodoKeys.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.navigation
+
+import androidx.navigation3.runtime.NavKey
+
+// 画面を表す「キー」。Navigation 3 では、バックスタックの中身はこのキーが並んだただのリスト。
+// NavKey は印を付けるだけのインターフェース（メソッドは無い）。object は引数の無い画面、data class は引数付きの画面に使う
+data object TodoList : NavKey
+
+// 詳細画面は、どの Todo を見せるかを id で持つ。キーが画面の「引数」になる
+data class TodoDetail(val id: Int) : NavKey</code></pre>
+</div>
+
+          <ul>
+            <li><code>data object TodoList</code>: 引数の無い画面は <code>object</code> で表します。</li>
+            <li><code>data class TodoDetail(val id: Int)</code>: どの Todo を見せるかを <code>id</code> で持ちます。キーのプロパティが、そのまま画面の引数になります。</li>
+          </ul>
+
+          <p>詳細画面は、07 の一覧と同じく 2 つに分けます。表示だけを担当する stateless な <code>TodoDetailScreen</code> と、ViewModel から状態を読んで渡す stateful な <code>TodoDetailPage</code> です。<code>ui/screens/TodoDetailScreen.kt</code> を新しく作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoDetailScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.kotlin.toTitleCase
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+
+// stateless な詳細画面。todo が null のときは「見つからない」表示にする（一覧で消えたあと、など）。
+// 戻る操作は onBack で呼び出し側に任せる。この画面は、自分がバックスタックのどこにあるかを知らない
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TodoDetailScreen(
+    todo: Todo?,
+    onBack: () -&gt; Unit,
+    modifier: Modifier = Modifier,
+) {
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                title = { Text(&quot;Todo の詳細&quot;) },
+                navigationIcon = {
+                    IconButton(onClick = onBack, modifier = Modifier.testTag(&quot;detail_back&quot;)) {
+                        // AutoMirrored: 右から左に書く言語では、矢印の向きが自動で反転する
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = &quot;戻る&quot;)
+                    }
+                },
+            )
+        },
+    ) { innerPadding -&gt;
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(16.dp),
+        ) {
+            if (todo == null) {
+                Text(
+                    text = &quot;この Todo は見つかりません&quot;,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .testTag(&quot;detail_not_found&quot;),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(
+                        text = todo.title.toTitleCase(),
+                        modifier = Modifier.testTag(&quot;detail_title&quot;),
+                        style = MaterialTheme.typography.headlineMedium,
+                    )
+                    Text(
+                        text = if (todo.done) &quot;完了&quot; else &quot;未完了&quot;,
+                        modifier = Modifier.testTag(&quot;detail_status&quot;),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun TodoDetailScreenPreview() {
+    HandsonAndroid01Theme {
+        TodoDetailScreen(todo = demoTodoList[1], onBack = {})
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>todo: Todo?</code>: 見つからない <code>id</code> のときは <code>null</code> を受け取り、「この Todo は見つかりません」を表示します。</li>
+            <li><code>onBack</code>: 戻る操作は呼び出し側に任せます。この画面は、自分がバックスタックのどこにあるかを知りません。</li>
+            <li><code>Icons.AutoMirrored.Filled.ArrowBack</code>: 右から左に書く言語では、矢印の向きが自動で反転するアイコンです。</li>
+          </ul>
+
+          <p><code>ui/screens/TodoDetailPage.kt</code> を新しく作ります。一覧と同じ ViewModel を引数で受け取り、<code>uiState.todos</code> から <code>id</code> の Todo を探して渡すだけです。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoDetailPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+
+// 詳細画面の stateful な薄いラッパー。一覧と同じ ViewModel（呼び出し側から渡される）の状態から、id の Todo を探して渡す
+@Composable
+fun TodoDetailPage(
+    todoId: Int,
+    viewModel: TodoListViewModel,
+    onBack: () -&gt; Unit,
+    modifier: Modifier = Modifier,
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    TodoDetailScreen(
+        todo = uiState.todos.find { it.id == todoId },
+        onBack = onBack,
+        modifier = modifier,
+    )
+}</code></pre>
+</div>
+
+          <p>一覧の行に、詳細を開く入口を作ります。<code>TodoRow</code> に <code>onOpen</code> を足し、渡されたときだけタイトルの部分を押せるようにします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/TodoRow.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.components</span><span class="diff-line">  </span><span class="diff-line">  import android.content.res.Configuration</span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.clickable</span><span class="diff-line">  import androidx.compose.foundation.layout.Arrangement</span><span class="diff-line">  import androidx.compose.foundation.layout.Row</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxWidth</span><span class="diff-line">  ...</span><span class="diff-line">      onToggle: (Boolean) -&gt; Unit,</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line">      onDelete: (() -&gt; Unit)? = null,</span><span class="diff-line diff-line--add">+     onOpen: (() -&gt; Unit)? = null,</span><span class="diff-line">  ) {</span><span class="diff-line">      // テーマの背景色の明るさから、ダークかどうかを判定する（端末設定ではなく実際に使われている色で判断する）</span><span class="diff-line">      val isDark = MaterialTheme.colorScheme.surface.luminance() &lt; 0.5f</span><span class="diff-line">  ...</span><span class="diff-line">          // checked は親から受け取った値をそのまま表示する。変更は onToggle で親に任せる（状態は下へ、イベントは上へ）</span><span class="diff-line">          Checkbox(checked = todo.done, onCheckedChange = onToggle)</span><span class="diff-line">          // weight(1f): 残りの横幅をすべて使う。weight を持つ子が複数あれば比率で分ける</span><span class="diff-line diff-line--add">+         // onOpen が渡されたときだけ、タイトル部分をタップできる。チェックボックスと削除ボタンは、それぞれ別の操作として残る</span><span class="diff-line">          Text(</span><span class="diff-line">              text = todo.title.toTitleCase(),</span><span class="diff-line diff-line--remove">-             modifier = Modifier.weight(1f),</span><span class="diff-line diff-line--add">+             modifier = Modifier</span><span class="diff-line diff-line--add">+                 .weight(1f)</span><span class="diff-line diff-line--add">+                 .then(if (onOpen != null) Modifier.clickable(onClickLabel = &quot;詳細を開く&quot;, onClick = onOpen) else Modifier)</span><span class="diff-line diff-line--add">+                 .testTag(&quot;todo_title&quot;),</span><span class="diff-line">              style = MaterialTheme.typography.bodyLarge,</span><span class="diff-line">          )</span><span class="diff-line">          Text(</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>行全体ではなく、タイトルの <code>Text</code> だけを押せるようにしています。行には、スワイプでの削除（<code>SwipeToDismissBox</code>）・チェックボックス・削除ボタンがあります。行全体を <code>clickable</code> にすると、押す場所がこれらと重なるためです。<code>onClickLabel = "詳細を開く"</code> は、スクリーンリーダーが「ダブルタップして詳細を開く」のように読み上げる操作の説明です。<code>testTag("todo_title")</code> は、ステップ 3 の UI テストで使います。</p>
+          <p><code>TodoListScreen</code> と <code>TodoListPage</code> に、行から受け取った「詳細を開く」イベントを上へ渡す <code>onOpenDetail</code> を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      onAddSheetDismiss: () -&gt; Unit = {},</span><span class="diff-line">      onDeleteDone: () -&gt; Unit = {},</span><span class="diff-line">      isLoading: Boolean = false,</span><span class="diff-line diff-line--add">+     onOpenDetail: (id: Int) -&gt; Unit = {},</span><span class="diff-line">  ) {</span><span class="diff-line">      // rememberLazyListState: スクロール位置を覚える。LazyColumn に渡すと、位置を読んだり動かしたりできる</span><span class="diff-line">      val listState = rememberLazyListState()</span><span class="diff-line">  ...</span><span class="diff-line">                  if (filter.showsActive() &amp;&amp; activeTodos.isNotEmpty()) {</span><span class="diff-line">                      stickyHeader(key = &quot;header_active&quot;) { SectionHeader(&quot;未完了&quot;, Modifier.testTag(&quot;header_active&quot;)) }</span><span class="diff-line">                      items(activeTodos, key = { it.id }) { todo -&gt;</span><span class="diff-line diff-line--remove">-                         SwipeableTodoRow(todo, onToggle, onDelete, Modifier.animateItem())</span><span class="diff-line diff-line--add">+                         SwipeableTodoRow(todo, onToggle, onDelete, onOpenDetail, Modifier.animateItem())</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">                  if (filter.showsDone() &amp;&amp; doneTodos.isNotEmpty()) {</span><span class="diff-line">                      stickyHeader(key = &quot;header_done&quot;) { SectionHeader(&quot;完了&quot;, Modifier.testTag(&quot;header_done&quot;)) }</span><span class="diff-line">                      items(doneTodos, key = { it.id }) { todo -&gt;</span><span class="diff-line diff-line--remove">-                         SwipeableTodoRow(todo, onToggle, onDelete, Modifier.animateItem())</span><span class="diff-line diff-line--add">+                         SwipeableTodoRow(todo, onToggle, onDelete, onOpenDetail, Modifier.animateItem())</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">      todo: Todo,</span><span class="diff-line">      onToggle: (id: Int, done: Boolean) -&gt; Unit,</span><span class="diff-line">      onDelete: (Todo) -&gt; Unit,</span><span class="diff-line diff-line--add">+     onOpenDetail: (id: Int) -&gt; Unit,</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line">  ) {</span><span class="diff-line">      // 行ごとに、スワイプの状態を持つ。key があるので、行を消しても他の行の状態とは混ざらない</span><span class="diff-line">  ...</span><span class="diff-line">                  todo = todo,</span><span class="diff-line">                  onToggle = { done -&gt; onToggle(todo.id, done) },</span><span class="diff-line">                  onDelete = { onDelete(todo) },</span><span class="diff-line diff-line--add">+                 onOpen = { onOpenDetail(todo.id) },</span><span class="diff-line">              )</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  fun TodoListPage(</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line">      viewModel: TodoListViewModel = viewModel(),</span><span class="diff-line diff-line--add">+     // 行のタイトルが押されたときに呼ばれる。どこへ進むかは、呼び出し側（画面遷移）が決める</span><span class="diff-line diff-line--add">+     onOpenDetail: (id: Int) -&gt; Unit = {},</span><span class="diff-line">  ) {</span><span class="diff-line">      // collectAsStateWithLifecycle: StateFlow を Compose の State として読む。画面が STARTED より下（バックグラウンド）のあいだは収集を止める</span><span class="diff-line">      val uiState by viewModel.uiState.collectAsStateWithLifecycle()</span><span class="diff-line">  ...</span><span class="diff-line">                  inputState.clearText()</span><span class="diff-line">              }</span><span class="diff-line">          },</span><span class="diff-line diff-line--add">+         onOpenDetail = onOpenDetail,</span><span class="diff-line">          modifier = modifier,</span><span class="diff-line">      )</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>TodoListPage</code> は、どの画面へ進むかを知りません。<code>onOpenDetail</code> で <code>id</code> を上へ渡すだけで、進む先は呼び出し側（次の <code>TodoApp</code>）が決めます。</p>
+          <p>画面遷移の本体を作ります。<code>ui/navigation/TodoApp.kt</code> を新しく作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/navigation/TodoApp.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.navigation
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.ui.NavDisplay
+import com.handson.android01.ui.screens.TodoDetailPage
+import com.handson.android01.ui.screens.TodoListPage
+import com.handson.android01.ui.screens.TodoListViewModel
+
+// アプリ全体の画面遷移。バックスタックは「キーを並べただけのリスト」で、自分で持つ。
+// 進む = リストに追加、戻る = 末尾を取り除く。NavDisplay は、末尾のキーに対応する画面を表示する
+@Composable
+fun TodoApp(
+    modifier: Modifier = Modifier,
+    // NavDisplay の外（Activity が持ち主の ViewModelStoreOwner）で作るので、一覧と詳細で同じインスタンスを使える
+    viewModel: TodoListViewModel = viewModel(),
+) {
+    val backStack = remember { mutableStateListOf&lt;NavKey&gt;(TodoList) }
+
+    NavDisplay(
+        backStack = backStack,
+        modifier = modifier,
+        // システムの戻る操作（ジェスチャー・戻るボタン）で呼ばれる。末尾を取り除くと、1 つ前の画面が表示される
+        onBack = { backStack.removeLastOrNull() },
+        // entryProvider: キーから「画面（NavEntry）」を作る対応表。entry&lt;キーの型&gt; { key -&gt; 画面 } と書く
+        entryProvider = entryProvider {
+            entry&lt;TodoList&gt; {
+                TodoListPage(
+                    viewModel = viewModel,
+                    onOpenDetail = { id -&gt; backStack.add(TodoDetail(id)) },
+                )
+            }
+            entry&lt;TodoDetail&gt; { key -&gt;
+                TodoDetailPage(
+                    todoId = key.id,
+                    viewModel = viewModel,
+                    onBack = { backStack.removeLastOrNull() },
+                )
+            }
+        },
+    )
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>remember { mutableStateListOf&lt;NavKey&gt;(TodoList) }</code>: バックスタックです。最初は一覧のキーだけが入っています。Compose が変更を検知できるリストなので、<code>add</code> すると <code>NavDisplay</code> が表示を変えます。回転で消える弱点があり、ステップ 3 で直します。</li>
+            <li><code>entryProvider { entry&lt;TodoList&gt; { ... } entry&lt;TodoDetail&gt; { key -&gt; ... } }</code>: キーの型ごとに出す画面を書きます。<code>entry&lt;TodoDetail&gt;</code> のラムダは、キーそのもの（<code>key</code>）を受け取ります。<code>key.id</code> が詳細画面の引数です。</li>
+            <li><code>onBack</code>: システムの戻る操作（戻るボタン・ジェスチャー）で呼ばれます。末尾を取り除くと、1 つ前の画面が表示されます。上部バーの戻るボタンにも、同じ処理を渡しています。</li>
+            <li><code>viewModel: TodoListViewModel = viewModel()</code>: <code>NavDisplay</code> の外で 1 つ作り、一覧と詳細の両方に渡します。理由はステップ 2 で説明します。</li>
+          </ul>
+
+          <p>最後に、<code>MainActivity</code> が <code>TodoListPage</code> の代わりに <code>TodoApp</code> を表示するようにします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.activity.enableEdgeToEdge</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxSize</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line diff-line--remove">- import com.handson.android01.ui.screens.TodoListPage</span><span class="diff-line diff-line--add">+ import com.handson.android01.ui.navigation.TodoApp</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  </span><span class="diff-line">  class MainActivity : ComponentActivity() {</span><span class="diff-line">  ...</span><span class="diff-line">          enableEdgeToEdge()</span><span class="diff-line">          setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListPage(modifier = Modifier.fillMaxSize())</span><span class="diff-line diff-line--add">+                 TodoApp(modifier = Modifier.fillMaxSize())</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>./gradlew installDebug</code> でアプリをインストールして起動し、行のタイトル（例: <code>Task 2</code>）を押します。上部バーに「Todo の詳細」、見出しに <code>Task 2</code>、その下に「未完了」が表示されます。システムの戻る操作か、上部バーの ← で一覧へ戻ります。</p>
+
+          <p>一覧の画面でさらに戻る操作をすると、アプリが閉じてホーム画面（ランチャー）が表示されます。バックスタックの要素が 1 つのとき、<code>NavDisplay</code> は戻る操作を受け取らず、システムの既定の動作に任せるためです。<code>onBack</code> は呼ばれないので、バックスタックは空になりません。筆者の環境では、このときアプリはクラッシュせず、プロセスも残っていました。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">キーを足したら、<code>entry</code> も足す</p>
+              <p>登録の無いキーをバックスタックへ追加すると、実行時に例外が発生します。登録の有無は、コンパイル時には検査されません。<code>TodoList</code> だけを登録した <code>NavDisplay</code> に、未登録のキーを <code>add</code> する実験用の UI テストを書いて確かめました（実験後に削除しました）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">例外のメッセージ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">unregistered: java.lang.IllegalStateException: Unknown screen com.handson.android01.ExperimentTest$Unregistered@eb07a6</span></pre>
+</div>
+
+              <p><code>entryProvider</code> の既定の <code>fallback</code>（登録の無いキーに使う処理）が、<code>IllegalStateException("Unknown screen ...")</code> を投げます。同じテストで <code>backStack.clear()</code> とバックスタックを空にすると、次の例外になりました。<code>NavDisplay</code> は、空のバックスタックを受け付けません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">例外のメッセージ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">empty: java.lang.IllegalArgumentException: NavDisplay backstack cannot be empty</span></pre>
+</div>
+
+            </div>
+          </div>
+
+          <p>このバックスタックの弱点を、画面回転で確かめます（任意）。<code>Task 2</code> の詳細を開いた状態で、自動回転を止めてから横向きにします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system accelerometer_rotation 0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system user_rotation 1</span></pre>
+</div>
+
+          <p>筆者の環境で横向きにすると、詳細ではなく一覧が表示されました。縦向きに戻しても一覧のままです。<code>remember</code> で持った値は、回転で Activity が作り直されると失われるためです。一覧のチェックの状態は、07 の ViewModel が持っているので残ります。消えたのは「どの画面を開いていたか」だけです。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">回転を試したら、向きを元に戻してからテストを実行する</p>
+              <p>07 と同じく、横向きのまま UI テストを実行すると、行が画面の外に出て複数のテストが失敗します。テストの前に、自動回転と縦向きに戻します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system accelerometer_rotation 1</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system user_rotation 0</span></pre>
+</div>
+
+            </div>
+          </div>
+
+          <p>ビルド・lint・単体テスト・UI テストをまとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 39s</span><span class="terminal__line">86 actionable tasks: 19 executed, 67 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+          <p>UI テスト 56 件・単体テスト 53 件で、07 と同じ件数がすべて成功します。<code>TodoRow</code> の <code>onOpen</code> は省略できる引数なので、既存のテストは変えずに通ります。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>テストが <code>BUILD SUCCESSFUL</code> で終わり、エミュレータで一覧 → 詳細 → 一覧と行き来できれば OK です。チェックボックス・削除ボタン・スワイプでの削除は、07 と同じように動きます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">引数付きのキーと詳細での操作</h3>
+        </div>
+        <div class="step__body">
+
+          <p>詳細画面で、完了の切り替えと削除をできるようにします。削除したら一覧へ戻ります。どの Todo を表示するかは、ステップ 1 でキー <code>TodoDetail(id)</code> の <code>id</code> として渡せています。ここでは、詳細の操作が一覧に反映されることを確かめます。</p>
+
+          <h4 id="share-viewmodel">データの置き場所: 一覧の ViewModel を共有する</h4>
+          <p>詳細画面のデータは、一覧と同じ <code>TodoListViewModel</code> から読みます。<code>TodoApp</code> が <code>NavDisplay</code> の外で <code>viewModel()</code> を呼ぶので、ViewModel の持ち主は Activity です。その同じインスタンスを、一覧の <code>entry</code> と詳細の <code>entry</code> に引数で渡しています。この形にした理由は次のとおりです。</p>
+          <ul>
+            <li><strong>同期の仕組みが要らない</strong>: 一覧と詳細は同じ Todo の一覧を見ます。持ち主が 1 つなら、詳細で変えた完了状態が、戻った一覧にそのまま出ます。</li>
+            <li><strong>保存の仕組みが既にある</strong>: <code>TodoListViewModel</code> は、07 で <code>SavedStateHandle</code> に一覧を保存しています。別の置き場を足すと、プロセスの再生成から復元する仕組みを二重に持つことになります。</li>
+            <li><strong>07 のコードを変えずに済む</strong>: ViewModel と、そのテスト（<code>TodoListViewModelRecreationTest</code> など）はそのまま使えます。</li>
+            <li><strong>詳細専用の ViewModel は作らない</strong>: 詳細だけが持つ状態は「どの Todo か」（キーの <code>id</code>）だけです。<code>uiState.todos.find { it.id == todoId }</code> を、詳細の画面状態とみなします。</li>
+          </ul>
+          <p>ViewModel は、手書きで引数に渡しています。依存性の注入（DI）は、後の項目（Hilt）で扱います。</p>
+
+          <p><code>TodoDetailScreen</code> に、完了を切り替えるチェックボックスと削除ボタンを足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoDetailScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.foundation.layout.Arrangement</span><span class="diff-line">  import androidx.compose.foundation.layout.Box</span><span class="diff-line">  import androidx.compose.foundation.layout.Column</span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.layout.Row</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxSize</span><span class="diff-line">  import androidx.compose.foundation.layout.padding</span><span class="diff-line">  import androidx.compose.material.icons.Icons</span><span class="diff-line">  import androidx.compose.material.icons.automirrored.filled.ArrowBack</span><span class="diff-line diff-line--add">+ import androidx.compose.material.icons.filled.Delete</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.Checkbox</span><span class="diff-line">  import androidx.compose.material3.ExperimentalMaterial3Api</span><span class="diff-line">  import androidx.compose.material3.Icon</span><span class="diff-line">  import androidx.compose.material3.IconButton</span><span class="diff-line">  import androidx.compose.material3.MaterialTheme</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.OutlinedButton</span><span class="diff-line">  import androidx.compose.material3.Scaffold</span><span class="diff-line">  import androidx.compose.material3.Text</span><span class="diff-line">  import androidx.compose.material3.TopAppBar</span><span class="diff-line">  ...</span><span class="diff-line">  fun TodoDetailScreen(</span><span class="diff-line">      todo: Todo?,</span><span class="diff-line">      onBack: () -&gt; Unit,</span><span class="diff-line diff-line--add">+     onToggle: (done: Boolean) -&gt; Unit,</span><span class="diff-line diff-line--add">+     onDelete: () -&gt; Unit,</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line">  ) {</span><span class="diff-line">      Scaffold(</span><span class="diff-line">  ...</span><span class="diff-line">                          modifier = Modifier.testTag(&quot;detail_title&quot;),</span><span class="diff-line">                          style = MaterialTheme.typography.headlineMedium,</span><span class="diff-line">                      )</span><span class="diff-line diff-line--remove">-                     Text(</span><span class="diff-line diff-line--remove">-                         text = if (todo.done) &quot;完了&quot; else &quot;未完了&quot;,</span><span class="diff-line diff-line--remove">-                         modifier = Modifier.testTag(&quot;detail_status&quot;),</span><span class="diff-line diff-line--remove">-                         style = MaterialTheme.typography.titleMedium,</span><span class="diff-line diff-line--remove">-                     )</span><span class="diff-line diff-line--add">+                     Row(verticalAlignment = Alignment.CenterVertically) {</span><span class="diff-line diff-line--add">+                         Checkbox(</span><span class="diff-line diff-line--add">+                             checked = todo.done,</span><span class="diff-line diff-line--add">+                             onCheckedChange = onToggle,</span><span class="diff-line diff-line--add">+                             modifier = Modifier.testTag(&quot;detail_checkbox&quot;),</span><span class="diff-line diff-line--add">+                         )</span><span class="diff-line diff-line--add">+                         Text(</span><span class="diff-line diff-line--add">+                             text = if (todo.done) &quot;完了&quot; else &quot;未完了&quot;,</span><span class="diff-line diff-line--add">+                             modifier = Modifier.testTag(&quot;detail_status&quot;),</span><span class="diff-line diff-line--add">+                             style = MaterialTheme.typography.titleMedium,</span><span class="diff-line diff-line--add">+                         )</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                     // 削除すると、この Todo を見る画面の意味が無くなるので、呼び出し側が一覧へ戻る</span><span class="diff-line diff-line--add">+                     OutlinedButton(onClick = onDelete, modifier = Modifier.testTag(&quot;detail_delete&quot;)) {</span><span class="diff-line diff-line--add">+                         Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.padding(end = 8.dp))</span><span class="diff-line diff-line--add">+                         Text(&quot;削除&quot;)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  ...</span><span class="diff-line">  @Composable</span><span class="diff-line">  private fun TodoDetailScreenPreview() {</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoDetailScreen(todo = demoTodoList[1], onBack = {})</span><span class="diff-line diff-line--add">+         TodoDetailScreen(todo = demoTodoList[1], onBack = {}, onToggle = {}, onDelete = {})</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>TodoDetailPage</code> で、操作を ViewModel のメソッドにつなぎます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoDetailPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.SideEffect</span><span class="diff-line">  import androidx.compose.runtime.getValue</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.mutableStateOf</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.remember</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.setValue</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line">  import androidx.lifecycle.compose.collectAsStateWithLifecycle</span><span class="diff-line diff-line--add">+ import com.handson.android01.kotlin.Todo</span><span class="diff-line">  </span><span class="diff-line">  // 詳細画面の stateful な薄いラッパー。一覧と同じ ViewModel（呼び出し側から渡される）の状態から、id の Todo を探して渡す</span><span class="diff-line">  @Composable</span><span class="diff-line">  ...</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line">  ) {</span><span class="diff-line">      val uiState by viewModel.uiState.collectAsStateWithLifecycle()</span><span class="diff-line diff-line--add">+     // 最後に見つかった Todo を覚えておく。削除して一覧へ戻るアニメーションの間も、</span><span class="diff-line diff-line--add">+     // この画面は残っているため、見つからなくなった後はこれを表示する</span><span class="diff-line diff-line--add">+     var lastFound by remember { mutableStateOf&lt;Todo?&gt;(null) }</span><span class="diff-line diff-line--add">+     val found = uiState.todos.find { it.id == todoId }</span><span class="diff-line diff-line--add">+     SideEffect { if (found != null) lastFound = found }</span><span class="diff-line">      TodoDetailScreen(</span><span class="diff-line diff-line--remove">-         todo = uiState.todos.find { it.id == todoId },</span><span class="diff-line diff-line--add">+         todo = found ?: lastFound,</span><span class="diff-line">          onBack = onBack,</span><span class="diff-line diff-line--add">+         onToggle = { done -&gt; viewModel.toggleTodo(todoId, done) },</span><span class="diff-line diff-line--add">+         // 削除して、一覧へ戻る。データは一覧と同じ ViewModel にあるので、戻った一覧からもこの行が消えている</span><span class="diff-line diff-line--add">+         onDelete = {</span><span class="diff-line diff-line--add">+             viewModel.deleteTodo(todoId)</span><span class="diff-line diff-line--add">+             onBack()</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line">          modifier = modifier,</span><span class="diff-line">      )</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>onToggle</code>: 07 で作った <code>toggleTodo(id, done)</code> をそのまま呼びます。</li>
+            <li><code>onDelete</code>: <code>deleteTodo(todoId)</code> の後に、同じイベントの中で <code>onBack()</code> を呼んで一覧へ戻ります。<code>onBack()</code> を呼ばないと詳細に残ったままになり、「この Todo は見つかりません」が表示され続けます。</li>
+            <li><code>lastFound</code>: 最後に見つかった Todo を覚えておき、見つからない間はそれを表示します。削除して一覧へ戻るアニメーションの間も、詳細の画面は composition に残ります。その間は削除済みの Todo が見つからないので、覚えておかないと「この Todo は見つかりません」が一瞬表示されます。開いた時点で見つからない場合は、覚えた値が無いので従来どおり「見つかりません」を表示します。</li>
+            <li><code>SideEffect</code>: <code>lastFound</code> への書き込みを、composition の最中ではなく、composition が成功した後に実行します。composition の最中に状態を書き換えないためです。</li>
+          </ul>
+
+          <p>筆者の環境では、<code>adb shell settings put global animator_duration_scale 10</code> でアニメーションを 10 倍に遅くして確かめました。削除の直後から画面を連続で撮ると、<code>lastFound</code> が無いコードでは詳細の全面に「この Todo は見つかりません」が写りました。<code>lastFound</code> を入れたコードでは写らず、詳細が残ったまま一覧へ切り替わりました。</p>
+
+          <p>アプリをインストールし直して、詳細の操作が一覧に反映されることを確かめます。筆者の環境での結果は次のとおりです（1 回の実測）。</p>
+
+          <table>
+            <thead>
+            <tr><th>操作</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>Task 2</code> を開き、チェックボックスを押す</td><td>詳細の表示が「完了」に変わる</td></tr>
+            <tr><td>そのまま一覧へ戻る</td><td>サマリが <code>20 件中 8 件完了</code> になる。<code>Task 2</code> は「完了」のセクションへ移り、未完了の先頭の行は <code>Task 3</code> になる</td></tr>
+            <tr><td>（別の実行で）<code>Task 3</code> を開き、「削除」を押す</td><td>一覧へ戻り、サマリが <code>19 件中 7 件完了</code> になる。<code>Task 3</code> の行が無くなる</td></tr>
+            </tbody>
+          </table>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">詳細だけが持つ状態ができたら、NavEntry ごとの ViewModel を使う</p>
+              <p>Navigation 3 では、バックスタックの 1 つ 1 つの画面を <code>NavEntry</code> と呼びます。<code>lifecycle-viewmodel-navigation3</code>（2.11.0、安定版）には <code>rememberViewModelStoreNavEntryDecorator()</code> があります。これを使うと、<code>entry</code> の中で呼んだ <code>viewModel()</code> が NavEntry ごとに分かれます。画面を閉じると、その ViewModel も破棄されます。今の詳細画面には自分だけの状態が無いので、この項目では入れていません。</p>
+              <p>入れた場合、<code>entry</code> の中で呼ぶ <code>viewModel()</code> は Activity ではなく NavEntry の持ち物になります。一覧と詳細で共有したい ViewModel は、今の形のように <code>NavDisplay</code> の外で作って渡します。</p>
+            </div>
+          </div>
+
+          <p>ビルドとテストを実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 41s</span><span class="terminal__line">86 actionable tasks: 14 executed, 72 up-to-date</span><span class="terminal__line">Configuration cache entry reused.</span></pre>
+</div>
+
+          <p>このステップではテストを足していないので、UI テスト 56 件・単体テスト 53 件のままです。詳細画面のテストは、ステップ 3 で作ります。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>テストが <code>BUILD SUCCESSFUL</code> で終わり、詳細で完了にした Todo が一覧でも完了になっていれば OK です。詳細で削除すると一覧へ戻り、その行が消えていることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">バックスタックの保存とナビゲーションのテスト</h3>
+        </div>
+        <div class="step__body">
+
+          <p>ステップ 1 で確かめたとおり、<code>remember</code> で持ったバックスタックは回転で消えます。これを <code>rememberNavBackStack</code> に替え、回転とプロセスの再生成の後も、開いていた詳細画面が戻るようにします。<code>rememberNavBackStack</code> は、バックスタックを保存できる形に変換して保存します。そのために、キーに <code>@Serializable</code> を付けます。</p>
+          <p>まず、kotlinx.serialization の依存と、Kotlin 公式のシリアライズ用プラグインを追加します。プラグインの版は、Kotlin 本体と同じ指定（<code>kotlin</code>）を使います。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  composeBom = &quot;2026.09.00&quot;</span><span class="diff-line">  kotlinxCoroutines = &quot;1.11.0&quot;</span><span class="diff-line">  navigation3 = &quot;1.2.0&quot;</span><span class="diff-line diff-line--add">+ kotlinxSerialization = &quot;1.11.0&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  androidx-navigation3-ui = { group = &quot;androidx.navigation3&quot;, name = &quot;navigation3-ui&quot;, version.ref = &quot;navigation3&quot; }</span><span class="diff-line">  kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  kotlinx-coroutines-test = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-test&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line diff-line--add">+ kotlinx-serialization-core = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-serialization-core&quot;, version.ref = &quot;kotlinxSerialization&quot; }</span><span class="diff-line">  </span><span class="diff-line">  [plugins]</span><span class="diff-line">  android-application = { id = &quot;com.android.application&quot;, version.ref = &quot;agp&quot; }</span><span class="diff-line">  kotlin-compose = { id = &quot;org.jetbrains.kotlin.plugin.compose&quot;, version.ref = &quot;kotlin&quot; }</span><span class="diff-line">  kotlin-parcelize = { id = &quot;org.jetbrains.kotlin.plugin.parcelize&quot;, version.ref = &quot;kotlin&quot; }</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--add">+ kotlin-serialization = { id = &quot;org.jetbrains.kotlin.plugin.serialization&quot;, version.ref = &quot;kotlin&quot; }</span></pre>
+</div>
+
+          <p>末尾の空行は、プラグインの行を足したときに無くなっています。空行が残っていても動作は変わりません。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      alias(libs.plugins.android.application)</span><span class="diff-line">      alias(libs.plugins.kotlin.compose)</span><span class="diff-line">      alias(libs.plugins.kotlin.parcelize)</span><span class="diff-line diff-line--add">+     alias(libs.plugins.kotlin.serialization)</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line">  android {</span><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.navigation3.runtime)</span><span class="diff-line">      implementation(libs.androidx.navigation3.ui)</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line diff-line--add">+     implementation(libs.kotlinx.serialization.core)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">      testImplementation(libs.kotlinx.coroutines.test)</span><span class="diff-line">      androidTestImplementation(platform(libs.androidx.compose.bom))</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>使うのは <code>kotlinx-serialization-core</code> だけです。保存先は Android の <code>Bundle</code> で、JSON にはしないので、<code>kotlinx-serialization-json</code> は足しません。</p>
+          <p>キーに <code>@Serializable</code> を付けます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/navigation/TodoKeys.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.navigation</span><span class="diff-line">  </span><span class="diff-line">  import androidx.navigation3.runtime.NavKey</span><span class="diff-line diff-line--add">+ import kotlinx.serialization.Serializable</span><span class="diff-line">  </span><span class="diff-line">  // 画面を表す「キー」。Navigation 3 では、バックスタックの中身はこのキーが並んだただのリスト。</span><span class="diff-line diff-line--add">+ // @Serializable: キーを保存できる形（Bundle に入る値）に変換するための印。rememberNavBackStack は、画面回転やプロセスの再生成のときにバックスタックをこの形で保存する。</span><span class="diff-line">  // NavKey は印を付けるだけのインターフェース（メソッドは無い）。object は引数の無い画面、data class は引数付きの画面に使う</span><span class="diff-line diff-line--add">+ @Serializable</span><span class="diff-line">  data object TodoList : NavKey</span><span class="diff-line">  </span><span class="diff-line">  // 詳細画面は、どの Todo を見せるかを id で持つ。キーが画面の「引数」になる</span><span class="diff-line diff-line--add">+ @Serializable</span><span class="diff-line">  data class TodoDetail(val id: Int) : NavKey</span></pre>
+</div>
+
+          <p><code>TodoApp</code> のバックスタックを、<code>rememberNavBackStack</code> に替えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/navigation/TodoApp.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.navigation</span><span class="diff-line">  </span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line diff-line--remove">- import androidx.compose.runtime.mutableStateListOf</span><span class="diff-line diff-line--remove">- import androidx.compose.runtime.remember</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line">  import androidx.lifecycle.viewmodel.compose.viewModel</span><span class="diff-line diff-line--remove">- import androidx.navigation3.runtime.NavKey</span><span class="diff-line">  import androidx.navigation3.runtime.entryProvider</span><span class="diff-line diff-line--add">+ import androidx.navigation3.runtime.rememberNavBackStack</span><span class="diff-line">  import androidx.navigation3.ui.NavDisplay</span><span class="diff-line">  import com.handson.android01.ui.screens.TodoDetailPage</span><span class="diff-line">  import com.handson.android01.ui.screens.TodoListPage</span><span class="diff-line">  ...</span><span class="diff-line">      // NavDisplay の外（Activity が持ち主の ViewModelStoreOwner）で作るので、一覧と詳細で同じインスタンスを使える</span><span class="diff-line">      viewModel: TodoListViewModel = viewModel(),</span><span class="diff-line">  ) {</span><span class="diff-line diff-line--remove">-     val backStack = remember { mutableStateListOf&lt;NavKey&gt;(TodoList) }</span><span class="diff-line diff-line--add">+     // rememberNavBackStack: remember と同じ使い方で、画面回転とプロセスの再生成のあとも中身が戻るバックスタックを作る。</span><span class="diff-line diff-line--add">+     // 返るのは NavBackStack&lt;NavKey&gt;（MutableList なので、add と removeLastOrNull はこれまでどおり）</span><span class="diff-line diff-line--add">+     val backStack = rememberNavBackStack(TodoList)</span><span class="diff-line">  </span><span class="diff-line">      NavDisplay(</span><span class="diff-line">          backStack = backStack,</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>rememberNavBackStack(TodoList)</code> は、<code>remember</code> と同じ書き方で使えます。返る <code>NavBackStack&lt;NavKey&gt;</code> は <code>MutableList</code> なので、<code>add</code>・<code>removeLastOrNull</code> と <code>NavDisplay</code> の呼び方は変わりません。</li>
+            <li>保存されるのは、開いている画面のキー（<code>TodoDetail</code> と <code>id</code>）だけです。Todo の中身は保存しません。中身は 07 の <code>SavedStateHandle</code> が保存しています。</li>
+            <li>この項目では、Android 用の <code>rememberNavBackStack(vararg elements: NavKey)</code> を使います。KDoc によると、内部でリフレクションを使うので、キーの型を事前に登録しなくて済みます。</li>
+          </ul>
+
+          <p>インストールし直し、<code>Task 2</code> の詳細を開いた状態で、ステップ 1 と同じコマンドで横向きにし、縦向きに戻します（<code>user_rotation 1</code> → <code>0</code>）。筆者の環境では、横向きでも縦向きに戻した後も、<code>Task 2</code> の詳細が表示されたままでした。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">回転を試したら、向きを元に戻す</p>
+              <p>自動回転を止めたままにすると、この後の UI テストに影響します。試し終えたら、自動回転と縦向きに戻します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system accelerometer_rotation 1</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system user_rotation 0</span></pre>
+</div>
+
+            </div>
+          </div>
+
+          <p>プロセスの再生成も試します。<code>Task 2</code> の詳細を開いた状態でホームボタンを押し、07 と同じ手順でプロセスを終了してから、もう一度起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell input keyevent KEYCODE_HOME</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line">6206</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am kill com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">（中略）</span><span class="terminal__line">Warning: Activity not started, its current task has been brought to the front</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line">6339</span></pre>
+</div>
+
+          <p><code>am kill</code> の後の <code>pidof</code> は何も出力せず、起動後は新しい PID です（実行ごとに変わる値です）。筆者の環境では、新しいプロセスでも <code>Task 2</code> の詳細が表示されました。ここで戻る操作をすると、一覧（<code>20 件中 7 件完了</code>）へ戻ります。ステップ 1 では回転だけで一覧に戻っていたのが、回転でもプロセスの再生成でも詳細のまま残るようになりました。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@Serializable</code> を付け忘れても、コンパイルは通る</p>
+              <p><code>TodoDetail</code> だけ <code>@Serializable</code> を外してビルドすると、コンパイルは通ります。<code>Task 2</code> を開いてホームボタンを押すと、アプリがクラッシュしました。回転やプロセスの再生成を待たず、バックグラウンドへ移る時点（状態を保存する時点）で落ちます。logcat の抜粋です（実験後は元へ戻しました）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">logcat</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">E AndroidRuntime: FATAL EXCEPTION: main</span><span class="terminal__line">E AndroidRuntime: kotlinx.serialization.SerializationException: Serializer for class &#x27;TodoDetail&#x27; is not found.</span><span class="terminal__line">E AndroidRuntime: Please ensure that class is marked as &#x27;@Serializable&#x27; and that the serialization compiler plugin is applied.</span><span class="terminal__line">E AndroidRuntime: 	at kotlinx.serialization.SerializersKt__SerializersKt.serializer(Serializers.kt:327)</span><span class="terminal__line">E AndroidRuntime: 	at androidx.navigation3.runtime.NavKeySerializer.serialize(NavKeySerializer.android.kt:93)</span><span class="terminal__line">E AndroidRuntime: 	at androidx.savedstate.compose.serialization.serializers.SnapshotStateListSerializer.serialize(SnapshotStateListSerializer.kt:62)</span></pre>
+</div>
+
+              <p>一覧だけを見ている間は気づけません。キーを足したら、<code>NavKey</code> と一緒に <code>@Serializable</code> も付けます。</p>
+            </div>
+          </div>
+
+          <p>画面遷移を UI テストで確かめます。まず、Activity を作り直しても詳細が残ることを確かめるテストです。<code>androidTest/.../ui/navigation/TodoNavigationRestorationTest.kt</code> を新しく作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/navigation/TodoNavigationRestorationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.navigation
+
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.MainActivity
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+// 実際の Activity を作り直しても（画面回転と同じ）、開いている詳細画面が残ることを確かめる
+@RunWith(AndroidJUnit4::class)
+class TodoNavigationRestorationTest {
+
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()
+
+    @Test
+    fun detailScreen_survivesActivityRecreation() {
+        // 一覧は ViewModel が 1 秒ほど「読み込み」をしてから出る。行が出るのを待つ
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            composeTestRule.onAllNodesWithTag(&quot;todo_title&quot;).fetchSemanticsNodes().isNotEmpty()
+        }
+        composeTestRule.onAllNodesWithTag(&quot;todo_title&quot;)[0].performClick()
+        composeTestRule.onNodeWithTag(&quot;detail_title&quot;).assertTextEquals(&quot;Task 2&quot;)
+
+        composeTestRule.activityRule.scenario.recreate()
+
+        // 作り直したあとも、バックスタックが戻って詳細が表示される
+        composeTestRule.onNodeWithTag(&quot;detail_title&quot;).assertTextEquals(&quot;Task 2&quot;)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li>07 の <code>TodoListViewModelRecreationTest</code> と同じく、<code>createAndroidComposeRule&lt;MainActivity&gt;()</code> で実際の <code>MainActivity</code> を起動し、<code>scenario.recreate()</code> で Activity を作り直します。</li>
+            <li>実際のアプリの ViewModel は、07 で作った読み込み処理のあとに一覧を出します。行が出るまで <code>waitUntil</code> で待ちます。</li>
+            <li>先頭の行（<code>todo_title</code> の 0 番目）は、未完了の先頭の <code>Task 2</code> です。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">このテストは、保存の抜けを検出できる</p>
+              <p>試しにバックスタックを <code>remember { mutableStateListOf&lt;NavKey&gt;(TodoList) }</code> に戻し、このテストだけを実行しました。作り直した後に詳細が見つからず、テストは失敗しました（実験後は元へ戻しました）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest FAILED</span><span class="terminal__line">java.lang.AssertionError: Failed to assert the following: (Text + EditableText = [Task 2])</span><span class="terminal__line">Reason: Expected exactly &#x27;1&#x27; node but could not find any node that satisfies: (TestTag = &#x27;detail_title&#x27;)</span></pre>
+</div>
+
+              <p>回転やプロセスの再生成の後の画面は、<code>remember</code> と <code>rememberNavBackStack</code> で見た目が変わりません。違いは、このようなテストか、実機の回転で確かめます。</p>
+            </div>
+          </div>
+
+          <p>次に、一覧と詳細の行き来をテストします。<code>androidTest/.../ui/navigation/TodoNavigationTest.kt</code> を新しく作ります。<code>TodoApp</code> 全体を、07 で作った <code>testViewModel()</code>（デモデータ 3 件、待ち時間 0）で動かします。テストは次の 6 件です。</p>
+
+          <table>
+            <thead>
+            <tr><th>テスト</th><th>確かめること</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>tappingTitle_opensDetailOfThatTodo</code></td><td>タイトルを押すと、その Todo の詳細（タイトルと「未完了」）が出て、一覧は画面から外れる</td></tr>
+            <tr><td><code>appBarBackButton_returnsToList</code></td><td>上部バーの戻るボタンで一覧へ戻る</td></tr>
+            <tr><td><code>systemBack_returnsToList</code></td><td>システムの戻る操作（<code>Espresso.pressBack()</code>）で一覧へ戻る</td></tr>
+            <tr><td><code>togglingInDetail_isReflectedInList</code></td><td><code>3 件中 2 件完了</code> → 詳細で完了にする → 戻ると <code>3 件中 3 件完了</code></td></tr>
+            <tr><td><code>deletingInDetail_returnsToListWithoutThatRow</code></td><td>詳細で削除すると一覧へ戻り、その行が無くなる</td></tr>
+            <tr><td><code>deletingInDetail_neverShowsNotFoundDuringTransition</code></td><td>削除して一覧へ戻るアニメーションの途中で、「この Todo は見つかりません」（<code>detail_not_found</code>）が 1 フレームも表示されない</td></tr>
+            </tbody>
+          </table>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoNavigationTest.kt</code> の全文を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/navigation/TodoNavigationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.navigation
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.test.espresso.Espresso
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.screens.testViewModel
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+// 画面遷移（一覧 ⇄ 詳細）のテスト。TodoApp 全体を、デモデータの ViewModel で動かす
+@RunWith(AndroidJUnit4::class)
+class TodoNavigationTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Before
+    fun setUp() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoApp(viewModel = testViewModel())
+            }
+        }
+    }
+
+    // 一覧は「未完了」「完了」の順なので、先頭の行は未完了の &quot;build compose screen&quot;
+    private fun openFirstTodo() {
+        composeTestRule.onAllNodesWithTag(&quot;todo_title&quot;)[0].performClick()
+    }
+
+    @Test
+    fun tappingTitle_opensDetailOfThatTodo() {
+        openFirstTodo()
+
+        composeTestRule.onNodeWithTag(&quot;detail_title&quot;).assertTextEquals(&quot;Build Compose Screen&quot;)
+        composeTestRule.onNodeWithTag(&quot;detail_status&quot;).assertTextEquals(&quot;未完了&quot;)
+        // 一覧は画面から外れている
+        composeTestRule.onNodeWithTag(&quot;todo_list&quot;).assertDoesNotExist()
+    }
+
+    @Test
+    fun appBarBackButton_returnsToList() {
+        openFirstTodo()
+
+        composeTestRule.onNodeWithTag(&quot;detail_back&quot;).performClick()
+
+        composeTestRule.onNodeWithTag(&quot;detail_title&quot;).assertDoesNotExist()
+        composeTestRule.onNodeWithTag(&quot;todo_list&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun systemBack_returnsToList() {
+        openFirstTodo()
+
+        // システムの戻る操作（戻るボタン・ジェスチャー）。NavDisplay の onBack が呼ばれる
+        Espresso.pressBack()
+
+        composeTestRule.onNodeWithTag(&quot;detail_title&quot;).assertDoesNotExist()
+        composeTestRule.onNodeWithTag(&quot;todo_list&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun togglingInDetail_isReflectedInList() {
+        composeTestRule.onNodeWithText(&quot;3 件中 2 件完了&quot;).assertIsDisplayed()
+        openFirstTodo()
+
+        composeTestRule.onNodeWithTag(&quot;detail_checkbox&quot;).performClick()
+        composeTestRule.onNodeWithTag(&quot;detail_status&quot;).assertTextEquals(&quot;完了&quot;)
+        composeTestRule.onNodeWithTag(&quot;detail_back&quot;).performClick()
+
+        composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun deletingInDetail_returnsToListWithoutThatRow() {
+        openFirstTodo()
+
+        composeTestRule.onNodeWithTag(&quot;detail_delete&quot;).performClick()
+
+        composeTestRule.onNodeWithTag(&quot;detail_title&quot;).assertDoesNotExist()
+        composeTestRule.onNodeWithText(&quot;2 件中 2 件完了&quot;).assertIsDisplayed()
+        composeTestRule.onNodeWithText(&quot;Build Compose Screen&quot;).assertDoesNotExist()
+    }
+
+    @Test
+    fun deletingInDetail_neverShowsNotFoundDuringTransition() {
+        openFirstTodo()
+        // 詳細への遷移アニメーションが終わってから止める
+        composeTestRule.onNodeWithTag(&quot;detail_delete&quot;).assertIsDisplayed()
+
+        // アニメーションを止め、削除して戻る途中の状態で確かめる
+        composeTestRule.mainClock.autoAdvance = false
+        composeTestRule.onNodeWithTag(&quot;detail_delete&quot;).performClick()
+        repeat(10) {
+            composeTestRule.mainClock.advanceTimeByFrame()
+            composeTestRule.onNodeWithTag(&quot;detail_not_found&quot;).assertDoesNotExist()
+        }
+        composeTestRule.mainClock.autoAdvance = true
+        composeTestRule.onNodeWithTag(&quot;detail_title&quot;).assertDoesNotExist()
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+
+          <p>文字入力を伴わないので、操作は <code>performClick()</code> で足ります。<code>Thread.sleep</code> も使っていません。<code>deletingInDetail_neverShowsNotFoundDuringTransition</code> は、<code>mainClock.autoAdvance = false</code> でテストの時計を止めます。削除の後に 1 フレームずつ進め、そのたびに「見つかりません」が無いことを確かめます。<code>lastFound</code> が無いコードでは、このテストは <code>assertDoesNotExist</code> で失敗しました。</p>
+          <p>2 つのテストクラス（7 件）だけを 5 回続けて実行したところ、筆者の環境では毎回 7 件すべて成功しました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.package=com.handson.android01.ui.navigation</span><span class="terminal__line">（中略。5 回分の最終行と、テスト結果の XML から数えた件数）</span><span class="terminal__line">BUILD SUCCESSFUL in 14s   （tests 7, failures 0）</span><span class="terminal__line">BUILD SUCCESSFUL in 14s   （tests 7, failures 0）</span><span class="terminal__line">BUILD SUCCESSFUL in 15s   （tests 7, failures 0）</span><span class="terminal__line">BUILD SUCCESSFUL in 17s   （tests 7, failures 0）</span><span class="terminal__line">BUILD SUCCESSFUL in 14s   （tests 7, failures 0）</span></pre>
+</div>
+
+          <p>ビルド・lint・単体テスト・UI テストをまとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 57s</span></pre>
+</div>
+
+          <p>UI テストは 07 の 56 件に新しい 7 件を足した 63 件、単体テストは 53 件で、すべて成功します。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">プロセスの再生成は、UI テストでは確かめていない</p>
+              <p><code>scenario.recreate()</code> が確かめるのは、Activity の作り直し（画面回転と同じ）までです。プロセスの再生成は、上の <code>am kill</code> の手順で実機（エミュレータ）で確かめます。また、この項目で確かめたのは debug ビルドだけです。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>テストが <code>BUILD SUCCESSFUL</code> で終わり、UI テスト 63 件と単体テスト 53 件が成功していれば OK です。エミュレータで、詳細を開いたまま回転・プロセスの再生成をしても詳細が残ることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、完成状態でビルド・lint・単体テスト・UI テストをまとめて実行します。エミュレータは縦向きにして、起動しておいてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 57s</span></pre>
+</div>
+
+          <p>筆者の環境では、起動し直したエミュレータでアプリをアンインストールしてから実行しました（ステップ 3 と同じ実行です）。ステップ 3 に続けてもう一度実行すると、入力が変わっていないタスクは <code>up-to-date</code> になり、単体テストは再実行されず前回の結果が使われます。結果をまとめます。</p>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト（<code>test</code>）</td><td>53 件すべて成功（07 と同じ）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>63 件すべて成功（07 の 56 件から 7 件増えた）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 9 件（<code>app/build/reports/lint-results-debug.txt</code>）。内訳は <code>UnusedResources</code> × 7、<code>AndroidGradlePluginVersion</code>、<code>RedundantLabel</code> です。ほかにヒント（<code>AutoboxingStateCreation</code>）が 1 件出ます。07 と同じ件数で、この項目で足したコードへの指摘はありません</td></tr>
+            <tr><td>debug APK</td><td><code>app/build/outputs/apk/debug/app-debug.apk</code> は約 12MB</td></tr>
+            </tbody>
+          </table>
+
+          <table>
+            <thead>
+            <tr><th>テストクラス</th><th>種類</th><th>件数</th><th>この項目での変更</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>TodoNavigationTest</code></td><td>UI</td><td>6</td><td>ステップ 3 で追加</td></tr>
+            <tr><td><code>TodoNavigationRestorationTest</code></td><td>UI</td><td>1</td><td>ステップ 3 で追加</td></tr>
+            <tr><td>07 までの UI テスト</td><td>UI</td><td>56</td><td>変更なし</td></tr>
+            <tr><td>07 までの単体テスト</td><td>単体</td><td>53</td><td>準備で <code>BasicsTest</code> の期待値を変えた</td></tr>
+            </tbody>
+          </table>
+
+          <p>エミュレータでも操作します。アプリをインストールして起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">Installed on 1 device.</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span></pre>
+</div>
+
+          <p>起動の数秒後に、07 と同じく <code>uiautomator dump</code> で画面の文字を取り出します（筆者は起動の約 4 秒後に実行しました）。取り出した text と content-desc を、画面の上から順に並べると次のとおりです。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">一覧画面</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">20 件中 7 件完了 / すべて / 未完了 / 完了 / Task 2 / 未完了 / 削除 / Task 3 / 未完了 / 削除 / Task 5 / 未完了 / 削除 / Task 6 / 未完了 / 削除 / Task 8 / 未完了 / 削除 / Task 9 / 未完了 / 削除 / Task 11 / 未完了 / 削除 / Task 12 / 未完了 / 削除 / Task 14 / 未完了 / 削除 / 未完了 / Todo / 完了済みをすべて削除 / 13 / 追加</code></pre>
+</div>
+
+          <p><code>Task 2</code> のタイトルを押した後の詳細画面は、次のとおりです。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">詳細画面</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">Task 2 / 未完了 / 削除 / 戻る / Todo の詳細</code></pre>
+</div>
+
+          <p>「戻る」は上部バーの ← の content-desc、「削除」は削除ボタンです。画面では、上部バー（← と「Todo の詳細」）の下に、見出し <code>Task 2</code>、チェックボックスと「未完了」、枠付きの「削除」ボタンが上に寄って並び、その下は余白になります。</p>
+
+          <table>
+            <thead>
+            <tr><th>操作</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>行のタイトルを押す（ステップ 1）</td><td>その Todo の詳細が開く。戻る操作か上部バーの ← で一覧へ戻る</td></tr>
+            <tr><td>詳細でチェック・削除（ステップ 2）</td><td>一覧の完了状態とサマリに反映される。削除すると一覧へ戻る</td></tr>
+            <tr><td>詳細を開いたまま回転、ホームボタン → <code>am kill</code> → <code>am start</code>（ステップ 3）</td><td>詳細が開いたまま戻る。戻る操作で一覧へ戻る</td></tr>
+            </tbody>
+          </table>
+
+          <p>確認が終わったら、エミュレータと Gradle デーモンを止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>上のテストの実行が <code>BUILD SUCCESSFUL</code> で終わり、UI テスト 63 件と単体テスト 53 件が成功していれば OK です。エミュレータで、一覧と詳細の行き来と、回転・プロセスの再生成の後の復元も確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="not-covered">この項目で扱わなかったこと</h2>
+      <p>ボトムナビゲーション（複数のバックスタックを持つ構成）、画面遷移のアニメーションのカスタマイズ、deep link、list-detail の 2 ペイン表示は扱っていません。</p>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid08</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">キー・バックスタック・<code>entryProvider</code>・<code>NavDisplay</code> の役割を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">進む・戻るを、バックスタック（リスト）の <code>add</code> と <code>removeLastOrNull</code> で書いた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">行全体ではなくタイトルだけを押せるようにした理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">一覧の ViewModel を <code>NavDisplay</code> の外で作り、詳細と共有する理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>remember</code> のバックスタックが回転で消えることを確かめ、<code>rememberNavBackStack</code> と <code>@Serializable</code> で直した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">詳細を開いたまま <code>am kill</code> して、詳細が復元されることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>./gradlew assembleDebug lint test connectedDebugAndroidTest</code> で UI テスト 63 件・単体テスト 53 件を通した</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Unknown screen ...</code> で落ちる</p>
+              <p>バックスタックに追加したキーの <code>entry&lt;...&gt;</code> が、<code>entryProvider</code> にありません。キーを足したら、対応する <code>entry</code> も足します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>NavDisplay backstack cannot be empty</code> で落ちる</p>
+              <p>バックスタックが空になりました。<code>NavDisplay</code> には、少なくとも 1 つのキーが入ったリストを渡します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">回転すると一覧に戻ってしまう</p>
+              <p>バックスタックを <code>remember</code> で持っています。<code>rememberNavBackStack</code> に替え、キーに <code>@Serializable</code> を付けます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ホームボタンを押すと <code>Serializer for class '...' is not found</code> で落ちる</p>
+              <p>キーに <code>@Serializable</code> が付いていません。<code>build.gradle.kts</code> に <code>kotlin.serialization</code> プラグインがあることも確かめます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">詳細で削除した後も「この Todo は見つかりません」が表示されたまま、一覧へ戻らない</p>
+              <p><code>deleteTodo</code> の後に <code>onBack()</code> を呼んでいません。削除と戻る操作は、同じイベントの中で続けて呼びます。一覧へは戻るのに、戻る途中で「見つかりません」が一瞬表示される場合は、<code>TodoDetailPage</code> の <code>lastFound</code>（最後に見つかった Todo を表示する処理）が抜けています。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">横向きのまま UI テストを実行して、複数のテストが落ちる</p>
+              <p>回転を試した後は、次の 2 つのコマンドで向きを戻してから実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system accelerometer_rotation 1</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system user_rotation 0</span></pre>
+</div>
+
+            </div>
+          </div>
+
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        画面を表すキー（<code>TodoList</code>・<code>TodoDetail(id)</code>）を作り、キーのリストをバックスタックとして自分で持ちました。進む・戻るはリストの <code>add</code> と <code>removeLastOrNull</code> で、<code>NavDisplay</code> が末尾のキーの画面を <code>entryProvider</code> から選んで表示します。
+        詳細画面は一覧と同じ ViewModel を見るので、詳細での完了切替と削除がそのまま一覧に反映されます。
+        最後に、バックスタックを <code>rememberNavBackStack</code> と <code>@Serializable</code> で保存しました。回転とプロセスの再生成の後も詳細が戻ることは、UI テストと <code>am kill</code> で確かめました。</p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>android/08-navigation3</code> の <code>android/08-navigation3/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../07-viewmodel-stateflow/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">07: ViewModel と StateFlow</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">09: Ktor と serialization で API 取得</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
