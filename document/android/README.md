@@ -37,7 +37,7 @@ Kotlin + Jetpack Compose を使った Android アプリ開発を学ぶトラッ�
 | 05 | [Material3 と LazyColumn](./05-material3-lazycolumn/index.html) | `LazyColumn` で一覧を表示し、`Scaffold` のスロットでスクロール位置に応じたボタンと、削除の取り消し付き Snackbar を実装できる | 45分 |
 | 06 | [Material3 の画面部品](./06-material3-components/index.html) | `SwipeToDismissBox` のスワイプ削除、`stickyHeader` と `FilterChip` のセクション分けと絞り込み、`ModalBottomSheet` と `AlertDialog` で一覧の操作を作れる | 60分 |
 | 07 | [ViewModel と StateFlow](./07-viewmodel-stateflow/index.html) | 一覧の状態を ViewModel と `StateFlow` に移し、`SavedStateHandle` でプロセスの終了から復元し、`viewModelScope` の非同期処理を単体テストできる | 60分 |
-| 08 | Navigation 3 | Navigation 3 で画面遷移とバックスタック管理を実装できる | 45分 |
+| 08 | [Navigation 3](./08-navigation3/index.html) | キーとバックスタックと `NavDisplay` で一覧と詳細の画面遷移を作り、`rememberNavBackStack` で回転とプロセスの再生成の後も開いていた画面を復元できる | 60分 |
 | 09 | Ktor と serialization で API 取得 | Ktor Client と kotlinx.serialization を使った API 通信を実装できる | 45分 |
 | 10 | Room 3 と DataStore | Room 3 でのローカル DB 操作と DataStore での設定保存を実装できる | 45分 |
 | 11 | Hilt | Hilt を使った依存性注入を実装できる | 45分 |
