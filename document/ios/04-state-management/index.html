@@ -1,0 +1,1207 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04: @State・@Binding・@Observable | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">04</li>
+        </ol>
+        <h1 class="lesson-title">@State・@Binding・@Observable</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: SwiftUI で表示だけの画面を組み立てられ、次にタップや入力で画面を変えたい人</li>
+          <li class="lesson-meta__item">📋 前提: 03 で <code>ProfileHeader</code>・<code>TodoRow</code> を作った <code>HandsonApp</code> プロジェクトが手元にあること。構造体とクラスの違い、<code>mutating</code> の意味を知っていること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../03-swiftui-basics/index.html">03 SwiftUI 入門</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>@State</code> で View が所有する値を持ち、ボタンやトグルの操作で書き換える</li>
+          <li><code>@Binding</code> と <code>$</code> で親の状態を子の View に渡し、子から書き換える</li>
+          <li><code>@Observable</code> の参照型のモデル（<code>TodoStore</code>）を作り、<code>@State</code> で所有する</li>
+          <li><code>@Environment</code> でモデルを注入し、<code>@Bindable</code> で Binding を取り出す</li>
+          <li><code>@State</code>・<code>$</code>・<code>@Bindable</code>・<code>.environment</code> を忘れたときのエラーやクラッシュの文言を確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        03 で作った「データを表示するだけの画面」に、操作で変わる状態を加えます。
+        完成すると、タップ回数を数えるボタン、完了済みの ToDo を隠すトグル、行のタップによる完了・未完了の切り替え、テキストフィールドからの ToDo の追加ができるようになります。
+      </p>
+      <p>
+        状態の持ち方を、<code>@State</code>（View が所有する値）→ <code>@Binding</code>（親の状態への参照）→ <code>@Observable</code>（参照型のモデル）→ <code>@Environment</code>（モデルの注入）の順に、1 ステップに 1 つずつ導入します。
+        03 と同じく、Xcode の画面での操作と、同じ結果をターミナルで確かめるコマンドの両方を載せています。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            03 と同じく、macOS 26.6.2 / Xcode 27.0 / Swift 6.4 で動作を確認しています。シミュレータは iPhone 17（iOS 26.5）を使います。
+            バージョンは執筆時点（2026年10月）のものです。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">03 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            03 の完成コードをそのまま出発点にします。<code>03-swiftui-basics</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>04-state-management</code> にコピーします。
+            プロジェクト名・ターゲット名・Bundle Identifier（<code>com.example.HandsonApp</code>）は変えません。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 03-swiftui-basics 04-state-management</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 04-state-management/HandsonApp</span></pre>
+          </div>
+
+          <p>以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。コピーしたプロジェクトがそのままビルドでき、03 までの 18 テストが通ることを確かめます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 18 tests in 6 suites passed after 0.029 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+          </div>
+
+          <p>
+            ビルドの途中で表示される <code>appintentsmetadataprocessor</code> の <code>warning: Metadata extraction skipped, no AppIntents.framework dependency found</code> は、02・03 と同じく無視してかまいません。以降のビルドでも毎回表示されます。
+          </p>
+
+          <p>Xcode の場合は、<code>04-state-management/HandsonApp/HandsonApp.xcodeproj</code> を開き、<kbd>⌘</kbd> + <kbd>U</kbd>（<code>Product</code> &gt; <code>Test</code>）でテストを実行します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> と <code>Test run with 18 tests in 6 suites passed</code> が表示されれば準備完了です。この項目では、ステップ 3・4 でテストを 4 つ追加して 22 テストにします。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">@State でボタンとトグルを動かす</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            まず、ボタンを押した回数を画面に表示します。回数は <code>ContentView</code> のプロパティに持たせます。
+            試しに、<code>ContentView.swift</code> の <code>items</code> の下にふつうの <code>var</code> を足し、<code>ProfileHeader</code> の下にボタンを置いてビルドしてみます。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@State</code> を付けないとプロパティを書き換えられない</p>
+              <div class="code-block">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Swift</span>
+                  <span class="code-block__filename">HandsonApp/ContentView.swift（失敗する例）</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><code class="language-swift">    var tapCount = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ProfileHeader(profile: profile)
+
+            Button("タップ回数: \(tapCount)") {
+                tapCount += 1
+            }</code></pre>
+              </div>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/ContentView.swift:24:26: error: left side of mutating operator isn't mutable: 'self' is immutable</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+              </div>
+              <p>
+                <code>left side of mutating operator isn't mutable: 'self' is immutable</code>（<code>+=</code> の左辺が変更できない。<code>self</code> が変更不可）のエラーです。
+                <code>View</code> は構造体で、<code>body</code> は <code>mutating</code> ではありません。そのため、<code>body</code> の中のボタンのアクションから、値型のプロパティは書き換えられません。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            <code>@State</code> を付けると、値は View の外（SwiftUI が管理する保存領域）に置かれ、<code>body</code> の中から書き換えられるようになります。値が変わると SwiftUI が <code>body</code> を再評価し、画面が更新されます。
+            ボタンに加えて、完了済みの ToDo を表示するかどうかを切り替えるトグルも追加します。<code>ContentView.swift</code> 全体を次の内容に書き換えます。
+            03 にあった「Todo はありません」の表示と <code>List</code> についてのコメントは、ここで外します。<code>items</code> は固定の 3 件で空にならないため、空のときの表示は不要です。<code>List</code> は次の 05 で扱うので、そのコメントも外します。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  ContentView.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    let profile = Profile(name: "Taro Yamada", nickname: "Taro")
+
+    let items: [TodoItem] = [
+        TodoItem(title: "牛乳を買う", priority: .high),
+        TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),
+        TodoItem(title: "SwiftUI を勉強する"),
+    ]
+
+    @State private var tapCount = 0
+    @State private var showsDone = true
+
+    private var visibleItems: [TodoItem] {
+        items.filter { item in
+            if case .done = item.status {
+                return showsDone
+            }
+            return true
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ProfileHeader(profile: profile)
+
+            Button("タップ回数: \(tapCount)") {
+                tapCount += 1
+            }
+
+            Toggle("完了も表示", isOn: $showsDone)
+
+            Text("Todo")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(visibleItems, id: \.title) { item in
+                    TodoRow(item: item)
+                }
+            }
+
+            Spacer()
+        }
+        .padding()
+    }
+}
+
+#Preview {
+    ContentView()
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>@State private var tapCount = 0</code>: この View が所有する状態です。その View だけが持つ値なので、<code>private</code> にするのが慣例です。</li>
+            <li><code>Button("タップ回数: \(tapCount)") { tapCount += 1 }</code>: 1 つ目の引数がボタンの文字、後ろのクロージャが押したときのアクションです。<code>@State</code> の値の書き換えは、このようなアクションの中で行います。<code>body</code> の中で直接書き換える（描画の途中で状態を変える）ことは避けます。</li>
+            <li><code>Toggle("完了も表示", isOn: $showsDone)</code>: <code>$showsDone</code> は <code>Binding&lt;Bool&gt;</code> 型の値です。<code>@State</code> のプロパティに <code>$</code> を付けると、値そのものではなく、値を読み書きするための参照（Binding）が得られます。<code>Toggle</code> はこの Binding を通して <code>showsDone</code> を書き換えます。</li>
+            <li><code>visibleItems</code>: <code>showsDone</code> が <code>false</code> のときは、<code>.done</code> の ToDo を除いた配列を返します。<code>ForEach</code> はこの配列を表示します。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@State</code> の初期値が保存されるのは最初の 1 回だけ</p>
+              <p>
+                <code>= 0</code> や <code>= true</code> の初期値の式は、View が作られるたびに評価されます。ただし状態として保存されるのは最初の 1 回だけで、以後は保存された値が使われます。
+                View の構造体は描画のたびに作り直されますが、そのたびに状態が初期値へ戻るわけではありません。
+              </p>
+            </div>
+          </div>
+
+          <p>ビルドしてシミュレータで確かめます。シミュレータを起動し、ビルドした <code>.app</code> をインストールして起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl boot 'iPhone 17'</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: 70174</span></pre>
+          </div>
+
+          <p>
+            シミュレータがすでに起動している場合は <code>boot</code> を飛ばしてください。<code>launch</code> の出力の末尾の数字はプロセス ID で、実行するたびに変わります。
+            Xcode の場合は、<kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示できます。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              プロフィールのカードの下に、青い文字のボタン「タップ回数: 0」、その下にオン（緑）のスイッチ「完了も表示」が並びます。さらに見出し「Todo」と、03 と同じ 3 行の ToDo が表示されます。
+            </p>
+            <p>
+              ボタンを押すたびに <code>tapCount</code> が 1 増え、表示が「タップ回数: 1」「タップ回数: 2」…と変わります。
+              スイッチをオフにすると <code>showsDone</code> が <code>false</code> になり、完了済みの「メールを返す」の行が消えて 2 行になります。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">@Binding で子の View から親の状態を書き換える</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            次に、ToDo の行をタップして完了・未完了を切り替えます。ToDo の配列は <code>ContentView</code>（親）が持ち、タップを受けるのは <code>TodoRow</code>（子）です。
+            子から親の状態を書き換えるには、親が値の代わりに Binding を渡し、子は <code>@Binding</code> で受け取ります。
+          </p>
+
+          <p>まず、モデルの <code>TodoItem</code> に、完了かどうかを返す <code>isDone</code> と、状態を反転する <code>toggle()</code> を追加します。<code>Models/TodoItem.swift</code> の <code>statusText</code> の前に 2 つのメンバーを足し、次の内容にします。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Models/TodoItem.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import Foundation
+
+enum Priority: Int, CaseIterable {
+    case low = 1
+    case medium
+    case high
+
+    var label: String {
+        switch self {
+        case .low: "低"
+        case .medium: "中"
+        case .high: "高"
+        }
+    }
+}
+
+// 関連値付きの enum
+enum Status {
+    case todo
+    case done(Date)
+}
+
+struct TodoItem {
+    let title: String
+    var priority: Priority = .medium
+    var status: Status = .todo
+
+    var isDone: Bool {
+        if case .done = status {
+            return true
+        }
+        return false
+    }
+
+    mutating func toggle() {
+        switch status {
+        case .todo:
+            status = .done(Date())
+        case .done:
+            status = .todo
+        }
+    }
+
+    var statusText: String {
+        switch status {
+        case .todo:
+            "未完了"
+        case .done(let date):
+            "完了 (\(date.formatted(.iso8601.year().month().day())))"
+        }
+    }
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>var isDone: Bool</code>: 03 では <code>TodoRow</code> の中に <code>private var isDone</code> がありました。<code>ContentView</code> の絞り込みでも使うため、<code>TodoItem</code> に移します。</li>
+            <li><code>mutating func toggle()</code>: <code>.todo</code> なら現在日時で <code>.done</code> に、<code>.done</code> なら <code>.todo</code> に戻します。構造体の <code>status</code> を書き換えるので <code>mutating</code> が必要です。</li>
+          </ul>
+
+          <p><code>toggle()</code> のテストを <code>HandsonAppTests/TodoItemTests.swift</code> の末尾に追加します。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppTests/TodoItemTests.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import Foundation
+import Testing
+@testable import HandsonApp
+
+@MainActor
+struct TodoItemTests {
+
+    @Test func priorityRawValueAndCases() {
+        #expect(Priority.high.rawValue == 3)
+        #expect(Priority(rawValue: 1) == .low)
+        #expect(Priority(rawValue: 9) == nil)
+        #expect(Priority.allCases.map(\.label) == ["低", "中", "高"])
+    }
+
+    @Test func statusTextForTodo() {
+        let item = TodoItem(title: "買い物")
+        #expect(item.statusText == "未完了")
+    }
+
+    @Test func statusTextForDone() {
+        let date = Date(timeIntervalSince1970: 0)
+        let item = TodoItem(title: "買い物", priority: .high, status: .done(date))
+        #expect(item.statusText.hasPrefix("完了 ("))
+    }
+
+    @Test func toggleSwitchesBetweenTodoAndDone() {
+        var item = TodoItem(title: "買い物")
+        #expect(!item.isDone)
+        item.toggle()
+        #expect(item.isDone)
+        item.toggle()
+        #expect(!item.isDone)
+        #expect(item.statusText == "未完了")
+    }
+}</code></pre>
+          </div>
+
+          <p><code>Views/TodoRow.swift</code> を次の内容に書き換えます。03 からの変更点は、<code>item</code> を <code>@Binding</code> で受け取ること、タップで <code>item.toggle()</code> を呼ぶこと、<code>isDone</code> を <code>TodoItem</code> のものに替えたこと、プレビューの書き方の 4 つです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Views/TodoRow.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import SwiftUI
+
+struct TodoRow: View {
+    @Binding var item: TodoItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // switch: Status の case ごとにアイコンを切り替える
+            switch item.status {
+            case .todo:
+                Image(systemName: "circle")
+                    .foregroundStyle(.secondary)
+            case .done:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            }
+
+            Text(item.title)
+                .strikethrough(item.isDone)
+
+            Spacer()
+
+            Text(item.priority.label)
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            item.toggle()
+        }
+    }
+}
+
+#Preview("未完了") {
+    @Previewable @State var item = TodoItem(title: "牛乳を買う", priority: .high)
+    TodoRow(item: $item)
+        .padding()
+}
+
+#Preview("完了") {
+    @Previewable @State var item = TodoItem(title: "メールを返す", priority: .low, status: .done(Date()))
+    TodoRow(item: $item)
+        .padding()
+}</code></pre>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">03 の TodoRow.swift との差分を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block code-block--diff">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Diff</span>
+                  <span class="code-block__filename">HandsonApp/Views/TodoRow.swift</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct TodoRow: View {</span><span class="diff-line diff-line--remove">-     let item: TodoItem</span><span class="diff-line diff-line--add">+     @Binding var item: TodoItem</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          HStack(spacing: 12) {</span><span class="diff-line">              // switch: Status の case ごとにアイコンを切り替える</span><span class="diff-line">              switch item.status {</span><span class="diff-line">              case .todo:</span><span class="diff-line">                  Image(systemName: "circle")</span><span class="diff-line">                      .foregroundStyle(.secondary)</span><span class="diff-line">              case .done:</span><span class="diff-line">                  Image(systemName: "checkmark.circle.fill")</span><span class="diff-line">                      .foregroundStyle(.green)</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line">              Text(item.title)</span><span class="diff-line diff-line--remove">-                 .strikethrough(isDone)</span><span class="diff-line diff-line--add">+                 .strikethrough(item.isDone)</span><span class="diff-line"> </span><span class="diff-line">              Spacer()</span><span class="diff-line"> </span><span class="diff-line">              Text(item.priority.label)</span><span class="diff-line">                  .font(.caption)</span><span class="diff-line">                  .padding(.horizontal, 8)</span><span class="diff-line">                  .padding(.vertical, 2)</span><span class="diff-line">                  .background(.quaternary, in: Capsule())</span><span class="diff-line">          }</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-     private var isDone: Bool {</span><span class="diff-line diff-line--remove">-         if case .done = item.status {</span><span class="diff-line diff-line--remove">-             return true</span><span class="diff-line diff-line--add">+         .contentShape(Rectangle())</span><span class="diff-line diff-line--add">+         .onTapGesture {</span><span class="diff-line diff-line--add">+             item.toggle()</span><span class="diff-line">          }</span><span class="diff-line diff-line--remove">-         return false</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview("未完了") {</span><span class="diff-line diff-line--remove">-     TodoRow(item: TodoItem(title: "牛乳を買う", priority: .high))</span><span class="diff-line diff-line--add">+     @Previewable @State var item = TodoItem(title: "牛乳を買う", priority: .high)</span><span class="diff-line diff-line--add">+     TodoRow(item: $item)</span><span class="diff-line">          .padding()</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview("完了") {</span><span class="diff-line diff-line--remove">-     TodoRow(item: TodoItem(title: "メールを返す", priority: .low, status: .done(Date())))</span><span class="diff-line diff-line--add">+     @Previewable @State var item = TodoItem(title: "メールを返す", priority: .low, status: .done(Date()))</span><span class="diff-line diff-line--add">+     TodoRow(item: $item)</span><span class="diff-line">          .padding()</span><span class="diff-line">  }</span></pre>
+              </div>
+            </div>
+          </details>
+
+          <ul>
+            <li><code>@Binding var item: TodoItem</code>: 値を自分で持たず、親が持つ <code>TodoItem</code> への参照を受け取ります。<code>item.toggle()</code> の変更は、Binding を通して親の配列の要素に反映されます。</li>
+            <li><code>.onTapGesture { item.toggle() }</code>: 行がタップされたときの処理です。</li>
+            <li><code>.contentShape(Rectangle())</code>: タップを受ける範囲を行全体の四角形にします。これが無いと、<code>Spacer</code> の部分（文字の無い空白）がタップを受けません。</li>
+            <li><code>@Previewable @State var item = …</code>: <code>TodoRow</code> に Binding を渡すには、プレビュー側にも状態が必要です。<code>@Previewable</code> を付けると、<code>#Preview</code> の中で <code>@State</code> を宣言できます（Xcode 16 以降）。<code>@Previewable</code> は <code>#Preview</code> の本体の直下で宣言するもので、それ以外の場所（通常の View の中など）で使うとエラーになります。</li>
+          </ul>
+
+          <p>
+            <code>ContentView.swift</code> では、<code>items</code> を <code>@State</code> にして書き換えられるようにし、<code>TodoRow</code> に Binding を渡します。
+            Binding を渡すには <code>ForEach</code> に <code>$items</code> を渡します。<code>filter</code> した配列（<code>visibleItems</code>）からは Binding を作れないため、<code>visibleItems</code> は削除し、絞り込みは <code>ForEach</code> の中の <code>if</code> で行います。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     let items: [TodoItem] = [</span><span class="diff-line diff-line--add">+     @State private var items: [TodoItem] = [</span><span class="diff-line">          TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">          TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">          TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">      ]</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-     private var visibleItems: [TodoItem] {</span><span class="diff-line diff-line--remove">-         items.filter { item in</span><span class="diff-line diff-line--remove">-             if case .done = item.status {</span><span class="diff-line diff-line--remove">-                 return showsDone</span><span class="diff-line diff-line--remove">-             }</span><span class="diff-line diff-line--remove">-             return true</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          VStack(alignment: .leading, spacing: 16) {</span><span class="diff-line">              ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line">              Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                  tapCount += 1</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line">              Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line"> </span><span class="diff-line">              Text("Todo")</span><span class="diff-line">                  .font(.headline)</span><span class="diff-line"> </span><span class="diff-line">              VStack(alignment: .leading, spacing: 12) {</span><span class="diff-line diff-line--remove">-                 ForEach(visibleItems, id: \.title) { item in</span><span class="diff-line diff-line--remove">-                     TodoRow(item: item)</span><span class="diff-line diff-line--add">+                 ForEach($items, id: \.title) { $item in</span><span class="diff-line diff-line--add">+                     if showsDone || !item.isDone {</span><span class="diff-line diff-line--add">+                         TodoRow(item: $item)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line">              Spacer()</span><span class="diff-line">          }</span><span class="diff-line">          .padding()</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">  }</span></pre>
+          </div>
+
+          <ul>
+            <li><code>ForEach($items, id: \.title) { $item in … }</code>: 配列の Binding を渡し、クロージャの引数も <code>$item</code> と書きます。こうすると各要素が <code>Binding&lt;TodoItem&gt;</code> で渡され、クロージャの中では <code>item</code> で値を、<code>$item</code> で Binding を使えます。</li>
+            <li><code>if showsDone || !item.isDone</code>: 「完了も表示」がオン、または未完了の行だけを表示します。ステップ 2 の <code>visibleItems</code> と同じ条件です。</li>
+            <li><code>TodoItem</code> の <code>title</code> は <code>let</code> なので、Binding を通しても書き換えられるのは <code>priority</code> と <code>status</code> だけです。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>$</code> を付け忘れると型が合わない</p>
+              <p><code>TodoRow(item: $item)</code> を一時的に <code>TodoRow(item: item)</code> に変えてビルドしてみます。</p>
+              <div class="code-block">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Swift</span>
+                  <span class="code-block__filename">HandsonApp/ContentView.swift（失敗する例）</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><code class="language-swift">                ForEach($items, id: \.title) { $item in
+                    if showsDone || !item.isDone {
+                        TodoRow(item: item)      // $ が無い
+                    }
+                }</code></pre>
+              </div>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/ContentView.swift:36:39: error: cannot convert value of type 'TodoItem' to expected argument type 'Binding&lt;TodoItem&gt;'</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+              </div>
+              <p>
+                <code>cannot convert value of type 'TodoItem' to expected argument type 'Binding&lt;TodoItem&gt;'</code>（<code>TodoItem</code> 型の値を、引数の型 <code>Binding&lt;TodoItem&gt;</code> に変換できない）のエラーです。
+                <code>item</code> は値、<code>$item</code> は Binding で、型が違います。確認したら <code>$item</code> に戻してください。
+              </p>
+            </div>
+          </div>
+
+          <p>元に戻してビルドが通ることを確かめます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+          </div>
+
+          <!-- 要確認: キャンバスの Live プレビューでの行のクリック動作は手順ログで未確認 -->
+          <p>
+            Xcode では <code>TodoRow.swift</code> のキャンバスで「未完了」「完了」のプレビューを表示し、行をクリックしてアイコンが切り替わるかを試せます。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>$</code> を付け忘れると <code>cannot convert value of type 'TodoItem' to expected argument type 'Binding&lt;TodoItem&gt;'</code> でビルドが失敗することを確かめます。<code>$item</code> に戻して <code>** BUILD SUCCEEDED **</code> になれば OK です。起動直後の画面はステップ 2 と同じです。</p>
+            <p>
+              シミュレータで行（文字の無い空白部分でもかまいません）をタップすると、<code>item.toggle()</code> が Binding を通して <code>ContentView</code> の <code>items</code> の要素を書き換えます。
+              未完了の行は緑のチェックマークと取り消し線に、完了の行は灰色の丸に戻ります。「完了も表示」がオフのときは、タップして完了にした行が一覧から消えます。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">@Observable でモデルをクラスにまとめる（TodoStore）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ToDo の配列と、それに対する操作（追加・切り替え）を、View から切り離したモデルにまとめます。
+            <code>@Observable</code> マクロを付けたクラスは、プロパティの変更を SwiftUI に伝えられる参照型のモデルになります。
+            <code>Models</code> フォルダに Swift ファイル <code>TodoStore.swift</code> を作ります。Xcode では <code>Models</code> を右クリックし、<code>New File from Template…</code> で <code>iOS</code> &gt; <code>Swift File</code> を選びます（<code>Targets</code> は <code>HandsonApp</code>）。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Models/TodoStore.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import Foundation
+import Observation
+
+@Observable
+final class TodoStore {
+    var items: [TodoItem]
+
+    init(items: [TodoItem] = []) {
+        self.items = items
+    }
+
+    func add(title: String, priority: Priority = .medium) {
+        items.append(TodoItem(title: title, priority: priority))
+    }
+
+    func toggle(_ item: TodoItem) {
+        guard let index = items.firstIndex(where: { $0.title == item.title }) else { return }
+        items[index].toggle()
+    }
+
+    static let sample = TodoStore(items: [
+        TodoItem(title: "牛乳を買う", priority: .high),
+        TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),
+        TodoItem(title: "SwiftUI を勉強する"),
+    ])
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>@Observable final class TodoStore</code>: <code>@Observable</code> は <code>Observation</code> フレームワークのマクロです（<code>import SwiftUI</code> しているファイルでも使えます）。</li>
+            <li><code>add(title:priority:)</code>: 優先度を省略すると <code>.medium</code> の ToDo を末尾に追加します。ステップ 5 で使います。</li>
+            <li><code>toggle(_:)</code>: <code>TodoItem</code> は <code>Identifiable</code> ではないため、<code>title</code> で検索して切り替えます。同じタイトルが複数あると、先頭の 1 件だけが切り替わります。見つからなければ何もしません。</li>
+            <li><code>static let sample</code>: 03 から使っている 3 件の ToDo を入れたストアです。アプリとプレビューの両方で使います。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>ObservableObject</code> と Combine は使わない</p>
+              <p>
+                <code>@Observable</code> 以前は、<code>ObservableObject</code> に準拠したクラスのプロパティに <code>@Published</code> を付けていました。View 側では <code>@StateObject</code>・<code>@ObservedObject</code> を使います（Combine ベースの書き方）。
+                この教材では旧世代の書き方として扱い、使いません。<code>@Observable</code> のクラスを View が所有するときは、<code>@StateObject</code> ではなく <code>@State</code> を使います。
+              </p>
+            </div>
+          </div>
+
+          <p><code>HandsonAppTests</code> フォルダに <code>TodoStoreTests.swift</code> を作ります（<code>Targets</code> は <code>HandsonAppTests</code>）。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppTests/TodoStoreTests.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import Foundation
+import Testing
+@testable import HandsonApp
+
+@MainActor
+struct TodoStoreTests {
+
+    @Test func addAppendsItemWithDefaults() {
+        let store = TodoStore()
+        store.add(title: "買い物")
+        #expect(store.items.count == 1)
+        #expect(store.items[0].title == "買い物")
+        #expect(store.items[0].priority == .medium)
+        #expect(!store.items[0].isDone)
+    }
+
+    @Test func toggleChangesStatus() {
+        let store = TodoStore(items: [TodoItem(title: "買い物")])
+        store.toggle(store.items[0])
+        #expect(store.items[0].isDone)
+        store.toggle(store.items[0])
+        #expect(!store.items[0].isDone)
+    }
+
+    @Test func toggleIgnoresUnknownItem() {
+        let store = TodoStore(items: [TodoItem(title: "買い物")])
+        store.toggle(TodoItem(title: "存在しない"))
+        #expect(!store.items[0].isDone)
+    }
+}</code></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Swift 6 と <code>@MainActor</code></p>
+              <p>
+                01 で確認したとおり、アプリのターゲットでは既定のアクター分離が <code>MainActor</code> です（<code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code>）。そのため <code>TodoStore</code> も暗黙の <code>@MainActor</code> となり、<code>View</code> から使っても警告は出ません。
+                この設定はテストターゲットには付かないので、テスト側は 02 のテストと同じく <code>@MainActor struct TodoStoreTests</code> にしておきます。こうすると <code>TodoStore()</code> をそのまま呼べます。
+              </p>
+              <p>
+                テスト側の <code>@MainActor</code> を外すと、<code>call to main actor-isolated initializer 'init(items:)' in a synchronous nonisolated context</code> などのエラーでビルドが失敗します。<code>TodoItem</code> のプロパティにも <code>main actor-isolated property ... can not be referenced from a nonisolated context</code> が出ます。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            <code>ContentView.swift</code> では、<code>@State</code> の配列を <code>TodoStore</code> に置き換えます。
+            <code>@Observable</code> のクラスも、View が所有するときは <code>@State</code> で持ちます。<code>@State</code> のプロパティなので、<code>$store.items</code> で配列の Binding を取り出せます。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @State private var items: [TodoItem] = [</span><span class="diff-line diff-line--remove">-         TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line diff-line--remove">-         TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line diff-line--remove">-         TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line diff-line--remove">-     ]</span><span class="diff-line diff-line--add">+     @State private var store = TodoStore.sample</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          VStack(alignment: .leading, spacing: 16) {</span><span class="diff-line">              ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line">              Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                  tapCount += 1</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line">              Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line"> </span><span class="diff-line">              Text("Todo")</span><span class="diff-line">                  .font(.headline)</span><span class="diff-line"> </span><span class="diff-line">              VStack(alignment: .leading, spacing: 12) {</span><span class="diff-line diff-line--remove">-                 ForEach($items, id: \.title) { $item in</span><span class="diff-line diff-line--add">+                 ForEach($store.items, id: \.title) { $item in</span><span class="diff-line">                      if showsDone || !item.isDone {</span><span class="diff-line">                          TodoRow(item: $item)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line">              Spacer()</span><span class="diff-line">          }</span><span class="diff-line">          .padding()</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">  }</span></pre>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">行のタップを <code>store.toggle</code> にする選択肢</p>
+              <p>
+                この項目では、「Binding で子が親の値を書き換える」例として、行のタップはステップ 3 の <code>TodoRow</code> 内の <code>item.toggle()</code> のままにします。
+                <code>TodoStore.toggle(_:)</code> は「操作を参照型のモデルに集約する」例としてテストでだけ使い、画面からは呼びません。
+                <code>TodoRow</code> にタップ時の処理を渡して <code>store.toggle(item)</code> を呼ぶ形に置き換えることもできます。
+              </p>
+            </div>
+          </div>
+
+          <p>ビルドとテストを実行します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 22 tests in 7 suites passed after 0.020 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>Test run with 22 tests in 7 suites passed</code> が表示されれば OK です。18 テストに、<code>TodoItemTests</code> の 1 つと <code>TodoStoreTests</code> の 3 つが加わり、スイートは <code>TodoStoreTests</code> の分だけ増えて 7 つになります。
+              画面の見た目はステップ 3 から変わりません。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">TextField で ToDo を追加する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            テキストフィールドに入力したタイトルで ToDo を追加します。入力中の文字列は、この画面だけで使う一時的な値なので、<code>TodoStore</code> ではなく <code>ContentView</code> の <code>@State</code> に持たせます。
+            タイトルの検証には、02 で作った <code>validate(name:)</code> を流用します。
+          </p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line">      @State private var store = TodoStore.sample</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line diff-line--add">+     @State private var newTitle = ""</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     private var canAdd: Bool {</span><span class="diff-line diff-line--add">+         (try? validate(name: newTitle)) != nil</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          VStack(alignment: .leading, spacing: 16) {</span><span class="diff-line">              ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line">              Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                  tapCount += 1</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line">              Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line"> </span><span class="diff-line">              Text("Todo")</span><span class="diff-line">                  .font(.headline)</span><span class="diff-line"> </span><span class="diff-line">              VStack(alignment: .leading, spacing: 12) {</span><span class="diff-line">                  ForEach($store.items, id: \.title) { $item in</span><span class="diff-line">                      if showsDone || !item.isDone {</span><span class="diff-line">                          TodoRow(item: $item)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+             HStack {</span><span class="diff-line diff-line--add">+                 TextField("新しいタスク", text: $newTitle)</span><span class="diff-line diff-line--add">+                     .textFieldStyle(.roundedBorder)</span><span class="diff-line diff-line--add">+                 Button("追加") {</span><span class="diff-line diff-line--add">+                     store.add(title: newTitle)</span><span class="diff-line diff-line--add">+                     newTitle = ""</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line diff-line--add">+                 .disabled(!canAdd)</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">              Spacer()</span><span class="diff-line">          }</span><span class="diff-line">          .padding()</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">  }</span></pre>
+          </div>
+
+          <ul>
+            <li><code>TextField("新しいタスク", text: $newTitle)</code>: 1 つ目の引数はプレースホルダー（未入力のときに薄く表示される文字）です。入力された文字列は、Binding を通して <code>newTitle</code> に書き込まれます。<code>Toggle</code> の <code>isOn:</code> と同じ仕組みです。</li>
+            <li><code>.textFieldStyle(.roundedBorder)</code>: テキストフィールドを角丸の枠で囲みます。</li>
+            <li><code>store.add(title: newTitle)</code> → <code>newTitle = ""</code>: ToDo を追加してから、入力欄を空に戻します。</li>
+            <li><code>canAdd</code>: <code>(try? validate(name: newTitle)) != nil</code> は、検証が成功すると <code>()?</code> 型の非 <code>nil</code>、失敗すると <code>nil</code> になります。</li>
+            <li><code>.disabled(!canAdd)</code>: 検証が通らない間はボタンを無効（灰色でタップできない状態）にします。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">11 文字以上のタスク名は追加できない</p>
+              <p>
+                02 の <code>validate(name:)</code> は、空文字列で <code>.empty</code>、10 文字を超えると <code>.tooLong</code> を投げます。
+                これを流用しているため、11 文字以上のタイトルでは「追加」ボタンが無効のままです。例えばサンプルの「SwiftUI を勉強する」（空白を含めて 13 文字）は、この入力欄からは追加できません。
+              </p>
+            </div>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: 73112</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>3 行の ToDo の下に、角丸の枠のテキストフィールド（プレースホルダー「新しいタスク」）と、その右に灰色（無効）の「追加」ボタンが並びます。</p>
+            <p>
+              テキストフィールドに 10 文字以内のタイトルを入力すると「追加」ボタンが有効になります。たとえば「Test」と入力して押すと、一覧の末尾に「Test [中]」の行が増え、テキストフィールドが空に戻ります。11 文字以上のときはボタンが無効のままです。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">@Environment でストアをアプリ全体に渡す</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            今は <code>ContentView</code> が <code>TodoStore</code> を作って所有しています。画面が増えると、複数の View から同じストアを使いたくなります。
+            そこで、ストアの生成をアプリのルート（<code>HandsonAppApp</code>）に移し、<code>.environment(_:)</code> で View の階層に注入します。下の View は <code>@Environment</code> で受け取ります。
+            <code>HandsonAppApp.swift</code> を次の内容にします。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/HandsonAppApp.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  HandsonAppApp.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+@main
+struct HandsonAppApp: App {
+    @State private var store = TodoStore.sample
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environment(store)
+        }
+    }
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>@State private var store = TodoStore.sample</code>: アプリのルートがストアを所有します。生成は 1 回だけです。</li>
+            <li><code>.environment(store)</code>: <code>ContentView</code> とその下の全ての View から、<code>TodoStore</code> を取り出せるようにします。</li>
+          </ul>
+
+          <p><code>ContentView.swift</code> は、<code>@State</code> のストアを <code>@Environment</code> に置き換えます。完成形の全文は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  ContentView.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    let profile = Profile(name: "Taro Yamada", nickname: "Taro")
+
+    @Environment(TodoStore.self) private var store
+
+    @State private var tapCount = 0
+    @State private var showsDone = true
+    @State private var newTitle = ""
+
+    private var canAdd: Bool {
+        (try? validate(name: newTitle)) != nil
+    }
+
+    var body: some View {
+        @Bindable var store = store
+        VStack(alignment: .leading, spacing: 16) {
+            ProfileHeader(profile: profile)
+
+            Button("タップ回数: \(tapCount)") {
+                tapCount += 1
+            }
+
+            Toggle("完了も表示", isOn: $showsDone)
+
+            Text("Todo")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach($store.items, id: \.title) { $item in
+                    if showsDone || !item.isDone {
+                        TodoRow(item: $item)
+                    }
+                }
+            }
+
+            HStack {
+                TextField("新しいタスク", text: $newTitle)
+                    .textFieldStyle(.roundedBorder)
+                Button("追加") {
+                    store.add(title: newTitle)
+                    newTitle = ""
+                }
+                .disabled(!canAdd)
+            }
+
+            Spacer()
+        }
+        .padding()
+    }
+}
+
+#Preview {
+    ContentView()
+        .environment(TodoStore.sample)
+}</code></pre>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">ステップ 5 との差分を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block code-block--diff">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Diff</span>
+                  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @State private var store = TodoStore.sample</span><span class="diff-line diff-line--add">+     @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line diff-line--add">+         @Bindable var store = store</span><span class="diff-line">          VStack(alignment: .leading, spacing: 16) {</span><span class="diff-line">              ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line">              Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                  tapCount += 1</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line">              Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line"> </span><span class="diff-line">              Text("Todo")</span><span class="diff-line">                  .font(.headline)</span><span class="diff-line"> </span><span class="diff-line">              VStack(alignment: .leading, spacing: 12) {</span><span class="diff-line">                  ForEach($store.items, id: \.title) { $item in</span><span class="diff-line">                      if showsDone || !item.isDone {</span><span class="diff-line">                          TodoRow(item: $item)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line">              HStack {</span><span class="diff-line">                  TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                      .textFieldStyle(.roundedBorder)</span><span class="diff-line">                  Button("追加") {</span><span class="diff-line">                      store.add(title: newTitle)</span><span class="diff-line">                      newTitle = ""</span><span class="diff-line">                  }</span><span class="diff-line">                  .disabled(!canAdd)</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line">              Spacer()</span><span class="diff-line">          }</span><span class="diff-line">          .padding()</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line diff-line--add">+         .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+              </div>
+            </div>
+          </details>
+
+          <ul>
+            <li><code>@Environment(TodoStore.self) private var store</code>: 型を指定して、注入されたストアを受け取ります。注入する側の <code>.environment(store)</code> はインスタンスを渡します。<code>ObservableObject</code> 用の <code>.environmentObject</code>・<code>@EnvironmentObject</code> とは別の API です。</li>
+            <li><code>@Bindable var store = store</code>: <code>@Environment</code> で受け取った値からは、<code>$store</code> で Binding を取り出せません。<code>body</code> の先頭で <code>@Bindable</code> のローカル変数に入れ直すと、<code>$store.items</code> が使えるようになります。</li>
+            <li><code>#Preview</code> の <code>.environment(TodoStore.sample)</code>: プレビューはアプリの <code>HandsonAppApp</code> を通らないため、プレビュー側でもストアを注入します。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@Bindable</code> を書かずに <code>$store</code> を使うとビルドが失敗する</p>
+              <p><code>body</code> の先頭の <code>@Bindable var store = store</code> を一時的に削除してビルドしてみます。</p>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/ContentView.swift:35:25: error: cannot find '$store' in scope</span><span class="terminal__line">…/ContentView.swift:35:17: error: generic parameter 'C' could not be inferred</span><span class="terminal__line">…/ContentView.swift:35:43: error: cannot infer key path type from context; consider explicitly specifying a root type</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+              </div>
+              <p>
+                本当の原因は 1 つ目の <code>cannot find '$store' in scope</code>（<code>$store</code> が見つからない）です。<code>@Environment</code> のプロパティには <code>$</code> で取り出せる値（projectedValue）がありません。
+                残りの 2 つは、<code>ForEach</code> の引数の型が決まらないために続けて出るエラーです。確認したら、<code>@Bindable var store = store</code> を戻してください。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--danger">
+            <span class="callout__icon" aria-hidden="true">🛑</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>.environment(store)</code> を付け忘れると起動時にクラッシュする</p>
+              <p>
+                <code>HandsonAppApp.swift</code> から <code>.environment(store)</code> の行を一時的に削除します。この状態でもビルドは<strong>成功します</strong>。注入の有無はコンパイル時には検出されません。
+                シミュレータで起動すると、アプリはすぐに終了します。
+              </p>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: 74284</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl spawn booted log show --last 1m --predicate 'process == "HandsonApp" AND eventMessage CONTAINS "Fatal"' --style compact</span><span class="terminal__line">Timestamp               Ty Process[PID:TID]</span><span class="terminal__line">2026-10-03 14:47:12.044 Df HandsonApp[74284:17594a] (libswiftCore.dylib) SwiftUICore/Environment+Objects.swift:34: Fatal error: No Observable object of type TodoStore found. A View.environmentObject(_:) for TodoStore may be missing as an ancestor of this view.</span></pre>
+              </div>
+              <p>
+                <code>Fatal error: No Observable object of type TodoStore found.</code>（<code>TodoStore</code> 型の Observable オブジェクトが見つからない）で、<code>@Environment(TodoStore.self)</code> の値を取り出せずに停止しています。
+                メッセージの後半は <code>View.environmentObject(_:)</code> の付け忘れを案内していますが、<code>@Observable</code> のクラスの注入に使うのは <code>.environment(_:)</code> です。
+                確認したら <code>.environment(store)</code> を戻してください。
+              </p>
+              <p>
+                <code>#Preview</code> から <code>.environment(TodoStore.sample)</code> を外した場合も同じです。同じ <code>ContentView</code> を <code>.environment</code> 無しで起動すると <code>@Environment(TodoStore.self)</code> の解決で <code>Fatal error</code> になります。プレビューも同じ原因で失敗します。
+              </p>
+              <!-- 要確認: キャンバスに何が表示されるか（エラー表示の見た目）は人の確認が必要 -->
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>@Bindable</code> を外すと <code>cannot find '$store' in scope</code> でビルドが失敗することを確かめます。<code>.environment(store)</code> を外すと、ビルドは通っても起動時に <code>Fatal error: No Observable object of type TodoStore found.</code> で停止することも確かめます。
+              両方を戻してビルドし、シミュレータで起動してステップ 5 と同じ画面が表示されれば OK です。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">完成状態でビルドとテストを実行する</h3>
+        </div>
+        <div class="step__body">
+          <p>完成状態のファイル構成は次のとおりです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Text</span>
+              <span class="code-block__filename">HandsonApp/</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext">HandsonApp/
+  HandsonApp/
+    HandsonAppApp.swift          # この項目で更新（TodoStore を所有して注入）
+    ContentView.swift            # この項目で更新
+    Greeting.swift
+    Models/
+      Profile.swift
+      Counter.swift
+      TodoItem.swift             # この項目で更新（isDone / toggle()）
+      TodoStore.swift            # この項目で追加
+      Describable.swift
+      Validation.swift
+    Views/
+      ProfileHeader.swift
+      TodoRow.swift              # この項目で更新（@Binding）
+  HandsonAppTests/
+    TodoItemTests.swift          # この項目で更新（1 テスト追加）
+    TodoStoreTests.swift         # この項目で追加（3 テスト）
+    …                            # ほかは 02 のまま（合計 22 テスト）</code></pre>
+          </div>
+
+          <p>ビルドと全てのユニットテストを実行し、シミュレータで最終的な画面を確かめてから、シミュレータを止めます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 22 tests in 7 suites passed after 0.040 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: 75402</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+          </div>
+
+          <p>Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> で全てのテストを実行し、<kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>** BUILD SUCCEEDED **</code> と <code>Test run with 22 tests in 7 suites passed</code> が表示されることを確かめます。シミュレータにステップ 5 と同じ画面（プロフィールのカード、ボタン、トグル、3 行の ToDo、入力欄）が表示されれば完成です。
+              ビルドの出力に、Swift のコードに対する警告（<code>appintentsmetadataprocessor</code> 以外の <code>warning:</code>）が出ていないことも確認してください。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">03 のプロジェクトをコピーし、ビルドと 18 テストが通ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>@State</code> を付けないと <code>'self' is immutable</code> でビルドが失敗する理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>showsDone</code> と <code>$showsDone</code>、<code>item</code> と <code>$item</code> の型の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>TodoRow</code> を <code>@Binding</code> にし、<code>@Previewable @State</code> でプレビューを書いた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>@Observable</code> の <code>TodoStore</code> を作り、<code>@State</code> で所有した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>TextField</code> と <code>.disabled</code> で、検証が通るときだけ ToDo を追加できるようにした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>.environment(store)</code> で注入し、<code>@Environment</code> と <code>@Bindable</code> で受け取った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>.environment</code> の付け忘れがビルドでは見つからず、起動時のクラッシュになることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">22 テストが全て通り、<code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">行の空白部分をタップしても反応しない</p>
+          <p><code>TodoRow</code> の <code>HStack</code> に <code>.contentShape(Rectangle())</code> が付いているか確認してください。これが無いと、<code>Spacer</code> の部分はタップを受けません。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>ForEach</code> の中で <code>$item</code> が使えない</p>
+          <p><code>ForEach</code> の第 1 引数が <code>$store.items</code>（Binding）になっているか、クロージャの引数が <code>$item in</code> になっているかを確認してください。<code>filter</code> した配列からは Binding を作れないので、絞り込みは <code>ForEach</code> の中の <code>if</code> で行います。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">「追加」ボタンが有効にならない</p>
+          <p>タイトルが空か、10 文字を超えていないかを確認してください。02 の <code>validate(name:)</code> を流用しているため、11 文字以上は追加できません。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">同じタイトルの ToDo を追加すると表示がおかしくなる</p>
+          <p>03 と同じく、<code>ForEach</code> は <code>id: \.title</code> で行を区別しています。同じタイトルの ToDo を追加すると ID が重複します。<code>TodoStore.toggle(_:)</code> も先頭の 1 件だけを切り替えます。一意な ID（<code>Identifiable</code>）は、次の 05 で <code>List</code> と画面遷移を作るときに扱います。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>@State</code> で View が所有する値を持ち、<code>@Binding</code> と <code>$</code> で子の View から親の状態を書き換えました。
+        さらに、ToDo の配列と操作を <code>@Observable</code> の <code>TodoStore</code> にまとめました。<code>TodoStore</code> はアプリのルートで所有して <code>.environment</code> で注入し、<code>@Environment</code> と <code>@Bindable</code> で受け取りました。
+        あわせて、<code>@State</code>・<code>$</code>・<code>@Bindable</code> の付け忘れはビルドエラーになり、<code>.environment</code> の付け忘れは起動時のクラッシュになることも確かめました。
+        次の項目では、<code>List</code> と <code>NavigationStack</code> を使い、一覧から詳細画面へ遷移する画面を作ります。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li><a href="https://developer.apple.com/documentation/swiftui/managing-model-data-in-your-app">Managing model data in your app</a></li>
+        <li>SwiftUI のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/swiftui/state">State</a> / <a href="https://developer.apple.com/documentation/swiftui/binding">Binding</a> / <a href="https://developer.apple.com/documentation/swiftui/bindable">Bindable</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftui/environment">Environment</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftui/previewable()">Previewable</a></li>
+          </ul>
+        </li>
+        <li><a href="https://developer.apple.com/documentation/observation">Observation</a></li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/04-state-management</code> の <code>ios/04-state-management/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/04-state-management/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../03-swiftui-basics/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">03: SwiftUI 入門</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">05: List と NavigationStack</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
