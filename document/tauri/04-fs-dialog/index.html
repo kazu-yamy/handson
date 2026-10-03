@@ -1,0 +1,2000 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04: ファイルシステム API の利用 | Tauri ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Tauri</li>
+          <li aria-current="page">04</li>
+        </ol>
+        <h1 class="lesson-title">ファイルシステム API の利用</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: Tauri 03 を終えた人。<code>invoke</code> と Rust のコマンドの書き方を知っている人</li>
+          <li class="lesson-meta__item">📋 前提: 03 と同じ開発環境（macOS）</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../03-invoke/index.html">03: Rust コマンドの呼び出し</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>tauri add</code> で公式プラグイン（fs / dialog）を追加し、npm と Rust のバージョンをそろえる</li>
+          <li>capabilities の permission と scope で、フロントエンドのファイル操作を許可する</li>
+          <li><code>BaseDirectory.AppData</code> を使って Todo を保存し、起動時に復元する</li>
+          <li>保存 / 開くダイアログで、ユーザーが選んだファイルに書き出す・読み込む</li>
+          <li>外部から読み込む JSON を検証し、<code>message</code> / <code>ask</code> ダイアログで知らせる</li>
+          <li>Rust の <code>std::fs</code> によるファイル操作と、フロントエンドの fs プラグインとの違いを知る</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        03 の Todo リストは、Rust 側のメモリーに状態を持つだけでした。アプリを閉じると、追加した Todo は消えてしまいます。
+        この項目では、Todo をファイルに保存して次回の起動時に復元します。さらに、ユーザーがダイアログで選んだ場所への書き出しと、そこからの読み込みもできるようにします。
+      </p>
+
+      <h3 id="permission-model">プラグインと権限の仕組み</h3>
+      <p>Tauri 2 では、ファイル操作やダイアログは公式プラグインとして提供されます。フロントエンドからの呼び出しは、capabilities で許可したものだけが通ります。この項目で扱う要素は次のとおりです。</p>
+
+      <table>
+        <thead>
+        <tr><th>要素</th><th>役割</th><th>この項目での例</th></tr>
+        </thead>
+        <tbody>
+        <tr><td>プラグイン</td><td>Rust の crate と npm パッケージの組で提供される。<code>tauri add</code> が両側に追加し、<code>lib.rs</code> の <code>.plugin(...)</code> で登録する</td><td><code>tauri-plugin-fs</code> + <code>@tauri-apps/plugin-fs</code></td></tr>
+        <tr><td>capability</td><td>どのウィンドウに、どの権限を与えるかをまとめた設定ファイル</td><td><code>src-tauri/capabilities/default.json</code>（対象は <code>main</code> ウィンドウ）</td></tr>
+        <tr><td>permission（権限）</td><td>どのコマンドを呼べるかを決める。複数の権限をまとめたセットもある</td><td><code>fs:default</code>、<code>fs:allow-app-write</code>、<code>dialog:default</code></td></tr>
+        <tr><td>scope</td><td>権限が対象にできるパスの範囲。fs の操作は権限と scope の両方を満たす必要がある</td><td><code>fs:allow-app-write</code> の scope は <code>$APPDATA</code> とその直下など</td></tr>
+        <tr><td>ベースディレクトリ</td><td>OS ごとに場所が違うアプリ用フォルダを表す。scope では <code>$APPDATA</code>、JavaScript では <code>BaseDirectory.AppData</code>、Rust では <code>app_data_dir()</code></td><td>macOS では <code>~/Library/Application Support/com.handson.tauri04</code></td></tr>
+        <tr><td>ダイアログ経由のパス</td><td><code>save</code> / <code>open</code> でユーザーが選んだファイルは、その 1 ファイルだけ fs の scope に追加される</td><td>書き出し（ステップ 4）と読み込み（ステップ 5）</td></tr>
+        </tbody>
+      </table>
+
+      <p>一方、Rust のコマンドの中で <code>std::fs</code> を使うと、capabilities の検査は通りません。両者の違いはステップ 6 で比べます。</p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            使用するツールとライブラリのバージョンは 03 と同じです。Tauri 関連は Tauri CLI 2.11.5 / <code>tauri</code> クレート 2.11.6 / <code>@tauri-apps/api</code> 2.11.1 です。そのほかは Next.js 16.3.6 / rustc 1.98.1 / Node.js 24.21.0 などです。
+            このレッスンでは、次のプラグインを追加します。
+          </p>
+          <ul>
+            <li><code>tauri-plugin-fs</code> 2.5.2 / <code>@tauri-apps/plugin-fs</code> 2.5.2: ファイルの読み書き</li>
+            <li><code>tauri-plugin-dialog</code> 2.7.3 / <code>@tauri-apps/plugin-dialog</code> 2.7.3: 保存・開く・メッセージの各ダイアログ</li>
+          </ul>
+          <p><code>tauri add</code> は npm 側に新しいマイナーバージョン（執筆時は 2.6.0 / 2.8.1）を入れました。ここでは Rust crate と同じマイナーバージョンに <code>~</code> で固定しています（理由はステップ 1）。バージョンは執筆時点（2026年10月）のものです。</p>
+        </div>
+      </div>
+
+      <h2 id="preparation">準備: 03 のプロジェクトを引き継ぐ</h2>
+      <p>
+        03 で作ったプロジェクトをそのまま出発点にします。本文ではプロジェクトのディレクトリ名を <code>04-fs-dialog</code> として示します。
+        最初に、プロジェクト名に依存する値とバージョンを 04 用に直しておきます。
+      </p>
+
+      <table>
+        <thead>
+        <tr><th>ファイル</th><th>キー</th><th>03</th><th>04</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>package.json</code></td><td><code>name</code> / <code>version</code></td><td><code>03-invoke</code> / <code>0.3.0</code></td><td><code>04-fs-dialog</code> / <code>0.4.0</code></td></tr>
+        <tr><td><code>package-lock.json</code></td><td><code>name</code> / <code>version</code></td><td><code>03-invoke</code> / <code>0.3.0</code></td><td><code>04-fs-dialog</code> / <code>0.4.0</code>（<code>npm install</code> で更新）</td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>productName</code> / <code>version</code> / <code>identifier</code></td><td><code>handson-tauri-03</code> / <code>0.3.0</code> / <code>com.handson.tauri03</code></td><td><code>handson-tauri-04</code> / <code>0.4.0</code> / <code>com.handson.tauri04</code></td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>app.windows[0].title</code></td><td><code>handson-tauri-03</code></td><td><code>handson-tauri-04</code></td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>bundle.shortDescription</code> / <code>longDescription</code></td><td>03 の説明</td><td>04 の説明</td></tr>
+        <tr><td><code>src-tauri/Cargo.toml</code></td><td><code>[package]</code> の <code>name</code> / <code>version</code></td><td><code>handson-tauri-03</code> / <code>0.3.0</code></td><td><code>handson-tauri-04</code> / <code>0.4.0</code></td></tr>
+        <tr><td><code>src-tauri/Cargo.toml</code></td><td><code>[lib]</code> の <code>name</code></td><td><code>handson_tauri_03_lib</code></td><td><code>handson_tauri_04_lib</code></td></tr>
+        <tr><td><code>src-tauri/src/main.rs</code></td><td>呼び出すクレート</td><td><code>handson_tauri_03_lib::run()</code></td><td><code>handson_tauri_04_lib::run()</code></td></tr>
+        <tr><td><code>src/app/layout.tsx</code></td><td><code>metadata.title</code> / <code>metadata.description</code></td><td><code>handson-tauri-03</code> / 「Tauri トラック 03: Rust コマンドの呼び出し」</td><td><code>handson-tauri-04</code> / 「Tauri トラック 04: ファイルシステム API の利用」</td></tr>
+        <tr><td><code>src/app/_components/TitleBar/TitleBar.tsx</code></td><td>表示する文字列</td><td><code>handson-tauri-03</code></td><td><code>handson-tauri-04</code></td></tr>
+        </tbody>
+      </table>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line diff-line--remove">-   "name": "03-invoke",</span><span class="diff-line diff-line--remove">-   "version": "0.3.0",</span><span class="diff-line diff-line--add">+   "name": "04-fs-dialog",</span><span class="diff-line diff-line--add">+   "version": "0.4.0",</span><span class="diff-line">    "private": true,</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p><code>package-lock.json</code> にも <code>name</code> / <code>version</code> が記録されているので、<code>npm install</code> を実行して更新しておきます。npm のバージョンによっては、次のような警告が出ます（出力は抜粋）。インストール自体は完了しているので、このまま進めてかまいません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm install</span><span class="terminal__line">npm warn install-scripts 2 packages have install scripts not yet covered by allowScripts:</span><span class="terminal__line">npm warn install-scripts   @parcel/watcher@2.6.0 (install: node-gyp rebuild)</span><span class="terminal__line">npm warn install-scripts   unrs-resolver@1.12.2 (postinstall: node postinstall.js)</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line">    "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",</span><span class="diff-line diff-line--remove">-   "productName": "handson-tauri-03",</span><span class="diff-line diff-line--remove">-   "version": "0.3.0",</span><span class="diff-line diff-line--remove">-   "identifier": "com.handson.tauri03",</span><span class="diff-line diff-line--add">+   "productName": "handson-tauri-04",</span><span class="diff-line diff-line--add">+   "version": "0.4.0",</span><span class="diff-line diff-line--add">+   "identifier": "com.handson.tauri04",</span><span class="diff-line">    "build": {</span><span class="diff-line">  ...</span><span class="diff-line">      "windows": [</span><span class="diff-line">        {</span><span class="diff-line diff-line--remove">-         "title": "handson-tauri-03",</span><span class="diff-line diff-line--add">+         "title": "handson-tauri-04",</span><span class="diff-line">          "width": 800,</span><span class="diff-line">  ...</span><span class="diff-line">      "copyright": "© 2026 Handson Materials",</span><span class="diff-line diff-line--remove">-     "shortDescription": "Tauri ハンズオン 03: Rust コマンドの呼び出し",</span><span class="diff-line diff-line--remove">-     "longDescription": "Tauri トラックの 03 番目の教材で作成するサンプルアプリです。invoke によるコマンド呼び出し、状態管理、エラーハンドリング、非同期処理とイベントを学びます。",</span><span class="diff-line diff-line--add">+     "shortDescription": "Tauri ハンズオン 04: ファイルシステム API の利用",</span><span class="diff-line diff-line--add">+     "longDescription": "Tauri トラックの 04 番目の教材で作成するサンプルアプリです。fs プラグインと dialog プラグインでファイルを読み書きし、Todo を保存・復元します。",</span><span class="diff-line">      "category": "DeveloperTool",</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "handson-tauri-03"</span><span class="diff-line diff-line--remove">- version = "0.3.0"</span><span class="diff-line diff-line--add">+ name = "handson-tauri-04"</span><span class="diff-line diff-line--add">+ version = "0.4.0"</span><span class="diff-line">  description = "A Tauri App"</span><span class="diff-line">  ...</span><span class="diff-line">  [lib]</span><span class="diff-line diff-line--remove">- name = "handson_tauri_03_lib"</span><span class="diff-line diff-line--add">+ name = "handson_tauri_04_lib"</span><span class="diff-line">  crate-type = ["staticlib", "cdylib", "rlib"]</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/main.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  fn main() {</span><span class="diff-line diff-line--remove">-     handson_tauri_03_lib::run();</span><span class="diff-line diff-line--add">+     handson_tauri_04_lib::run();</span><span class="diff-line">  }</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/layout.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  export const metadata: Metadata = {</span><span class="diff-line diff-line--remove">-   title: "handson-tauri-03",</span><span class="diff-line diff-line--remove">-   description: "Tauri トラック 03: Rust コマンドの呼び出し",</span><span class="diff-line diff-line--add">+   title: "handson-tauri-04",</span><span class="diff-line diff-line--add">+   description: "Tauri トラック 04: ファイルシステム API の利用",</span><span class="diff-line">  };</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/_components/TitleBar/TitleBar.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">      &lt;header className={styles.titleBar} data-tauri-drag-region&gt;</span><span class="diff-line">        &lt;span className={styles.label} data-tauri-drag-region&gt;</span><span class="diff-line diff-line--remove">-         handson-tauri-03</span><span class="diff-line diff-line--add">+         handson-tauri-04</span><span class="diff-line">        &lt;/span&gt;</span><span class="diff-line">      &lt;/header&gt;</span></pre>
+</div>
+
+      <p>Rust 側が壊れていないことを <code>cargo check</code> で確かめておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo check</span><span class="terminal__line">    Compiling handson-tauri-04 v0.4.0 (/path/to/04-fs-dialog/src-tauri)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 23.88s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span></pre>
+</div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ディレクトリ名を変えた直後に <code>cargo check</code> が失敗する</p>
+              <p>03 と同じく、プロジェクトのディレクトリを <code>mv</code> で改名した場合は、<code>src-tauri/target</code> と <code>src-tauri/gen</code> に古い絶対パスが残っていて、次のようなエラーで失敗します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">error: failed to run custom build command for `handson-tauri-04 v0.4.0 (/path/to/04-fs-dialog/src-tauri)`</span><span class="terminal__line">（中略）</span><span class="terminal__line">  failed to read plugin permissions: failed to read file '/path/to/03-invoke/src-tauri/target/debug/build/tauri-ff8d8ed9d810ebfd/out/permissions/app/autogenerated/commands/app_hide.toml': No such file or directory (os error 2)</span></pre>
+</div>
+<p>どちらもビルド時に自動生成されるディレクトリなので、<code>src-tauri</code> で <code>rm -rf target gen</code> を実行してから <code>cargo check</code> をやり直します。上の <code>cargo check</code> の出力は、作り直した後のものです。</p>
+            </div>
+          </div>
+
+
+      <h2 id="step-by-step">手順</h2>
+      <p><code>cargo</code> のコマンドは <code>src-tauri</code> で、<code>npm</code> のコマンドはプロジェクトのルートで実行します。ダイアログの表示など、画面の操作を伴う確認は、学習者が手で操作して確かめる形で書いています。</p>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">fs / dialog プラグインを追加する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Tauri のファイル操作とダイアログは、本体ではなく公式プラグインとして提供されています。プラグインの追加には <code>tauri add</code> を使います。fs（ファイルシステム）と dialog（ダイアログ）の 2 つを追加します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri add fs</span><span class="terminal__line">        Info Installing Cargo dependency "tauri-plugin-fs"...</span><span class="terminal__line">        Info Installing NPM dependency "@tauri-apps/plugin-fs@&gt;=2"...</span><span class="terminal__line">       Added permission `fs:default` to `default` at /path/to/04-fs-dialog/src-tauri/capabilities/default.json</span><span class="terminal__line">        Info Adding plugin to /path/to/04-fs-dialog/src-tauri/src/lib.rs</span><span class="terminal__line">        Info Running `cargo fmt`...</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri add dialog</span><span class="terminal__line">        Info Installing Cargo dependency "tauri-plugin-dialog"...</span><span class="terminal__line">        Info Installing NPM dependency "@tauri-apps/plugin-dialog@&gt;=2"...</span><span class="terminal__line">       Added permission `dialog:default` to `default` at /path/to/04-fs-dialog/src-tauri/capabilities/default.json</span><span class="terminal__line">        Info Adding plugin to /path/to/04-fs-dialog/src-tauri/src/lib.rs</span><span class="terminal__line">        Info Running `cargo fmt`...</span></pre>
+</div>
+
+          <p>出力のとおり、<code>tauri add</code> は 1 回で Rust 側と JavaScript 側の両方を変更します。自分でファイルを編集する必要はありません。変更されたファイルを確認しておきます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  thiserror = "2"</span><span class="diff-line">  tokio = { version = "1", features = ["time"] }</span><span class="diff-line diff-line--add">+ tauri-plugin-fs = "2"</span><span class="diff-line diff-line--add">+ tauri-plugin-dialog = "2"</span><span class="diff-line"> </span><span class="diff-line">  [dev-dependencies]</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  pub fn run() {</span><span class="diff-line">      tauri::Builder::default()</span><span class="diff-line diff-line--add">+         .plugin(tauri_plugin_dialog::init())</span><span class="diff-line diff-line--add">+         .plugin(tauri_plugin_fs::init())</span><span class="diff-line">          .setup(|app| {</span><span class="diff-line">              if cfg!(debug_assertions) {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/capabilities/default.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      "core:window:allow-show",</span><span class="diff-line">      "core:window:allow-set-focus",</span><span class="diff-line diff-line--remove">-     "core:window:allow-start-dragging"</span><span class="diff-line diff-line--add">+     "core:window:allow-start-dragging",</span><span class="diff-line diff-line--add">+     "fs:default",</span><span class="diff-line diff-line--add">+     "dialog:default"</span><span class="diff-line">    ]</span><span class="diff-line">  }</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    "dependencies": {</span><span class="diff-line">      "@tauri-apps/api": "^2.11.1",</span><span class="diff-line diff-line--add">+     "@tauri-apps/plugin-dialog": "^2.8.1",</span><span class="diff-line diff-line--add">+     "@tauri-apps/plugin-fs": "^2.6.0",</span><span class="diff-line">      "next": "16.3.6",</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>プラグインは、Rust の crate（<code>tauri-plugin-fs</code>）と npm のパッケージ（<code>@tauri-apps/plugin-fs</code>）の組で提供されます。Rust 側では <code>lib.rs</code> の <code>.plugin(...)</code> で登録します。また、<code>capabilities/default.json</code> には、プラグインの既定の権限（<code>fs:default</code> / <code>dialog:default</code>）が加わりました。権限の中身はステップ 2 で確かめます。</p>
+          <p>この状態で <code>npm run tauri dev</code> を起動すると、プラグインの crate のコンパイルが始まる前に、次のエラー表示が出ました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri dev</span><span class="terminal__line">（中略）</span><span class="terminal__line">       Error Found version mismatched Tauri packages. Make sure the NPM package and Rust crate versions are on the same major/minor releases:</span><span class="terminal__line">tauri (v2.11.6) : @tauri-apps/api (v2.12.1)</span><span class="terminal__line">tauri-plugin-fs (v2.5.2) : @tauri-apps/plugin-fs (v2.6.0)</span><span class="terminal__line">tauri-plugin-dialog (v2.7.3) : @tauri-apps/plugin-dialog (v2.8.1)</span><span class="terminal__line">（以下省略）</span></pre>
+</div>
+
+          <p>Tauri は、npm パッケージと Rust crate のメジャー / マイナーバージョンがそろっていることを求めます。<code>tauri add</code> は npm 側に最新版（執筆時は 2.6.0 / 2.8.1）を入れました。一方、Cargo 側は <code>"2"</code> と書かれ、<code>Cargo.lock</code> では 2.5.2 / 2.7.3 に解決されています。さらに、<code>@tauri-apps/api</code> も <code>package-lock.json</code> 上で 03 の 2.11.1 から 2.12.1 に上がっていました。</p>
+          <p>執筆時点では、crates.io に <code>tauri-plugin-fs</code> / <code>tauri-plugin-dialog</code> のこれより新しい 2.x 版がありませんでした。そのため、npm 側を Rust 側と同じマイナーバージョンにそろえます。<code>~</code> を付けると、パッチ（3 桁目）の更新だけを許可する指定になります。<code>Ctrl + C</code> で <code>tauri dev</code> を止めてから実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm install @tauri-apps/api@~2.11.1 @tauri-apps/plugin-fs@~2.5.2 @tauri-apps/plugin-dialog@~2.7.3</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    "dependencies": {</span><span class="diff-line diff-line--remove">-     "@tauri-apps/api": "^2.11.1",</span><span class="diff-line diff-line--remove">-     "@tauri-apps/plugin-dialog": "^2.8.1",</span><span class="diff-line diff-line--remove">-     "@tauri-apps/plugin-fs": "^2.6.0",</span><span class="diff-line diff-line--add">+     "@tauri-apps/api": "~2.11.1",</span><span class="diff-line diff-line--add">+     "@tauri-apps/plugin-dialog": "~2.7.3",</span><span class="diff-line diff-line--add">+     "@tauri-apps/plugin-fs": "~2.5.2",</span><span class="diff-line">      "next": "16.3.6",</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">バージョンの組み合わせ</p>
+              <p>この項目で使うバージョンは次のとおりです。<code>tauri add</code> が入れる npm 側のバージョンは実行する時期によって変わります。上のエラー表示が出たら、表示された Rust 側のバージョンに npm 側のマイナーバージョンを合わせてください。</p>
+      <table>
+        <thead>
+        <tr><th>Rust crate</th><th>npm パッケージ（<code>package.json</code> の指定）</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>tauri</code> 2.11.6</td><td><code>@tauri-apps/api</code> 2.11.1（<code>~2.11.1</code>）</td></tr>
+        <tr><td><code>tauri-plugin-fs</code> 2.5.2</td><td><code>@tauri-apps/plugin-fs</code> 2.5.2（<code>~2.5.2</code>）</td></tr>
+        <tr><td><code>tauri-plugin-dialog</code> 2.7.3</td><td><code>@tauri-apps/plugin-dialog</code> 2.7.3（<code>~2.7.3</code>）</td></tr>
+        </tbody>
+      </table>
+
+            </div>
+          </div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>tauri add</code> の後の最初の起動は時間がかかる</p>
+              <p>プラグインの crate とその依存（dialog の場合はファイル選択ダイアログ用の <code>rfd</code> など）を新しくコンパイルします。執筆時の環境では、<code>tauri dev</code> の Rust のビルドに約 21 秒かかりました。2 回目以降は差分だけのコンパイルになります。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>もう一度 <code>npm run tauri dev</code> を起動し、<code>Found version mismatched Tauri packages</code> の表示が出ないことを確認します。03 と同じ画面が開けば完了です。確認したら <code>Ctrl + C</code> で止めます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">権限と保存先を確かめる</h3>
+        </div>
+        <div class="step__body">
+
+          <p>プラグインを追加しただけでは、フロントエンドから自由にファイルを書けるわけではありません。Tauri 2 では、フロントエンドから呼べる操作を capability（<code>capabilities/default.json</code>）の権限で許可します。<code>fs:default</code> が何を許可しているかを、プラグインの定義ファイル（<code>tauri-plugin-fs</code> 2.5.2 の <code>permissions/default.toml</code>）で確認します。</p>
+
+      <table>
+        <thead>
+        <tr><th>権限</th><th>中身</th><th>許可されること</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>fs:default</code></td><td><code>create-app-specific-dirs</code></td><td>アプリ用フォルダ（AppConfig / AppData / AppLocalData / AppCache / AppLog）の作成（<code>mkdir</code>）</td></tr>
+        <tr><td></td><td><code>read-app-specific-dirs-recursive</code></td><td>アプリ用フォルダとその中のファイル・サブフォルダの読み取り</td></tr>
+        <tr><td></td><td><code>deny-default</code></td><td>WebView のデータフォルダなど、重要な場所へのアクセスを拒否（Windows / Linux 向け）</td></tr>
+        <tr><td><code>fs:allow-app-write</code></td><td><code>write-all</code> + <code>scope-app</code></td><td>アプリ用フォルダの直下への書き込み（サブフォルダは含まない）</td></tr>
+        <tr><td><code>fs:allow-app-write-recursive</code></td><td><code>write-all</code> + <code>scope-app-recursive</code></td><td>アプリ用フォルダとサブフォルダへの書き込み</td></tr>
+        <tr><td><code>dialog:default</code></td><td><code>allow-message</code> / <code>allow-save</code> / <code>allow-open</code></td><td>メッセージ、保存、開くの各ダイアログ（<code>ask</code> も内部で message のコマンドを使う）</td></tr>
+        </tbody>
+      </table>
+
+          <p><code>fs:default</code> には書き込みが含まれていません。筆者の環境で、<code>fs:default</code> だけの状態で AppData に <code>writeTextFile</code> を呼んだところ、次のエラーで拒否されました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">fs.write_text_file not allowed. Permissions associated with this command: fs:allow-app-write, fs:allow-app-write-recursive, fs:allow-appcache-write, （以下、権限名の一覧が続く）</span></pre>
+</div>
+
+          <p>エラーの先頭が、拒否されたコマンド（<code>fs.write_text_file</code>）です。後ろには、このコマンドを許可できる権限の候補が並びます。今回は AppData の直下に <code>todos.json</code> を 1 つ置くだけなので、サブフォルダを含まない <code>fs:allow-app-write</code> を追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/capabilities/default.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      "core:window:allow-start-dragging",</span><span class="diff-line">      "fs:default",</span><span class="diff-line diff-line--add">+     "fs:allow-app-write",</span><span class="diff-line">      "dialog:default"</span><span class="diff-line">    ]</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>権限（permission）は「どのコマンドを呼べるか」を決め、scope は「どのパスに対してか」を決めます。<code>fs:allow-app-write</code> は書き込みのコマンドと、<code>$APPDATA</code> とその直下（<code>$APPDATA/*</code>）などの scope をまとめて許可します。scope の外にあるパスは、コマンドが許可されていても拒否されます。筆者の環境で確かめた結果は次のとおりです。</p>
+
+      <table>
+        <thead>
+        <tr><th>書き込み先</th><th><code>fs:default</code> のみ</th><th>+ <code>fs:allow-app-write</code></th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>$APPDATA/probe-appdata.txt</code>（フォルダ作成済み）</td><td>拒否（<code>fs.write_text_file not allowed.</code>）</td><td>成功</td></tr>
+        <tr><td><code>/private/tmp/handson-probe-04.txt</code>（任意の絶対パス）</td><td>拒否（同上）</td><td>拒否（<code>forbidden path: ...</code>）</td></tr>
+        </tbody>
+      </table>
+
+          <p>scope 外で拒否されたときの文言は次のとおりです。<code>not allowed</code>（権限が足りない）とは文言が違うので、どちらの問題かを見分けられます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">forbidden path: /private/tmp/handson-probe-04.txt, maybe it is not allowed on the scope for `allow-write-text-file` permission in your capability file</span></pre>
+</div>
+
+          <p>次に、<code>$APPDATA</code> が実際にどこを指すかを画面に表示します。<code>@tauri-apps/api/path</code> の <code>appDataDir()</code> は、AppData の絶対パスを返します。ステップ 3 で保存するファイル名を付けて、一覧の下に表示します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/TodoList/TodoList.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  "use client";</span><span class="diff-line"> </span><span class="diff-line">  import { useEffect, useState } from "react";</span><span class="diff-line diff-line--add">+ import { appDataDir } from "@tauri-apps/api/path";</span><span class="diff-line">  import {</span><span class="diff-line">    addTodo,</span><span class="diff-line">    deleteTodo,</span><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">  export function TodoList() {</span><span class="diff-line">    const [todos, setTodos] = useState&lt;Todo[]&gt;([]);</span><span class="diff-line diff-line--add">+   const [location, setLocation] = useState("");</span><span class="diff-line">    const [title, setTitle] = useState("");</span><span class="diff-line">    const [error, setError] = useState("");</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">      listTodos()</span><span class="diff-line">        .then(setTodos)</span><span class="diff-line">        .catch(() =&gt; setError("ブラウザで実行中（Tauri API は利用できません）"));</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     appDataDir()</span><span class="diff-line diff-line--add">+       .then((dir) =&gt; setLocation(`${dir}/todos.json`))</span><span class="diff-line diff-line--add">+       .catch(() =&gt; setLocation(""));</span><span class="diff-line">    }, []);</span><span class="diff-line"> </span><span class="diff-line">    const handleAdd = async () =&gt; {</span><span class="diff-line">  ...</span><span class="diff-line">            &lt;/li&gt;</span><span class="diff-line">          ))}</span><span class="diff-line">        &lt;/ul&gt;</span><span class="diff-line diff-line--add">+       {location &amp;&amp; &lt;p className={styles.location}&gt;保存先: {location}&lt;/p&gt;}</span><span class="diff-line">      &lt;/section&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/TodoList/TodoList.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    opacity: 0.5;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ .location {</span><span class="diff-line diff-line--add">+   margin: 12px 0 0;</span><span class="diff-line diff-line--add">+   font-size: 12px;</span><span class="diff-line diff-line--add">+   word-break: break-all;</span><span class="diff-line diff-line--add">+   opacity: 0.6;</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  .deleteButton {</span><span class="diff-line">    padding: 4px 10px;</span><span class="diff-line">    font-size: 12px;</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>筆者の環境（macOS）では、<code>appDataDir()</code> は次のパスを返しました。末尾のフォルダ名は <code>tauri.conf.json</code> の <code>identifier</code> です。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">/Users/&lt;ユーザー名&gt;/Library/Application Support/com.handson.tauri04</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run tauri dev</code> で起動します。一覧の下に「保存先: /Users/&lt;ユーザー名&gt;/Library/Application Support/com.handson.tauri04/todos.json」と表示されれば完了です。この時点ではまだ何も保存していないので、このフォルダはまだ存在しません。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">AppData に保存して起動時に復元する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Todo を AppData の <code>todos.json</code> に保存し、次回の起動時に読み込みます。ファイルの読み書きは、フロントエンドから fs プラグインで行います。保存と読み込みの処理を <code>storage.ts</code> にまとめます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/todos/api/storage.ts（新規）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import {
+  BaseDirectory,
+  exists,
+  mkdir,
+  readTextFile,
+  writeTextFile,
+} from "@tauri-apps/plugin-fs";
+import type { Todo } from "../types";
+
+// AppData（macOS では ~/Library/Application Support/&lt;identifier&gt;）の直下に保存する。
+const FILE_NAME = "todos.json";
+const OPTIONS = { baseDir: BaseDirectory.AppData } as const;
+
+export async function saveTodos(todos: Todo[]): Promise&lt;void&gt; {
+  // AppData のフォルダは初回起動時には存在しないので、先に作っておく。
+  // 既にあっても recursive: true なら失敗しない。
+  await mkdir("", { ...OPTIONS, recursive: true });
+  await writeTextFile(FILE_NAME, JSON.stringify(todos, null, 2), OPTIONS);
+}
+
+export async function loadTodos(): Promise&lt;Todo[]&gt; {
+  if (!(await exists(FILE_NAME, OPTIONS))) {
+    return [];
+  }
+  const text = await readTextFile(FILE_NAME, OPTIONS);
+  return JSON.parse(text) as Todo[];
+}</code></pre>
+</div>
+
+          <p><code>{ baseDir: BaseDirectory.AppData }</code> を渡すと、パス（ここでは <code>todos.json</code>）は AppData からの相対パスとして扱われます。<code>saveTodos</code> では、書き込む前に <code>mkdir</code> で AppData のフォルダを作っています。</p>
+          <p>このフォルダは、初回の起動時には存在しません。筆者が <code>mkdir</code> を呼ばずに書き込んだところ、権限は通ったものの次のエラーになりました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">failed to open file at path: /Users/&lt;ユーザー名&gt;/Library/Application Support/com.handson.tauri04/probe-appdata.txt with error: No such file or directory (os error 2)</span></pre>
+</div>
+
+          <p><code>recursive: true</code> を付けた <code>mkdir</code> は、フォルダが既にあっても失敗しません。そのため、保存のたびに呼んでも問題ありません。フォルダの作成は <code>fs:default</code> に含まれる <code>create-app-specific-dirs</code> で許可されています。</p>
+          <p>読み込んだ Todo は、03 で作った Rust 側の状態（<code>AppState</code>）にも反映する必要があります。<code>add_todo</code> などのコマンドは Rust 側の状態を操作するからです。状態を丸ごと置き換える <code>set_todos</code> コマンドを追加します。03 と同じく、ロジックは純粋関数 <code>replace_todos_pure</code> に切り出し、テストも 2 件追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ /// 保存ファイルから読み込んだ Todo で状態を置き換える。</span><span class="diff-line diff-line--add">+ /// 次に振る id は、読み込んだ中の最大値 + 1 にそろえて id が重ならないようにする。</span><span class="diff-line diff-line--add">+ fn replace_todos_pure(todos: &amp;mut Vec&lt;Todo&gt;, next_id: &amp;mut u32, loaded: Vec&lt;Todo&gt;) {</span><span class="diff-line diff-line--add">+     *next_id = loaded.iter().map(|t| t.id).max().unwrap_or(0) + 1;</span><span class="diff-line diff-line--add">+     *todos = loaded;</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  #[tauri::command]</span><span class="diff-line">  fn add_todo(title: String, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;Todo, AppError&gt; {</span><span class="diff-line">      let mut next_id = state.next_id.lock().unwrap();</span><span class="diff-line">  ...</span><span class="diff-line">  fn delete_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;(), AppError&gt; {</span><span class="diff-line">      let mut todos = state.todos.lock().unwrap();</span><span class="diff-line">      delete_todo_pure(&amp;mut todos, id)</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ /// フロントエンドが保存ファイルから読み込んだ Todo を、Rust 側の状態に流し込む。</span><span class="diff-line diff-line--add">+ #[tauri::command]</span><span class="diff-line diff-line--add">+ fn set_todos(todos: Vec&lt;Todo&gt;, state: tauri::State&lt;'_, AppState&gt;) {</span><span class="diff-line diff-line--add">+     let mut next_id = state.next_id.lock().unwrap();</span><span class="diff-line diff-line--add">+     let mut current = state.todos.lock().unwrap();</span><span class="diff-line diff-line--add">+     replace_todos_pure(&amp;mut current, &amp;mut next_id, todos);</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  /// 進捗を `progress` イベントで通知しながら時間のかかる処理を模した非同期コマンド。</span><span class="diff-line">  ...</span><span class="diff-line">              list_todos,</span><span class="diff-line">              toggle_todo,</span><span class="diff-line">              delete_todo,</span><span class="diff-line diff-line--add">+             set_todos,</span><span class="diff-line">              slow_task</span><span class="diff-line">          ])</span><span class="diff-line">          .run(tauri::generate_context!())</span><span class="diff-line">  ...</span><span class="diff-line">                  list_todos,</span><span class="diff-line">                  toggle_todo,</span><span class="diff-line">                  delete_todo,</span><span class="diff-line diff-line--add">+                 set_todos,</span><span class="diff-line">                  slow_task</span><span class="diff-line">              ])</span><span class="diff-line">              .build(mock_context(noop_assets()))</span><span class="diff-line">  ...</span><span class="diff-line">          let err = delete_todo_pure(&amp;mut todos, 1).unwrap_err();</span><span class="diff-line">          assert!(matches!(err, AppError::NotFound(1)));</span><span class="diff-line">      }</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     #[test]</span><span class="diff-line diff-line--add">+     fn replace_todos_pure_sets_next_id_after_max() {</span><span class="diff-line diff-line--add">+         let mut todos = Vec::new();</span><span class="diff-line diff-line--add">+         let mut next_id = 1u32;</span><span class="diff-line diff-line--add">+         let loaded = vec![</span><span class="diff-line diff-line--add">+             Todo {</span><span class="diff-line diff-line--add">+                 id: 3,</span><span class="diff-line diff-line--add">+                 title: "牛乳を買う".into(),</span><span class="diff-line diff-line--add">+                 done: true,</span><span class="diff-line diff-line--add">+                 created_at: 10,</span><span class="diff-line diff-line--add">+             },</span><span class="diff-line diff-line--add">+             Todo {</span><span class="diff-line diff-line--add">+                 id: 7,</span><span class="diff-line diff-line--add">+                 title: "本を返す".into(),</span><span class="diff-line diff-line--add">+                 done: false,</span><span class="diff-line diff-line--add">+                 created_at: 20,</span><span class="diff-line diff-line--add">+             },</span><span class="diff-line diff-line--add">+         ];</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         replace_todos_pure(&amp;mut todos, &amp;mut next_id, loaded);</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         assert_eq!(todos.len(), 2);</span><span class="diff-line diff-line--add">+         // 読み込んだ最大 id は 7 なので、次に振るのは 8。</span><span class="diff-line diff-line--add">+         assert_eq!(next_id, 8);</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     #[test]</span><span class="diff-line diff-line--add">+     fn set_todos_then_list_todos_round_trip_via_ipc() {</span><span class="diff-line diff-line--add">+         let app = make_full_app();</span><span class="diff-line diff-line--add">+         let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())</span><span class="diff-line diff-line--add">+             .build()</span><span class="diff-line diff-line--add">+             .unwrap();</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         // 保存ファイルの JSON と同じ形（createdAt の camelCase）で流し込む。</span><span class="diff-line diff-line--add">+         let saved = serde_json::json!([</span><span class="diff-line diff-line--add">+             { "id": 5, "title": "保存済みの Todo", "done": true, "createdAt": 42 }</span><span class="diff-line diff-line--add">+         ]);</span><span class="diff-line diff-line--add">+         get_ipc_response(</span><span class="diff-line diff-line--add">+             &amp;webview,</span><span class="diff-line diff-line--add">+             invoke_request("set_todos", serde_json::json!({ "todos": saved })),</span><span class="diff-line diff-line--add">+         )</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         let list = get_ipc_response(</span><span class="diff-line diff-line--add">+             &amp;webview,</span><span class="diff-line diff-line--add">+             invoke_request("list_todos", serde_json::json!({})),</span><span class="diff-line diff-line--add">+         )</span><span class="diff-line diff-line--add">+         .unwrap()</span><span class="diff-line diff-line--add">+         .deserialize::&lt;Vec&lt;Todo&gt;&gt;()</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+         assert_eq!(list.len(), 1);</span><span class="diff-line diff-line--add">+         assert_eq!(list[0].title, "保存済みの Todo");</span><span class="diff-line diff-line--add">+         assert_eq!(list[0].created_at, 42);</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         // 読み込んだ後に追加すると、id は 6 から振られる。</span><span class="diff-line diff-line--add">+         let added = get_ipc_response(</span><span class="diff-line diff-line--add">+             &amp;webview,</span><span class="diff-line diff-line--add">+             invoke_request("add_todo", serde_json::json!({ "title": "新しい Todo" })),</span><span class="diff-line diff-line--add">+         )</span><span class="diff-line diff-line--add">+         .unwrap()</span><span class="diff-line diff-line--add">+         .deserialize::&lt;Todo&gt;()</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+         assert_eq!(added.id, 6);</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+          <p><code>replace_todos_pure</code> は、次に振る id を「読み込んだ中の最大 id + 1」にします。こうしないと、読み込んだ後に追加した Todo の id が既存のものと重なります。<code>set_todos_then_list_todos_round_trip_via_ipc</code> では、保存ファイルと同じ形（<code>createdAt</code>）の JSON を流し込みます。続けて Todo を追加し、その id が 6 になることを確かめています。</p>
+          <p>フロントエンドから呼ぶ関数を <code>commands.ts</code> に追加します。関数名を <code>setTodos</code> にすると、<code>TodoList</code> の state の setter（<code>setTodos</code>）と名前がぶつかるので、<code>replaceTodos</code> にしました。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/features/todos/api/commands.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    return invoke&lt;void&gt;("delete_todo", { id });</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ export async function replaceTodos(todos: Todo[]): Promise&lt;void&gt; {</span><span class="diff-line diff-line--add">+   return invoke&lt;void&gt;("set_todos", { todos });</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  export async function slowTask(): Promise&lt;void&gt; {</span><span class="diff-line">    return invoke&lt;void&gt;("slow_task");</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>TodoList</code> を、起動時に <code>loadTodos</code> で読み込み、変更のたびに <code>saveTodos</code> で保存するように変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/TodoList/TodoList.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import {</span><span class="diff-line">    addTodo,</span><span class="diff-line">    deleteTodo,</span><span class="diff-line diff-line--remove">-   listTodos,</span><span class="diff-line diff-line--add">+   replaceTodos,</span><span class="diff-line">    toggleTodo,</span><span class="diff-line">  } from "@/features/todos/api/commands";</span><span class="diff-line diff-line--add">+ import { loadTodos, saveTodos } from "@/features/todos/api/storage";</span><span class="diff-line">  import type { Todo } from "@/features/todos/types";</span><span class="diff-line">  import styles from "./TodoList.module.scss";</span><span class="diff-line"> </span><span class="diff-line">  export function TodoList() {</span><span class="diff-line">    const [todos, setTodos] = useState&lt;Todo[]&gt;([]);</span><span class="diff-line diff-line--add">+   const [loaded, setLoaded] = useState(false);</span><span class="diff-line">    const [location, setLocation] = useState("");</span><span class="diff-line">    const [title, setTitle] = useState("");</span><span class="diff-line">    const [error, setError] = useState("");</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+   // 起動時に保存ファイルを読み込み、Rust 側の状態にも流し込む。</span><span class="diff-line">    useEffect(() =&gt; {</span><span class="diff-line diff-line--remove">-     listTodos()</span><span class="diff-line diff-line--remove">-       .then(setTodos)</span><span class="diff-line diff-line--remove">-       .catch(() =&gt; setError("ブラウザで実行中（Tauri API は利用できません）"));</span><span class="diff-line diff-line--add">+     loadTodos()</span><span class="diff-line diff-line--add">+       .then(async (saved) =&gt; {</span><span class="diff-line diff-line--add">+         await replaceTodos(saved);</span><span class="diff-line diff-line--add">+         setTodos(saved);</span><span class="diff-line diff-line--add">+         setLoaded(true);</span><span class="diff-line diff-line--add">+       })</span><span class="diff-line diff-line--add">+       .catch((e) =&gt; setError(`読み込みに失敗しました: ${String(e)}`));</span><span class="diff-line"> </span><span class="diff-line">      appDataDir()</span><span class="diff-line">        .then((dir) =&gt; setLocation(`${dir}/todos.json`))</span><span class="diff-line">        .catch(() =&gt; setLocation(""));</span><span class="diff-line">    }, []);</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+   // 変更のたびに保存する。読み込みが終わる前に空の一覧を保存すると</span><span class="diff-line diff-line--add">+   // 既存のファイルを消してしまうので、loaded になってから保存する。</span><span class="diff-line diff-line--add">+   useEffect(() =&gt; {</span><span class="diff-line diff-line--add">+     if (!loaded) return;</span><span class="diff-line diff-line--add">+     saveTodos(todos).catch((e) =&gt; setError(`保存に失敗しました: ${String(e)}`));</span><span class="diff-line diff-line--add">+   }, [todos, loaded]);</span><span class="diff-line"> </span><span class="diff-line">    const handleAdd = async () =&gt; {</span><span class="diff-line">      try {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>保存の <code>useEffect</code> は、<code>loaded</code> が <code>true</code> になってから動かします。このガードが無いと、最初の描画の空配列 <code>[]</code> がそのまま保存され、起動のたびに既存の <code>todos.json</code> が消えてしまいます。読み込みに失敗したときも <code>loaded</code> は立たないので、壊れたファイルを空の一覧で上書きすることもありません。</p>
+          <p><code>src-tauri</code> で <code>cargo test</code> を実行し、追加した 2 件（<code>replace_todos_pure_sets_next_id_after_max</code> と <code>set_todos_then_list_todos_round_trip_via_ipc</code>）が <code>ok</code> になることを確認します。この時点のテストは、03 の 12 件と合わせて 14 件です。出力の形はステップ 7 に載せています。</p>
+          <p><code>npm run tauri dev</code> で起動し、Todo を 1 件追加します。筆者の環境では、「プローブ A」を追加すると <code>todos.json</code> は次の内容になりました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">JSON</span>
+    <span class="code-block__filename">~/Library/Application Support/com.handson.tauri04/todos.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-json">[
+  {
+    "id": 1,
+    "title": "プローブ A",
+    "done": false,
+    "createdAt": 1791001996
+  }
+]</code></pre>
+</div>
+
+          <p>JSON のキーは <code>createdAt</code>（camelCase）です。フロントエンドの <code>Todo</code> 型をそのまま <code>JSON.stringify</code> しているためです。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>tauri dev</code> を <code>Ctrl + C</code> で止めて、もう一度 <code>npm run tauri dev</code> で起動します。前回追加した Todo が一覧に表示されていれば完了です（筆者の環境では「プローブ A」が復元されました）。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">保存ダイアログで書き出す</h3>
+        </div>
+        <div class="step__body">
+
+          <p>AppData 以外の場所、たとえばデスクトップやダウンロードフォルダに Todo を書き出せるようにします。書き出し先はユーザーに保存ダイアログで選んでもらいます。<code>transfer.ts</code> を新しく作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/todos/api/transfer.ts（新規）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { save } from "@tauri-apps/plugin-dialog";
+import { writeTextFile } from "@tauri-apps/plugin-fs";
+import type { Todo } from "../types";
+
+const JSON_FILTER = { name: "JSON", extensions: ["json"] };
+
+/// 保存先をダイアログで選んで書き出す。キャンセルされたら null を返す。
+export async function exportTodos(todos: Todo[]): Promise&lt;string | null&gt; {
+  const path = await save({
+    defaultPath: "todos.json",
+    filters: [JSON_FILTER],
+  });
+  // キャンセル時は null が返る。何もせずに終わる。
+  if (path === null) return null;
+
+  // ダイアログで選んだパスは、fs の scope（許可パス）の外でも書き込める。
+  await writeTextFile(path, JSON.stringify(todos, null, 2));
+  return path;
+}</code></pre>
+</div>
+
+          <p><code>save()</code> は、ユーザーが選んだパスを文字列で返します。キャンセルされたときは <code>null</code> を返すので、そのまま <code>null</code> を返して何もしません。</p>
+          <p>ここで、ステップ 2 の結果を思い出してください。<code>fs:allow-app-write</code> の scope はアプリ用フォルダだけなので、デスクトップなどへの <code>writeTextFile</code> は本来 <code>forbidden path</code> で拒否されます。それでもこのコードで書き込めるのは、dialog プラグインが、選ばれたファイルを fs の scope に追加するからです。<code>tauri-plugin-dialog</code> 2.7.3 の <code>src/commands.rs</code> の <code>save</code> コマンドには、次の処理があります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tauri-plugin-dialog 2.7.3: src/commands.rs（save コマンドの一部）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">    let path = dialog_builder.blocking_save_file();
+    if let Some(p) = &amp;path {
+        if let Ok(path) = p.clone().into_path() {
+            if let Some(s) = window.try_fs_scope() {
+                s.allow_file(&amp;path)?;
+            }
+            tauri_scope.allow_file(&amp;path)?;
+        }
+    }</code></pre>
+</div>
+
+          <p>許可されるのは <code>allow_file</code> で指定した 1 ファイルだけで、そのファイルがあるフォルダ全体は許可されません。ユーザーが明示的に選んだファイルだけを読み書きできる、という設計です。<code>open</code> コマンドも同じように、選ばれたファイルを <code>allow_file</code> で許可します。</p>
+          <p><code>TodoList</code> に「書き出す」ボタンを追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/TodoList/TodoList.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    replaceTodos,</span><span class="diff-line">    toggleTodo,</span><span class="diff-line">  } from "@/features/todos/api/commands";</span><span class="diff-line diff-line--add">+ import { exportTodos } from "@/features/todos/api/transfer";</span><span class="diff-line">  import { loadTodos, saveTodos } from "@/features/todos/api/storage";</span><span class="diff-line">  import type { Todo } from "@/features/todos/types";</span><span class="diff-line">  import styles from "./TodoList.module.scss";</span><span class="diff-line">  ...</span><span class="diff-line">    const [location, setLocation] = useState("");</span><span class="diff-line">    const [title, setTitle] = useState("");</span><span class="diff-line">    const [error, setError] = useState("");</span><span class="diff-line diff-line--add">+   const [notice, setNotice] = useState("");</span><span class="diff-line"> </span><span class="diff-line">    // 起動時に保存ファイルを読み込み、Rust 側の状態にも流し込む。</span><span class="diff-line">    useEffect(() =&gt; {</span><span class="diff-line">  ...</span><span class="diff-line">        setError("");</span><span class="diff-line">      } catch (e) {</span><span class="diff-line">        setError(String(e));</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+   };</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+   const handleExport = async () =&gt; {</span><span class="diff-line diff-line--add">+     try {</span><span class="diff-line diff-line--add">+       const path = await exportTodos(todos);</span><span class="diff-line diff-line--add">+       // キャンセルされた場合は null。メッセージは出さずに戻る。</span><span class="diff-line diff-line--add">+       if (path === null) return;</span><span class="diff-line diff-line--add">+       setNotice(`書き出しました: ${path}`);</span><span class="diff-line diff-line--add">+       setError("");</span><span class="diff-line diff-line--add">+     } catch (e) {</span><span class="diff-line diff-line--add">+       setError(`書き出しに失敗しました: ${String(e)}`);</span><span class="diff-line">      }</span><span class="diff-line">    };</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">            &lt;/li&gt;</span><span class="diff-line">          ))}</span><span class="diff-line">        &lt;/ul&gt;</span><span class="diff-line diff-line--add">+       &lt;div className={styles.transfer}&gt;</span><span class="diff-line diff-line--add">+         &lt;button type="button" className={styles.addButton} onClick={handleExport}&gt;</span><span class="diff-line diff-line--add">+           書き出す</span><span class="diff-line diff-line--add">+         &lt;/button&gt;</span><span class="diff-line diff-line--add">+       &lt;/div&gt;</span><span class="diff-line diff-line--add">+       {notice &amp;&amp; &lt;p className={styles.notice}&gt;{notice}&lt;/p&gt;}</span><span class="diff-line">        {location &amp;&amp; &lt;p className={styles.location}&gt;保存先: {location}&lt;/p&gt;}</span><span class="diff-line">      &lt;/section&gt;</span><span class="diff-line">    );</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/TodoList/TodoList.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    opacity: 0.5;</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ .transfer {</span><span class="diff-line diff-line--add">+   display: flex;</span><span class="diff-line diff-line--add">+   gap: 8px;</span><span class="diff-line diff-line--add">+   margin-top: 16px;</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ .notice {</span><span class="diff-line diff-line--add">+   margin: 12px 0 0;</span><span class="diff-line diff-line--add">+   font-size: 13px;</span><span class="diff-line diff-line--add">+   word-break: break-all;</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  .location {</span><span class="diff-line">    margin: 12px 0 0;</span><span class="diff-line">    font-size: 12px;</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run tauri dev</code> で起動し、「書き出す」を押します。保存ダイアログが開き、ファイル名に <code>todos.json</code> が入っていることを確かめます。保存先を選んで保存し、一覧の下に「書き出しました: （選んだパス）」と表示されることを確かめます。そのファイルを開き、Todo の JSON が書かれていることも確かめます。ダイアログでキャンセルした場合は、何も表示されないことを確かめます。</p>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">筆者が確認した範囲</p>
+              <p>執筆時に自動の計測で確かめたのは、scope 外の拒否（<code>writeTextFile</code> が <code>forbidden path</code> で拒否されること）、<code>parseTodos</code> のエラー文言、AppData への保存・復元までです。ダイアログの画面操作は自動の計測で確かめられなかったため、各自で確認してください。<code>save</code> が選ばれたパスを <code>allow_file</code> で scope に追加することは、プラグインのソースで確認しています。</p>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">開くダイアログで読み込む</h3>
+        </div>
+        <div class="step__body">
+
+          <p>書き出した JSON を、開くダイアログで選んで読み込みます。外部のファイルは、壊れていたり、別の形の JSON だったりします。そのまま使わずに、Todo の配列として正しい形かを検証します。検証する関数を <code>validate.ts</code> に作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/todos/api/validate.ts（新規）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import type { Todo } from "../types";
+
+/// JSON 文字列を Todo の配列として検証する。
+/// 壊れた JSON は JSON.parse が SyntaxError を投げ、形が違うものは Error を投げる。
+export function parseTodos(text: string): Todo[] {
+  const value: unknown = JSON.parse(text);
+  if (!Array.isArray(value)) {
+    throw new Error("Todo の配列（[ ... ]）ではありません");
+  }
+
+  value.forEach((item: unknown, index: number) =&gt; {
+    const at = `${index + 1} 件目`;
+    if (typeof item !== "object" || item === null) {
+      throw new Error(`${at}: オブジェクトではありません`);
+    }
+    const todo = item as Record&lt;string, unknown&gt;;
+    if (typeof todo.id !== "number" || !Number.isInteger(todo.id)) {
+      throw new Error(`${at}: id が整数ではありません`);
+    }
+    if (typeof todo.title !== "string") {
+      throw new Error(`${at}: title が文字列ではありません`);
+    }
+    if (typeof todo.done !== "boolean") {
+      throw new Error(`${at}: done が真偽値ではありません`);
+    }
+    // Rust 側の Todo は createdAt も必須なので、ここで確かめておく。
+    if (typeof todo.createdAt !== "number") {
+      throw new Error(`${at}: createdAt が数値ではありません`);
+    }
+  });
+
+  return value as Todo[];
+}</code></pre>
+</div>
+
+          <p><code>id</code> / <code>title</code> / <code>done</code> に加えて、<code>createdAt</code> も確かめています。Rust 側の <code>Todo</code> 構造体では <code>created_at</code>（JSON では <code>createdAt</code>）が必須だからです。検証を通さずに <code>createdAt</code> の無い JSON を <code>set_todos</code> に渡すと、Rust 側の serde が次のエラーを返しました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">invalid args `todos` for command `set_todos`: missing field `createdAt`</span></pre>
+</div>
+
+          <p>ステップ 3 の <code>loadTodos</code> も、<code>JSON.parse</code> の代わりに <code>parseTodos</code> を通すように変えます。AppData の <code>todos.json</code> を手で書き換えて壊してしまった場合にも、エラーとして扱えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/features/todos/api/storage.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    writeTextFile,</span><span class="diff-line">  } from "@tauri-apps/plugin-fs";</span><span class="diff-line">  import type { Todo } from "../types";</span><span class="diff-line diff-line--add">+ import { parseTodos } from "./validate";</span><span class="diff-line"> </span><span class="diff-line">  // AppData（macOS では ~/Library/Application Support/&lt;identifier&gt;）の直下に保存する。</span><span class="diff-line">  const FILE_NAME = "todos.json";</span><span class="diff-line">  ...</span><span class="diff-line">      return [];</span><span class="diff-line">    }</span><span class="diff-line">    const text = await readTextFile(FILE_NAME, OPTIONS);</span><span class="diff-line diff-line--remove">-   return JSON.parse(text) as Todo[];</span><span class="diff-line diff-line--add">+   return parseTodos(text);</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>transfer.ts</code> に、開くダイアログでファイルを選んで検証する <code>importTodos</code> を追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/features/todos/api/transfer.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">- import { save } from "@tauri-apps/plugin-dialog";</span><span class="diff-line diff-line--remove">- import { writeTextFile } from "@tauri-apps/plugin-fs";</span><span class="diff-line diff-line--add">+ import { open, save } from "@tauri-apps/plugin-dialog";</span><span class="diff-line diff-line--add">+ import { readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";</span><span class="diff-line">  import type { Todo } from "../types";</span><span class="diff-line diff-line--add">+ import { parseTodos } from "./validate";</span><span class="diff-line"> </span><span class="diff-line">  const JSON_FILTER = { name: "JSON", extensions: ["json"] };</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">    await writeTextFile(path, JSON.stringify(todos, null, 2));</span><span class="diff-line">    return path;</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ /// ダイアログで JSON を選び、検証してから Todo の配列を返す。</span><span class="diff-line diff-line--add">+ /// キャンセルされたら null。壊れた JSON や形が違う場合は例外を投げる。</span><span class="diff-line diff-line--add">+ export async function importTodos(): Promise&lt;Todo[] | null&gt; {</span><span class="diff-line diff-line--add">+   const path = await open({</span><span class="diff-line diff-line--add">+     multiple: false,</span><span class="diff-line diff-line--add">+     directory: false,</span><span class="diff-line diff-line--add">+     filters: [JSON_FILTER],</span><span class="diff-line diff-line--add">+   });</span><span class="diff-line diff-line--add">+   if (path === null) return null;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+   const text = await readTextFile(path);</span><span class="diff-line diff-line--add">+   return parseTodos(text);</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+          <p><code>multiple: false</code> を指定しているので、<code>open()</code> の戻り値は <code>string | null</code> です。選ばれたファイルはステップ 4 と同じく scope に追加されるので、<code>readTextFile</code> で読めます。</p>
+          <p><code>TodoList</code> に「読み込む」ボタンを追加します。検証で弾いたときは <code>message</code> でエラーを知らせ、検証を通ったら <code>ask</code> で置き換えてよいかを確認してから反映します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/TodoList/TodoList.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    replaceTodos,</span><span class="diff-line">    toggleTodo,</span><span class="diff-line">  } from "@/features/todos/api/commands";</span><span class="diff-line diff-line--remove">- import { exportTodos } from "@/features/todos/api/transfer";</span><span class="diff-line diff-line--add">+ import { ask, message } from "@tauri-apps/plugin-dialog";</span><span class="diff-line diff-line--add">+ import { exportTodos, importTodos } from "@/features/todos/api/transfer";</span><span class="diff-line">  import { loadTodos, saveTodos } from "@/features/todos/api/storage";</span><span class="diff-line">  import type { Todo } from "@/features/todos/types";</span><span class="diff-line">  import styles from "./TodoList.module.scss";</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">    };</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+   const handleImport = async () =&gt; {</span><span class="diff-line diff-line--add">+     let imported: Todo[] | null;</span><span class="diff-line diff-line--add">+     try {</span><span class="diff-line diff-line--add">+       imported = await importTodos();</span><span class="diff-line diff-line--add">+     } catch (e) {</span><span class="diff-line diff-line--add">+       // 壊れた JSON や形が違うファイルは、ダイアログで理由を知らせる。</span><span class="diff-line diff-line--add">+       await message(`読み込めませんでした。\n${String(e)}`, {</span><span class="diff-line diff-line--add">+         title: "読み込みエラー",</span><span class="diff-line diff-line--add">+         kind: "error",</span><span class="diff-line diff-line--add">+       });</span><span class="diff-line diff-line--add">+       return;</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+     // キャンセルされた場合は null。何もせずに戻る。</span><span class="diff-line diff-line--add">+     if (imported === null) return;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // 今の一覧を置き換えるので、確認してから反映する。</span><span class="diff-line diff-line--add">+     const ok = await ask(</span><span class="diff-line diff-line--add">+       `現在の ${todos.length} 件を、読み込んだ ${imported.length} 件で置き換えます。よろしいですか？`,</span><span class="diff-line diff-line--add">+       { title: "読み込みの確認", kind: "warning" }</span><span class="diff-line diff-line--add">+     );</span><span class="diff-line diff-line--add">+     if (!ok) return;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     try {</span><span class="diff-line diff-line--add">+       await replaceTodos(imported);</span><span class="diff-line diff-line--add">+       setTodos(imported);</span><span class="diff-line diff-line--add">+       setNotice(`${imported.length} 件を読み込みました`);</span><span class="diff-line diff-line--add">+       setError("");</span><span class="diff-line diff-line--add">+     } catch (e) {</span><span class="diff-line diff-line--add">+       setError(`反映に失敗しました: ${String(e)}`);</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+   };</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">    const handleDelete = async (id: number) =&gt; {</span><span class="diff-line">      try {</span><span class="diff-line">        await deleteTodo(id);</span><span class="diff-line">  ...</span><span class="diff-line">          &lt;button type="button" className={styles.addButton} onClick={handleExport}&gt;</span><span class="diff-line">            書き出す</span><span class="diff-line">          &lt;/button&gt;</span><span class="diff-line diff-line--add">+         &lt;button type="button" className={styles.addButton} onClick={handleImport}&gt;</span><span class="diff-line diff-line--add">+           読み込む</span><span class="diff-line diff-line--add">+         &lt;/button&gt;</span><span class="diff-line">        &lt;/div&gt;</span><span class="diff-line">        {notice &amp;&amp; &lt;p className={styles.notice}&gt;{notice}&lt;/p&gt;}</span><span class="diff-line">        {location &amp;&amp; &lt;p className={styles.location}&gt;保存先: {location}&lt;/p&gt;}</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>処理の順序は「選ぶ → 検証 → 確認 → 反映」です。検証で弾いたファイルでは確認ダイアログを出しません。反映すると <code>todos</code> が変わるので、ステップ 3 の保存の <code>useEffect</code> によって <code>todos.json</code> も置き換わります。</p>
+          <p><code>parseTodos</code> に不正な入力を渡したときのエラーは、筆者の環境で次のとおりでした。読み込みに失敗すると、この文言が <code>message</code> ダイアログの本文（「読み込めませんでした。」の次の行）に入ります。</p>
+
+      <table>
+        <thead>
+        <tr><th>入力</th><th>エラー</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>[{"id": 1,</code>（壊れた JSON）</td><td><code>SyntaxError: JSON Parse error: Property name must be a string literal</code></td></tr>
+        <tr><td><code>{"id": 1}</code>（配列ではない）</td><td><code>Error: Todo の配列（[ ... ]）ではありません</code></td></tr>
+        <tr><td><code>[{"id":1,"done":false,"createdAt":1}]</code>（<code>title</code> が無い）</td><td><code>Error: 1 件目: title が文字列ではありません</code></td></tr>
+        <tr><td><code>[{"id":1,"title":"a","done":false}]</code>（<code>createdAt</code> が無い）</td><td><code>Error: 1 件目: createdAt が数値ではありません</code></td></tr>
+        </tbody>
+      </table>
+
+          <p>壊れた JSON の文言は <code>JSON.parse</code> が投げる <code>SyntaxError</code> のもので、WebView のエンジンによって変わります（上は macOS の WebKit の文言です）。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run tauri dev</code> で起動し、ステップ 4 で書き出したファイルを「読み込む」で選びます。「読み込みの確認」ダイアログに件数が表示されることを確かめ、承認して一覧が置き換わり「N 件を読み込みました」と表示されることを確かめます。テキストエディタで JSON の末尾を消したファイルを選び、「読み込みエラー」ダイアログに <code>SyntaxError</code> の文言が表示されることを確かめます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">Rust の std::fs で書き出す</h3>
+        </div>
+        <div class="step__body">
+
+          <p>ファイル操作は、Rust 側で <code>std::fs</code> を使って書くこともできます。比較のために、現在の Todo を指定のパスへ書き出すコマンドと、AppData の <code>todos.json</code> のパスを返すコマンドを Rust 側に追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      NotFound(u32),</span><span class="diff-line">      #[error("イベント送信に失敗しました: {0}")]</span><span class="diff-line">      Emit(String),</span><span class="diff-line diff-line--add">+     #[error("ファイル操作に失敗しました: {0}")]</span><span class="diff-line diff-line--add">+     Io(String),</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  impl Serialize for AppError {</span><span class="diff-line">  ...</span><span class="diff-line">              .map_err(|e| AppError::Emit(e.to_string()))?;</span><span class="diff-line">      }</span><span class="diff-line">      Ok(())</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ /// Todo の一覧を JSON にして指定のパスへ書く。</span><span class="diff-line diff-line--add">+ /// フロントエンドの fs プラグイン（writeTextFile）と同じ形式の JSON を、std::fs で書く版。</span><span class="diff-line diff-line--add">+ fn write_todos_file(path: &amp;std::path::Path, todos: &amp;[Todo]) -&gt; Result&lt;(), AppError&gt; {</span><span class="diff-line diff-line--add">+     let json = serde_json::to_string_pretty(todos).map_err(|e| AppError::Io(e.to_string()))?;</span><span class="diff-line diff-line--add">+     std::fs::write(path, json).map_err(|e| AppError::Io(e.to_string()))</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ /// fs プラグインを使わず、Rust の std::fs で現在の Todo を書き出す。</span><span class="diff-line diff-line--add">+ /// Rust 側の書き込みは capabilities のスコープを通らないので、path の検証は呼び出し側（ここ）の責任になる。</span><span class="diff-line diff-line--add">+ #[tauri::command]</span><span class="diff-line diff-line--add">+ fn export_todos_rust(path: String, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;(), AppError&gt; {</span><span class="diff-line diff-line--add">+     let todos = state.todos.lock().unwrap();</span><span class="diff-line diff-line--add">+     write_todos_file(std::path::Path::new(&amp;path), &amp;todos)</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ /// `app_data_dir()` で AppData の todos.json のパスを解決して返す。</span><span class="diff-line diff-line--add">+ /// フロントエンドの BaseDirectory.AppData と同じフォルダを指す。</span><span class="diff-line diff-line--add">+ #[tauri::command]</span><span class="diff-line diff-line--add">+ fn app_data_todos_path&lt;R: tauri::Runtime&gt;(app: tauri::AppHandle&lt;R&gt;) -&gt; Result&lt;String, AppError&gt; {</span><span class="diff-line diff-line--add">+     use tauri::Manager;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     let dir = app</span><span class="diff-line diff-line--add">+         .path()</span><span class="diff-line diff-line--add">+         .app_data_dir()</span><span class="diff-line diff-line--add">+         .map_err(|e| AppError::Io(e.to_string()))?;</span><span class="diff-line diff-line--add">+     Ok(dir.join("todos.json").to_string_lossy().into_owned())</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  fn current_unix_time() -&gt; u64 {</span><span class="diff-line">  ...</span><span class="diff-line">              toggle_todo,</span><span class="diff-line">              delete_todo,</span><span class="diff-line">              set_todos,</span><span class="diff-line diff-line--add">+             export_todos_rust,</span><span class="diff-line diff-line--add">+             app_data_todos_path,</span><span class="diff-line">              slow_task</span><span class="diff-line">          ])</span><span class="diff-line">          .run(tauri::generate_context!())</span><span class="diff-line">  ...</span><span class="diff-line">          .unwrap();</span><span class="diff-line">          assert_eq!(added.id, 6);</span><span class="diff-line">      }</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     #[test]</span><span class="diff-line diff-line--add">+     fn write_todos_file_writes_camel_case_json() {</span><span class="diff-line diff-line--add">+         let path = std::env::temp_dir().join(format!("handson-04-{}.json", std::process::id()));</span><span class="diff-line diff-line--add">+         let todos = vec![Todo {</span><span class="diff-line diff-line--add">+             id: 1,</span><span class="diff-line diff-line--add">+             title: "牛乳を買う".into(),</span><span class="diff-line diff-line--add">+             done: false,</span><span class="diff-line diff-line--add">+             created_at: 100,</span><span class="diff-line diff-line--add">+         }];</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         write_todos_file(&amp;path, &amp;todos).unwrap();</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         let text = std::fs::read_to_string(&amp;path).unwrap();</span><span class="diff-line diff-line--add">+         let _ = std::fs::remove_file(&amp;path);</span><span class="diff-line diff-line--add">+         // フロントエンドの parseTodos が読める形（配列・createdAt）で書かれているか。</span><span class="diff-line diff-line--add">+         let value: serde_json::Value = serde_json::from_str(&amp;text).unwrap();</span><span class="diff-line diff-line--add">+         assert!(value.is_array());</span><span class="diff-line diff-line--add">+         assert_eq!(value[0]["createdAt"], 100);</span><span class="diff-line diff-line--add">+         assert_eq!(value[0]["title"], "牛乳を買う");</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     #[test]</span><span class="diff-line diff-line--add">+     fn write_todos_file_reports_io_error_for_missing_directory() {</span><span class="diff-line diff-line--add">+         let path = std::env::temp_dir()</span><span class="diff-line diff-line--add">+             .join("handson-04-no-such-dir")</span><span class="diff-line diff-line--add">+             .join("todos.json");</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         let err = write_todos_file(&amp;path, &amp;[]).unwrap_err();</span><span class="diff-line diff-line--add">+         assert!(matches!(err, AppError::Io(_)));</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+          <p>ポイントは次の 3 つです。</p>
+          <ul>
+            <li><code>write_todos_file</code> は <code>serde_json::to_string_pretty</code> で JSON にして、<code>std::fs::write</code> で書きます。<code>Todo</code> に <code>rename_all = "camelCase"</code> が付いているので、フロントエンドの <code>saveTodos</code> と同じ形（<code>createdAt</code>）になります。</li>
+            <li>エラーは <code>AppError::Io</code> に変換して返します。03 で作った <code>impl Serialize</code> により、フロントエンドには「ファイル操作に失敗しました: ...」という文字列で届きます。</li>
+            <li><code>app.path().app_data_dir()</code> は、フロントエンドの <code>BaseDirectory.AppData</code> や <code>appDataDir()</code> と同じフォルダを返します。<code>path()</code> を呼ぶには <code>tauri::Manager</code> トレイトを <code>use</code> します。</li>
+          </ul>
+          <p>この 2 つのコマンドは画面のボタンにはつないでいません。筆者が WebView から <code>invoke</code> で直接呼んで確かめた結果は次のとおりです。</p>
+
+      <table>
+        <thead>
+        <tr><th>呼び出し</th><th>結果</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>invoke("app_data_todos_path")</code></td><td><code>/Users/&lt;ユーザー名&gt;/Library/Application Support/com.handson.tauri04/todos.json</code>（<code>appDataDir()</code> と同じフォルダ）</td></tr>
+        <tr><td><code>invoke("export_todos_rust", { path: "/private/tmp/handson-04-rust.json" })</code></td><td>成功。camelCase の JSON が書かれた</td></tr>
+        <tr><td>フロントエンドの <code>writeTextFile("/private/tmp/handson-04-front.json", "[]")</code></td><td><code>forbidden path: ...</code> で拒否</td></tr>
+        </tbody>
+      </table>
+
+          <p>書き込み先は同じ <code>/private/tmp</code> なのに、フロントエンドの fs プラグインは拒否され、Rust のコマンドは成功しました。Rust のコマンド内の処理は、capabilities の権限や scope を通らないからです。<code>export_todos_rust</code> は、フロントエンドから渡された任意のパスに書けてしまいます。実際のアプリで Rust 側にファイル操作を書く場合は、パスの検証もコマンドの中に自分で書く必要があります。</p>
+
+      <table>
+        <thead>
+        <tr><th>観点</th><th>フロントエンドの fs プラグイン</th><th>Rust の <code>std::fs</code>（コマンド経由）</th></tr>
+        </thead>
+        <tbody>
+        <tr><td>権限</td><td>capabilities の <code>fs:*</code> と scope で制御する</td><td>capabilities を通らない。引数の検証を自分で書く</td></tr>
+        <tr><td>任意のパス</td><td>scope に無いと拒否される（ダイアログで選んだファイルは許可される）</td><td>書ける（<code>export_todos_rust</code> は実測で書けた）</td></tr>
+        <tr><td>場所の指定</td><td><code>BaseDirectory.AppData</code> などで指定する</td><td><code>app.path().app_data_dir()</code> などで解決する</td></tr>
+        <tr><td>向いている処理</td><td>小さな JSON の読み書きなど、画面と直結した処理</td><td>大きなファイル、バイナリ、複数の手順を一度に行う処理、scope を広げたくない処理</td></tr>
+        </tbody>
+      </table>
+
+          <p>権限を絞って安全に読み書きしたい場合は、フロントエンドの fs プラグインを使い、scope で守ります。Rust 側に書く場合は、パスの検査とエラー処理をコマンドの中で責任を持って書きます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>src-tauri</code> で <code>cargo test</code> を実行します。追加した 2 件（<code>write_todos_file_writes_camel_case_json</code> と <code>write_todos_file_reports_io_error_for_missing_directory</code>）を含めて、16 件が <code>ok</code> になれば完了です。追加した 1 件目は書いた JSON を読み戻して <code>createdAt</code> を確かめ、2 件目は存在しないフォルダへの書き込みが <code>AppError::Io</code> になることを確かめます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">全体を確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、フロントエンドと Rust の両方のチェックを通し、デバッグビルドを作ります。まずプロジェクトのルートで実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line"></span><span class="terminal__line">&gt; 04-fs-dialog@0.4.0 build</span><span class="terminal__line">&gt; next build</span><span class="terminal__line"></span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Compiled successfully in 1774ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 716ms ...</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Generating static pages using 6 workers (5/5) in 187ms</span><span class="terminal__line">  Finalizing page optimization ...</span><span class="terminal__line"></span><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">├ ○ /_not-found</span><span class="terminal__line">└ ○ /about</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line">○  (Static)  prerendered as static content</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 04-fs-dialog@0.4.0 lint</span><span class="terminal__line">&gt; eslint</span></pre>
+</div>
+
+          <p>続いて <code>src-tauri</code> で Rust 側のチェックをします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy -- -D warnings</span><span class="terminal__line">    Checking handson-tauri-04 v0.4.0 (/path/to/04-fs-dialog/src-tauri)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.37s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">（コンパイルの出力は省略）</span><span class="terminal__line">running 16 tests</span><span class="terminal__line">test tests::add_todo_pure_assigns_incrementing_ids ... ok</span><span class="terminal__line">test tests::add_todo_pure_trims_and_rejects_blank_title ... ok</span><span class="terminal__line">test tests::replace_todos_pure_sets_next_id_after_max ... ok</span><span class="terminal__line">test tests::delete_todo_pure_removes_item_and_errors_on_missing_id ... ok</span><span class="terminal__line">test tests::todo_serializes_created_at_as_camel_case ... ok</span><span class="terminal__line">test tests::toggle_todo_pure_flips_done_and_errors_on_missing_id ... ok</span><span class="terminal__line">test tests::without_rename_all_key_stays_snake_case ... ok</span><span class="terminal__line">test tests::write_todos_file_reports_io_error_for_missing_directory ... ok</span><span class="terminal__line">test tests::write_todos_file_writes_camel_case_json ... ok</span><span class="terminal__line">test tests::add_todo_rejects_empty_title ... ok</span><span class="terminal__line">test tests::greet_rejects_snake_case_argument_key ... ok</span><span class="terminal__line">test tests::toggle_and_delete_unknown_id_return_error ... ok</span><span class="terminal__line">test tests::set_todos_then_list_todos_round_trip_via_ipc ... ok</span><span class="terminal__line">test tests::greet_accepts_camel_case_argument_key ... ok</span><span class="terminal__line">test tests::add_list_toggle_delete_todo_via_state ... ok</span><span class="terminal__line">test tests::slow_task_emits_progress_events ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span></pre>
+</div>
+
+          <p>03 の 12 件に、この項目で追加した 4 件を合わせて 16 件です。テストは並列に実行されるため、表示される順番は実行のたびに変わります。<code>cargo fmt --check</code> が差分を表示した場合は、<code>cargo fmt</code> で整形してからもう一度確認します。</p>
+          <p>デバッグビルドで <code>.app</code> と <code>.dmg</code> を作ります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri build -- --debug</span><span class="terminal__line">        Info Looking up installed tauri packages to check mismatched versions...</span><span class="terminal__line">     Running beforeBuildCommand `npm run build`</span><span class="terminal__line">（Next.js のビルドと Rust のコンパイルは省略）</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.21s</span><span class="terminal__line">       Built application at: /path/to/04-fs-dialog/src-tauri/target/debug/handson-tauri-04</span><span class="terminal__line">    Bundling handson-tauri-04.app (/path/to/04-fs-dialog/src-tauri/target/debug/bundle/macos/handson-tauri-04.app)</span><span class="terminal__line">    Bundling handson-tauri-04_0.4.0_aarch64.dmg (/path/to/04-fs-dialog/src-tauri/target/debug/bundle/dmg/handson-tauri-04_0.4.0_aarch64.dmg)</span><span class="terminal__line">     Running bundle_dmg.sh</span><span class="terminal__line">    Finished 2 bundles at:</span><span class="terminal__line">        /path/to/04-fs-dialog/src-tauri/target/debug/bundle/macos/handson-tauri-04.app</span><span class="terminal__line">        /path/to/04-fs-dialog/src-tauri/target/debug/bundle/dmg/handson-tauri-04_0.4.0_aarch64.dmg</span></pre>
+</div>
+
+          <p>出力の 1 行目（<code>Looking up installed tauri packages ...</code>）で、ステップ 1 のバージョン不一致を調べています。npm 側をそろえたので、エラーは表示されません。</p>
+          <p><code>npm run tauri dev</code> で起動し、次の操作を通して試します。</p>
+          <ul>
+            <li>Todo を追加し、アプリを再起動しても一覧に残っている（筆者の環境で確認済み）</li>
+            <li>一覧の下に AppData の保存先が表示される</li>
+            <li>「書き出す」で選んだ場所に JSON が書かれる</li>
+            <li>「読み込む」で書き出したファイルを選び、確認ダイアログで承認すると一覧が置き換わる</li>
+          </ul>
+          <p>確認が終わったら、ターミナルで <code>Ctrl + C</code> を押して <code>tauri dev</code> を止めます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run build</code> から <code>cargo test</code> までがすべてエラーなく終わることを確認します。さらに、<code>npm run tauri build -- --debug</code> で <code>Finished 2 bundles</code> と表示されれば完了です。</p>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">完成した src/components/TodoList/TodoList.tsx の全文を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/TodoList/TodoList.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client";
+
+import { useEffect, useState } from "react";
+import { appDataDir } from "@tauri-apps/api/path";
+import {
+  addTodo,
+  deleteTodo,
+  replaceTodos,
+  toggleTodo,
+} from "@/features/todos/api/commands";
+import { ask, message } from "@tauri-apps/plugin-dialog";
+import { exportTodos, importTodos } from "@/features/todos/api/transfer";
+import { loadTodos, saveTodos } from "@/features/todos/api/storage";
+import type { Todo } from "@/features/todos/types";
+import styles from "./TodoList.module.scss";
+
+export function TodoList() {
+  const [todos, setTodos] = useState&lt;Todo[]&gt;([]);
+  const [loaded, setLoaded] = useState(false);
+  const [location, setLocation] = useState("");
+  const [title, setTitle] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  // 起動時に保存ファイルを読み込み、Rust 側の状態にも流し込む。
+  useEffect(() =&gt; {
+    loadTodos()
+      .then(async (saved) =&gt; {
+        await replaceTodos(saved);
+        setTodos(saved);
+        setLoaded(true);
+      })
+      .catch((e) =&gt; setError(`読み込みに失敗しました: ${String(e)}`));
+
+    appDataDir()
+      .then((dir) =&gt; setLocation(`${dir}/todos.json`))
+      .catch(() =&gt; setLocation(""));
+  }, []);
+
+  // 変更のたびに保存する。読み込みが終わる前に空の一覧を保存すると
+  // 既存のファイルを消してしまうので、loaded になってから保存する。
+  useEffect(() =&gt; {
+    if (!loaded) return;
+    saveTodos(todos).catch((e) =&gt; setError(`保存に失敗しました: ${String(e)}`));
+  }, [todos, loaded]);
+
+  const handleAdd = async () =&gt; {
+    try {
+      const todo = await addTodo(title);
+      setTodos((prev) =&gt; [...prev, todo]);
+      setTitle("");
+      setError("");
+    } catch (e) {
+      // Rust 側の AppError は Serialize でそのまま文字列化されて渡ってくる。
+      setError(String(e));
+    }
+  };
+
+  const handleToggle = async (id: number) =&gt; {
+    try {
+      const updated = await toggleTodo(id);
+      setTodos((prev) =&gt; prev.map((t) =&gt; (t.id === id ? updated : t)));
+      setError("");
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleExport = async () =&gt; {
+    try {
+      const path = await exportTodos(todos);
+      // キャンセルされた場合は null。メッセージは出さずに戻る。
+      if (path === null) return;
+      setNotice(`書き出しました: ${path}`);
+      setError("");
+    } catch (e) {
+      setError(`書き出しに失敗しました: ${String(e)}`);
+    }
+  };
+
+  const handleImport = async () =&gt; {
+    let imported: Todo[] | null;
+    try {
+      imported = await importTodos();
+    } catch (e) {
+      // 壊れた JSON や形が違うファイルは、ダイアログで理由を知らせる。
+      await message(`読み込めませんでした。\n${String(e)}`, {
+        title: "読み込みエラー",
+        kind: "error",
+      });
+      return;
+    }
+    // キャンセルされた場合は null。何もせずに戻る。
+    if (imported === null) return;
+
+    // 今の一覧を置き換えるので、確認してから反映する。
+    const ok = await ask(
+      `現在の ${todos.length} 件を、読み込んだ ${imported.length} 件で置き換えます。よろしいですか？`,
+      { title: "読み込みの確認", kind: "warning" }
+    );
+    if (!ok) return;
+
+    try {
+      await replaceTodos(imported);
+      setTodos(imported);
+      setNotice(`${imported.length} 件を読み込みました`);
+      setError("");
+    } catch (e) {
+      setError(`反映に失敗しました: ${String(e)}`);
+    }
+  };
+
+  const handleDelete = async (id: number) =&gt; {
+    try {
+      await deleteTodo(id);
+      setTodos((prev) =&gt; prev.filter((t) =&gt; t.id !== id));
+      setError("");
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  return (
+    &lt;section className={styles.todoList}&gt;
+      {error &amp;&amp; &lt;p className={styles.error}&gt;{error}&lt;/p&gt;}
+      &lt;div className={styles.form}&gt;
+        &lt;input
+          type="text"
+          className={styles.input}
+          placeholder="やることを入力"
+          value={title}
+          onChange={(e) =&gt; setTitle(e.target.value)}
+        /&gt;
+        &lt;button type="button" className={styles.addButton} onClick={handleAdd}&gt;
+          追加
+        &lt;/button&gt;
+      &lt;/div&gt;
+      &lt;ul className={styles.items}&gt;
+        {todos.map((todo) =&gt; (
+          &lt;li key={todo.id} className={styles.item}&gt;
+            &lt;label className={styles.itemLabel}&gt;
+              &lt;input
+                type="checkbox"
+                checked={todo.done}
+                onChange={() =&gt; handleToggle(todo.id)}
+              /&gt;
+              &lt;span className={todo.done ? styles.itemTitleDone : styles.itemTitle}&gt;
+                {todo.title}
+              &lt;/span&gt;
+            &lt;/label&gt;
+            &lt;button
+              type="button"
+              className={styles.deleteButton}
+              onClick={() =&gt; handleDelete(todo.id)}
+            &gt;
+              削除
+            &lt;/button&gt;
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+      &lt;div className={styles.transfer}&gt;
+        &lt;button type="button" className={styles.addButton} onClick={handleExport}&gt;
+          書き出す
+        &lt;/button&gt;
+        &lt;button type="button" className={styles.addButton} onClick={handleImport}&gt;
+          読み込む
+        &lt;/button&gt;
+      &lt;/div&gt;
+      {notice &amp;&amp; &lt;p className={styles.notice}&gt;{notice}&lt;/p&gt;}
+      {location &amp;&amp; &lt;p className={styles.location}&gt;保存先: {location}&lt;/p&gt;}
+    &lt;/section&gt;
+  );
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <details class="disclosure">
+            <summary class="disclosure__summary">完成した src-tauri/src/lib.rs の全文を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">use serde::{Deserialize, Serialize};
+
+#[tauri::command]
+fn greet(user_name: &amp;str) -&gt; String {
+    format!("こんにちは、{user_name} さん！ Rust から呼び出されました。")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Todo {
+    id: u32,
+    title: String,
+    done: bool,
+    // rename_all = "camelCase" が無いと JSON のキーは created_at のままになり、
+    // フロントの todo.createdAt は undefined になる。
+    created_at: u64,
+}
+
+/// Todo の一覧と次に割り振る id を保持するアプリ状態。
+/// `tauri::Builder::manage()` で登録し、各コマンドは `tauri::State&lt;'_, AppState&gt;` で受け取る。
+struct AppState {
+    todos: std::sync::Mutex&lt;Vec&lt;Todo&gt;&gt;,
+    next_id: std::sync::Mutex&lt;u32&gt;,
+}
+
+impl AppState {
+    fn new() -&gt; Self {
+        Self {
+            todos: std::sync::Mutex::new(Vec::new()),
+            next_id: std::sync::Mutex::new(1),
+        }
+    }
+}
+
+/// アプリ独自のエラー型。`thiserror` でメッセージを定義し、
+/// `impl serde::Serialize` でフロントエンドに文字列として返す。
+#[derive(Debug, thiserror::Error)]
+enum AppError {
+    #[error("タイトルを入力してください")]
+    EmptyTitle,
+    #[error("id {0} の Todo が見つかりません")]
+    NotFound(u32),
+    #[error("イベント送信に失敗しました: {0}")]
+    Emit(String),
+    #[error("ファイル操作に失敗しました: {0}")]
+    Io(String),
+}
+
+impl Serialize for AppError {
+    fn serialize&lt;S&gt;(&amp;self, serializer: S) -&gt; Result&lt;S::Ok, S::Error&gt;
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&amp;self.to_string())
+    }
+}
+
+// --- ここから下は Mutex や tauri::State から切り離した純粋関数。
+// ロジック自体は `&amp;mut Vec&lt;Todo&gt;` 等の素のデータ構造だけを操作するため、
+// Tauri のモックアプリを使わないテスト（cargo test の高速なユニットテスト）がそのまま書ける。
+
+fn add_todo_pure(
+    todos: &amp;mut Vec&lt;Todo&gt;,
+    next_id: &amp;mut u32,
+    title: String,
+) -&gt; Result&lt;Todo, AppError&gt; {
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err(AppError::EmptyTitle);
+    }
+    let id = *next_id;
+    *next_id += 1;
+    let todo = Todo {
+        id,
+        title,
+        done: false,
+        created_at: current_unix_time(),
+    };
+    todos.push(todo.clone());
+    Ok(todo)
+}
+
+fn toggle_todo_pure(todos: &amp;mut [Todo], id: u32) -&gt; Result&lt;Todo, AppError&gt; {
+    let todo = todos
+        .iter_mut()
+        .find(|t| t.id == id)
+        .ok_or(AppError::NotFound(id))?;
+    todo.done = !todo.done;
+    Ok(todo.clone())
+}
+
+fn delete_todo_pure(todos: &amp;mut Vec&lt;Todo&gt;, id: u32) -&gt; Result&lt;(), AppError&gt; {
+    let len_before = todos.len();
+    todos.retain(|t| t.id != id);
+    if todos.len() == len_before {
+        Err(AppError::NotFound(id))
+    } else {
+        Ok(())
+    }
+}
+
+/// 保存ファイルから読み込んだ Todo で状態を置き換える。
+/// 次に振る id は、読み込んだ中の最大値 + 1 にそろえて id が重ならないようにする。
+fn replace_todos_pure(todos: &amp;mut Vec&lt;Todo&gt;, next_id: &amp;mut u32, loaded: Vec&lt;Todo&gt;) {
+    *next_id = loaded.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+    *todos = loaded;
+}
+
+#[tauri::command]
+fn add_todo(title: String, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;Todo, AppError&gt; {
+    let mut next_id = state.next_id.lock().unwrap();
+    let mut todos = state.todos.lock().unwrap();
+    add_todo_pure(&amp;mut todos, &amp;mut next_id, title)
+}
+
+#[tauri::command]
+fn list_todos(state: tauri::State&lt;'_, AppState&gt;) -&gt; Vec&lt;Todo&gt; {
+    state.todos.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn toggle_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;Todo, AppError&gt; {
+    let mut todos = state.todos.lock().unwrap();
+    toggle_todo_pure(&amp;mut todos, id)
+}
+
+#[tauri::command]
+fn delete_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;(), AppError&gt; {
+    let mut todos = state.todos.lock().unwrap();
+    delete_todo_pure(&amp;mut todos, id)
+}
+
+/// フロントエンドが保存ファイルから読み込んだ Todo を、Rust 側の状態に流し込む。
+#[tauri::command]
+fn set_todos(todos: Vec&lt;Todo&gt;, state: tauri::State&lt;'_, AppState&gt;) {
+    let mut next_id = state.next_id.lock().unwrap();
+    let mut current = state.todos.lock().unwrap();
+    replace_todos_pure(&amp;mut current, &amp;mut next_id, todos);
+}
+
+/// 進捗を `progress` イベントで通知しながら時間のかかる処理を模した非同期コマンド。
+#[tauri::command]
+async fn slow_task&lt;R: tauri::Runtime&gt;(app: tauri::AppHandle&lt;R&gt;) -&gt; Result&lt;(), AppError&gt; {
+    use tauri::Emitter;
+
+    for percent in [0u8, 25, 50, 75, 100] {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        app.emit("progress", percent)
+            .map_err(|e| AppError::Emit(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Todo の一覧を JSON にして指定のパスへ書く。
+/// フロントエンドの fs プラグイン（writeTextFile）と同じ形式の JSON を、std::fs で書く版。
+fn write_todos_file(path: &amp;std::path::Path, todos: &amp;[Todo]) -&gt; Result&lt;(), AppError&gt; {
+    let json = serde_json::to_string_pretty(todos).map_err(|e| AppError::Io(e.to_string()))?;
+    std::fs::write(path, json).map_err(|e| AppError::Io(e.to_string()))
+}
+
+/// fs プラグインを使わず、Rust の std::fs で現在の Todo を書き出す。
+/// Rust 側の書き込みは capabilities のスコープを通らないので、path の検証は呼び出し側（ここ）の責任になる。
+#[tauri::command]
+fn export_todos_rust(path: String, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;(), AppError&gt; {
+    let todos = state.todos.lock().unwrap();
+    write_todos_file(std::path::Path::new(&amp;path), &amp;todos)
+}
+
+/// `app_data_dir()` で AppData の todos.json のパスを解決して返す。
+/// フロントエンドの BaseDirectory.AppData と同じフォルダを指す。
+#[tauri::command]
+fn app_data_todos_path&lt;R: tauri::Runtime&gt;(app: tauri::AppHandle&lt;R&gt;) -&gt; Result&lt;String, AppError&gt; {
+    use tauri::Manager;
+
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::Io(e.to_string()))?;
+    Ok(dir.join("todos.json").to_string_lossy().into_owned())
+}
+
+fn current_unix_time() -&gt; u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_secs()
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .setup(|app| {
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
+            Ok(())
+        })
+        .manage(AppState::new())
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            add_todo,
+            list_todos,
+            toggle_todo,
+            delete_todo,
+            set_todos,
+            export_todos_rust,
+            app_data_todos_path,
+            slow_task
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+    use tauri::webview::InvokeRequest;
+
+    fn make_app() -&gt; tauri::App&lt;tauri::test::MockRuntime&gt; {
+        mock_builder()
+            .invoke_handler(tauri::generate_handler![greet])
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock app")
+    }
+
+    fn make_full_app() -&gt; tauri::App&lt;tauri::test::MockRuntime&gt; {
+        mock_builder()
+            .manage(AppState::new())
+            .invoke_handler(tauri::generate_handler![
+                greet,
+                add_todo,
+                list_todos,
+                toggle_todo,
+                delete_todo,
+                set_todos,
+                slow_task
+            ])
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock app")
+    }
+
+    fn invoke_request(cmd: &amp;str, body: serde_json::Value) -&gt; InvokeRequest {
+        InvokeRequest {
+            cmd: cmd.into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: InvokeBody::Json(body),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        }
+    }
+
+    #[test]
+    fn greet_accepts_camel_case_argument_key() {
+        let app = make_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // コマンド引数のキーは camelCase（userName）に変換される。
+        let res = get_ipc_response(
+            &amp;webview,
+            invoke_request("greet", serde_json::json!({ "userName": "World" })),
+        );
+        assert_eq!(
+            res.unwrap().deserialize::&lt;String&gt;().unwrap(),
+            "こんにちは、World さん！ Rust から呼び出されました。"
+        );
+    }
+
+    #[test]
+    fn greet_rejects_snake_case_argument_key() {
+        let app = make_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // Rust 側の引数名 (user_name) のまま snake_case で渡すと見つからずエラーになる。
+        let res = get_ipc_response(
+            &amp;webview,
+            invoke_request("greet", serde_json::json!({ "user_name": "World" })),
+        );
+        assert!(res.is_err(), "snake_case キーは受理されないはず: {res:?}");
+    }
+
+    #[test]
+    fn todo_serializes_created_at_as_camel_case() {
+        let todo = Todo {
+            id: 1,
+            title: "テスト".into(),
+            done: false,
+            created_at: 0,
+        };
+        let value = serde_json::to_value(&amp;todo).unwrap();
+        assert!(
+            value.get("createdAt").is_some(),
+            "rename_all = \"camelCase\" により createdAt キーになるはず: {value:?}"
+        );
+        assert!(
+            value.get("created_at").is_none(),
+            "snake_case の created_at キーは残らないはず: {value:?}"
+        );
+    }
+
+    /// rename_all を外した場合の比較用の構造体。
+    /// これを使うと JSON のキーは created_at のままになり、
+    /// フロントエンドで todo.createdAt を読むと undefined になってしまう。
+    #[derive(Serialize)]
+    struct TodoWithoutRename {
+        created_at: u64,
+    }
+
+    #[test]
+    fn without_rename_all_key_stays_snake_case() {
+        let value = serde_json::to_value(TodoWithoutRename { created_at: 0 }).unwrap();
+        assert!(
+            value.get("created_at").is_some(),
+            "rename_all なしでは created_at のまま: {value:?}"
+        );
+        assert!(
+            value.get("createdAt").is_none(),
+            "rename_all なしでは createdAt キーは生成されない（フロントでは undefined になる）: {value:?}"
+        );
+    }
+
+    #[test]
+    fn add_list_toggle_delete_todo_via_state() {
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // 追加: 2 件追加すると id が 1, 2 と振られる。
+        let todo1 = get_ipc_response(
+            &amp;webview,
+            invoke_request("add_todo", serde_json::json!({ "title": "牛乳を買う" })),
+        )
+        .unwrap()
+        .deserialize::&lt;Todo&gt;()
+        .unwrap();
+        assert_eq!(todo1.id, 1);
+        assert_eq!(todo1.title, "牛乳を買う");
+        assert!(!todo1.done);
+
+        let todo2 = get_ipc_response(
+            &amp;webview,
+            invoke_request("add_todo", serde_json::json!({ "title": "本を返す" })),
+        )
+        .unwrap()
+        .deserialize::&lt;Todo&gt;()
+        .unwrap();
+        assert_eq!(todo2.id, 2);
+
+        // 一覧: 状態が Mutex に保持され、2 件とも取得できる。
+        let list = get_ipc_response(
+            &amp;webview,
+            invoke_request("list_todos", serde_json::json!({})),
+        )
+        .unwrap()
+        .deserialize::&lt;Vec&lt;Todo&gt;&gt;()
+        .unwrap();
+        assert_eq!(list.len(), 2);
+
+        // 完了切替: id=1 の done が true になる。
+        let toggled = get_ipc_response(
+            &amp;webview,
+            invoke_request("toggle_todo", serde_json::json!({ "id": 1 })),
+        )
+        .unwrap()
+        .deserialize::&lt;Todo&gt;()
+        .unwrap();
+        assert!(toggled.done);
+
+        // 削除: id=1 を消すと一覧は 1 件になる。
+        get_ipc_response(
+            &amp;webview,
+            invoke_request("delete_todo", serde_json::json!({ "id": 1 })),
+        )
+        .unwrap();
+        let list_after_delete = get_ipc_response(
+            &amp;webview,
+            invoke_request("list_todos", serde_json::json!({})),
+        )
+        .unwrap()
+        .deserialize::&lt;Vec&lt;Todo&gt;&gt;()
+        .unwrap();
+        assert_eq!(list_after_delete.len(), 1);
+        assert_eq!(list_after_delete[0].id, 2);
+    }
+
+    #[test]
+    fn add_todo_rejects_empty_title() {
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let res = get_ipc_response(
+            &amp;webview,
+            invoke_request("add_todo", serde_json::json!({ "title": "   " })),
+        );
+        let err = res.expect_err("空タイトルはエラーになるはず");
+        assert_eq!(err, serde_json::json!("タイトルを入力してください"));
+    }
+
+    #[test]
+    fn toggle_and_delete_unknown_id_return_error() {
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let toggle_err = get_ipc_response(
+            &amp;webview,
+            invoke_request("toggle_todo", serde_json::json!({ "id": 999 })),
+        )
+        .expect_err("存在しない id はエラーになるはず");
+        assert_eq!(
+            toggle_err,
+            serde_json::json!("id 999 の Todo が見つかりません")
+        );
+
+        let delete_err = get_ipc_response(
+            &amp;webview,
+            invoke_request("delete_todo", serde_json::json!({ "id": 999 })),
+        )
+        .expect_err("存在しない id はエラーになるはず");
+        assert_eq!(
+            delete_err,
+            serde_json::json!("id 999 の Todo が見つかりません")
+        );
+    }
+
+    #[test]
+    fn slow_task_emits_progress_events() {
+        use std::sync::{Arc, Mutex as StdMutex};
+        use tauri::Listener;
+
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let received: Arc&lt;StdMutex&lt;Vec&lt;u8&gt;&gt;&gt; = Arc::new(StdMutex::new(Vec::new()));
+        let received_clone = received.clone();
+        app.listen_any("progress", move |event| {
+            let payload: u8 = serde_json::from_str(event.payload()).unwrap();
+            received_clone.lock().unwrap().push(payload);
+        });
+
+        let res = get_ipc_response(&amp;webview, invoke_request("slow_task", serde_json::json!({})));
+        assert!(res.is_ok(), "slow_task は成功するはず: {res:?}");
+
+        let payloads = received.lock().unwrap().clone();
+        assert_eq!(payloads, vec![0, 25, 50, 75, 100]);
+    }
+
+    // --- ここから Mutex や Tauri のモックアプリを使わない、純粋関数だけのユニットテスト。
+
+    #[test]
+    fn add_todo_pure_assigns_incrementing_ids() {
+        let mut todos = Vec::new();
+        let mut next_id = 1u32;
+
+        let todo1 = add_todo_pure(&amp;mut todos, &amp;mut next_id, "牛乳を買う".into()).unwrap();
+        let todo2 = add_todo_pure(&amp;mut todos, &amp;mut next_id, "本を返す".into()).unwrap();
+
+        assert_eq!(todo1.id, 1);
+        assert_eq!(todo2.id, 2);
+        assert_eq!(next_id, 3);
+        assert_eq!(todos.len(), 2);
+        assert!(!todo1.done);
+    }
+
+    #[test]
+    fn add_todo_pure_trims_and_rejects_blank_title() {
+        let mut todos = Vec::new();
+        let mut next_id = 1u32;
+
+        // 前後の空白は trim される。
+        let todo = add_todo_pure(&amp;mut todos, &amp;mut next_id, "  牛乳を買う  ".into()).unwrap();
+        assert_eq!(todo.title, "牛乳を買う");
+
+        // 空白だけのタイトルは拒否される。
+        let err = add_todo_pure(&amp;mut todos, &amp;mut next_id, "   ".into()).unwrap_err();
+        assert!(matches!(err, AppError::EmptyTitle));
+    }
+
+    #[test]
+    fn toggle_todo_pure_flips_done_and_errors_on_missing_id() {
+        let mut todos = vec![Todo {
+            id: 1,
+            title: "牛乳を買う".into(),
+            done: false,
+            created_at: 0,
+        }];
+
+        let toggled = toggle_todo_pure(&amp;mut todos, 1).unwrap();
+        assert!(toggled.done);
+        assert!(todos[0].done);
+
+        // 再度切り替えると false に戻る。
+        let toggled_again = toggle_todo_pure(&amp;mut todos, 1).unwrap();
+        assert!(!toggled_again.done);
+
+        let err = toggle_todo_pure(&amp;mut todos, 999).unwrap_err();
+        assert!(matches!(err, AppError::NotFound(999)));
+    }
+
+    #[test]
+    fn delete_todo_pure_removes_item_and_errors_on_missing_id() {
+        let mut todos = vec![
+            Todo {
+                id: 1,
+                title: "牛乳を買う".into(),
+                done: false,
+                created_at: 0,
+            },
+            Todo {
+                id: 2,
+                title: "本を返す".into(),
+                done: false,
+                created_at: 0,
+            },
+        ];
+
+        delete_todo_pure(&amp;mut todos, 1).unwrap();
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].id, 2);
+
+        let err = delete_todo_pure(&amp;mut todos, 1).unwrap_err();
+        assert!(matches!(err, AppError::NotFound(1)));
+    }
+
+    #[test]
+    fn replace_todos_pure_sets_next_id_after_max() {
+        let mut todos = Vec::new();
+        let mut next_id = 1u32;
+        let loaded = vec![
+            Todo {
+                id: 3,
+                title: "牛乳を買う".into(),
+                done: true,
+                created_at: 10,
+            },
+            Todo {
+                id: 7,
+                title: "本を返す".into(),
+                done: false,
+                created_at: 20,
+            },
+        ];
+
+        replace_todos_pure(&amp;mut todos, &amp;mut next_id, loaded);
+
+        assert_eq!(todos.len(), 2);
+        // 読み込んだ最大 id は 7 なので、次に振るのは 8。
+        assert_eq!(next_id, 8);
+    }
+
+    #[test]
+    fn set_todos_then_list_todos_round_trip_via_ipc() {
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // 保存ファイルの JSON と同じ形（createdAt の camelCase）で流し込む。
+        let saved = serde_json::json!([
+            { "id": 5, "title": "保存済みの Todo", "done": true, "createdAt": 42 }
+        ]);
+        get_ipc_response(
+            &amp;webview,
+            invoke_request("set_todos", serde_json::json!({ "todos": saved })),
+        )
+        .unwrap();
+
+        let list = get_ipc_response(
+            &amp;webview,
+            invoke_request("list_todos", serde_json::json!({})),
+        )
+        .unwrap()
+        .deserialize::&lt;Vec&lt;Todo&gt;&gt;()
+        .unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].title, "保存済みの Todo");
+        assert_eq!(list[0].created_at, 42);
+
+        // 読み込んだ後に追加すると、id は 6 から振られる。
+        let added = get_ipc_response(
+            &amp;webview,
+            invoke_request("add_todo", serde_json::json!({ "title": "新しい Todo" })),
+        )
+        .unwrap()
+        .deserialize::&lt;Todo&gt;()
+        .unwrap();
+        assert_eq!(added.id, 6);
+    }
+
+    #[test]
+    fn write_todos_file_writes_camel_case_json() {
+        let path = std::env::temp_dir().join(format!("handson-04-{}.json", std::process::id()));
+        let todos = vec![Todo {
+            id: 1,
+            title: "牛乳を買う".into(),
+            done: false,
+            created_at: 100,
+        }];
+
+        write_todos_file(&amp;path, &amp;todos).unwrap();
+
+        let text = std::fs::read_to_string(&amp;path).unwrap();
+        let _ = std::fs::remove_file(&amp;path);
+        // フロントエンドの parseTodos が読める形（配列・createdAt）で書かれているか。
+        let value: serde_json::Value = serde_json::from_str(&amp;text).unwrap();
+        assert!(value.is_array());
+        assert_eq!(value[0]["createdAt"], 100);
+        assert_eq!(value[0]["title"], "牛乳を買う");
+    }
+
+    #[test]
+    fn write_todos_file_reports_io_error_for_missing_directory() {
+        let path = std::env::temp_dir()
+            .join("handson-04-no-such-dir")
+            .join("todos.json");
+
+        let err = write_todos_file(&amp;path, &amp;[]).unwrap_err();
+        assert!(matches!(err, AppError::Io(_)));
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>tauri add</code> で fs / dialog プラグインを追加し、Rust 側・npm 側・capabilities の変更点を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">npm パッケージと Rust crate のマイナーバージョンをそろえ、<code>Found version mismatched Tauri packages</code> を解消した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>fs:default</code> に書き込みが含まれない理由と、<code>fs:allow-app-write</code> で許可される範囲（permission と scope）を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>not allowed</code> と <code>forbidden path</code> のエラーを見分けられる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>BaseDirectory.AppData</code> と <code>mkdir</code>（<code>recursive: true</code>）で AppData に保存し、再起動後に復元できた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">保存の <code>useEffect</code> に <code>loaded</code> のガードが必要な理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>save</code> / <code>open</code> ダイアログで選んだファイルが scope の外でも読み書きできる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">外部から読み込む JSON を <code>parseTodos</code> で検証し、<code>message</code> / <code>ask</code> で結果を知らせた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">Rust の <code>std::fs</code> が capabilities を通らないことと、フロントエンドの fs プラグインとの使い分けを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-10" class="checklist__input">
+          <label for="check-10" class="checklist__label"><code>cargo clippy -- -D warnings</code> と <code>cargo test</code>（16 件）がすべて通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>fs.write_text_file not allowed.</code> になる</p>
+              <p><code>fs:default</code> は、アプリ用フォルダの読み取りとフォルダの作成だけを許可します。書き込みには <code>fs:allow-app-write</code> などを capabilities に追加します。エラーの後ろに並ぶ権限名の一覧から、必要な範囲の権限を選びます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>forbidden path</code> になる</p>
+              <p>コマンドの権限はあるものの、パスが scope の外にあります。<code>fs:allow-app-write</code> の scope はアプリ用フォルダの直下だけです。サブフォルダに書くなら <code>fs:allow-app-write-recursive</code> を、ユーザーが選んだ場所に書くならダイアログを使います。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">権限を足したのに <code>No such file or directory (os error 2)</code> になる</p>
+              <p>AppData のフォルダは自動では作られません。書き込む前に <code>mkdir("", { baseDir: BaseDirectory.AppData, recursive: true })</code> を呼びます。<code>recursive: true</code> なら、既にあっても失敗しません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">起動するたびに保存した Todo が消える</p>
+              <p>読み込みが終わる前に、最初の描画の空配列 <code>[]</code> を保存していないかを確認します。保存の <code>useEffect</code> は、読み込みが終わったこと（<code>loaded</code>）を条件にします。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">読み込みで <code>missing field `createdAt`</code> になる</p>
+              <p>Rust 側の <code>Todo</code> は <code>createdAt</code> が必須です。外部の JSON は、<code>parseTodos</code> で検証してから <code>set_todos</code> に渡します。足りないフィールドがあれば、フロントエンドの段階で弾きます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Found version mismatched Tauri packages</code> と表示される</p>
+              <p><code>tauri add</code> は npm 側に最新版を入れるため、Rust crate とマイナーバージョンがずれることもあります。表示された Rust 側のバージョンに合わせ、<code>npm install @tauri-apps/plugin-fs@~2.5.2</code> のように <code>~</code> を付けて入れ直します。<code>@tauri-apps/api</code> も上がっている場合があるので、表示の 1 行目も確認します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Rust のコマンドなら任意のパスに書けてしまう</p>
+              <p>コマンドの中の <code>std::fs</code> は capabilities の権限と scope を通りません。フロントエンドからパスを受け取るコマンドでは、書いてよい場所かどうかをコマンドの中で検証します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>$APPDATA</code> の実際の場所を知りたい</p>
+              <p>フロントエンドでは <code>appDataDir()</code>、Rust では <code>app.path().app_data_dir()</code> で取得できます。macOS では <code>~/Library/Application Support/</code> の下のフォルダになります。フォルダ名は <code>tauri.conf.json</code> の <code>identifier</code>（この項目では <code>com.handson.tauri04</code>）です。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">ダイアログで選んだファイルだけが自動で許可される</p>
+              <p><code>save</code> / <code>open</code> は、選ばれたファイルを fs の scope に追加します。追加されるのはそのファイル 1 つで、同じフォルダの別のファイルは許可されません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>tauri add</code> の後の差分に整形が混ざる</p>
+              <p><code>tauri add</code> は最後に <code>cargo fmt</code> を実行します。<code>lib.rs</code> が未整形だった場合は、プラグインの行以外にも整形による差分が出ます。また、<code>capabilities/default.json</code> は書き換えの結果、末尾の改行が無くなりました（差分では <code>\ No newline at end of file</code> と表示されます）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">プロジェクトを移動したら <code>target</code> と <code>gen</code> を作り直す</p>
+              <p><code>src-tauri/target</code> と <code>src-tauri/gen</code> には古い絶対パスが残ります。ディレクトリを移動・改名したら <code>rm -rf target gen</code> を実行してから、ビルドし直します。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>tauri add</code> で fs / dialog プラグインを追加し、npm と Rust のバージョンをそろえました。
+        capabilities の権限（permission）と scope でフロントエンドのファイル操作を許可し、AppData に Todo を保存して起動時に復元しました。
+        ダイアログで選んだファイルは自動で scope に加わるので、ユーザーが選んだ場所への書き出しと読み込みもできます。外部から読み込む JSON は検証してから使いました。
+        また、Rust の <code>std::fs</code> は capabilities を通らないので、パスの検証を自分で書く必要があることも確かめました。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>tauri/04-fs-dialog</code> の <code>tauri/04-fs-dialog/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../03-invoke/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">03: Rust コマンドの呼び出し</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">05: パッケージングと配布</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
