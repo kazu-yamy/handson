@@ -130,7 +130,7 @@
               <p class="callout__title">使用バージョン</p>
               <p>
                 Android Studio Rabbit 1（2026.2.1）/ AGP 9.4.1 / Gradle 9.6.0 / Kotlin 2.4.20 / Compose BOM 2026.09.00（Material3 1.4.0）/
-                compileSdk 37・targetSdk 36・minSdk 26 で作成しています。ターミナルでの動作確認には JDK 21.0.1 を使いました（Android Studio を使う場合は、同梱の JDK である JBR が使われます）。
+                compileSdk 37・targetSdk 37・minSdk 26 で作成しています。ターミナルでの動作確認には JDK 21.0.1 を使いました（Gradle デーモンは <code>toolchainVersion=25</code> に合う JDK 25 で動きます。Android Studio を使う場合は、同梱の JDK である JBR が使われます）。
                 バージョンは執筆時点（2026年10月）の最新安定版です。
               </p>
             </div>
@@ -142,7 +142,7 @@
             <div class="callout__body">
               <p class="callout__title">Android Studio の画面について</p>
               <p>
-                Android Studio の画面の名称や配置はバージョンで変わります。画面の名称は Rabbit 1（2026.2.1.8）同梱のリソースで確認して書いています。
+                Android Studio の画面の名称や配置はバージョンで変わります。画面の名称は Rabbit 1（2026.2.1.8）の実際の画面と同梱のリソースで確認して書いています。
                 本文のコードとコマンドの出力は、ターミナル（Gradle・<code>sdkmanager</code>・<code>adb</code> など）で実際に動かして確認したものです。
                 画面の表記が本文と違う場合は、同じ意味の項目を選んでください。
               </p>
@@ -188,7 +188,7 @@
 </div>
 
           <ul>
-            <li><code>java -version</code>: AGP 9.4 の実行には JDK 17 以上が必要です。執筆環境では JDK 21.0.1 を使いました。</li>
+            <li><code>java -version</code>: AGP 9.4 の実行には JDK 17 以上が必要です。執筆環境では JDK 21.0.1 を使いました（Gradle デーモンは <code>toolchainVersion=25</code> に合う JDK 25 で動きます）。</li>
             <li><code>ANDROID_HOME</code>: 未設定の場合は、<code>~/.zshrc</code> に <code>export ANDROID_HOME="$HOME/Library/Android/sdk"</code> を追加してターミナルを開き直します。<code>ANDROID_SDK_ROOT</code> は設定しなくても動作しました。</li>
             <li><code>adb</code>: エミュレータや実機を操作するツールです。Platform-Tools に含まれ、場所は <code>$ANDROID_HOME/platform-tools/adb</code> です。<code>PATH</code> に入っていない場合は、<code>export PATH="$ANDROID_HOME/platform-tools:$PATH"</code> を追加します。</li>
           </ul>
@@ -251,7 +251,7 @@
         </div>
         <div class="step__body">
 
-          <p>Android Studio で新しいプロジェクトを作ります。起動画面の <strong>New Project</strong>（またはメニューの File &gt; New &gt; New Project）を選び、テンプレートの一覧から <strong>Empty Activity</strong> を選んで Next を押します。次の画面で、以下のとおり入力して Finish を押します。</p>
+          <p>Android Studio で新しいプロジェクトを作ります。起動画面（Welcome 画面）の <strong>New Project</strong>（またはメニューの File &gt; New &gt; New Project）を選びます。左の Templates の一覧で <strong>Phone and large screens</strong> を選び、<strong>Empty Activity</strong> を選んで Next を押します。次の画面で、以下のとおり入力して Finish を押します。</p>
           <table>
             <thead>
             <tr><th>項目</th><th>入力値</th><th>プロジェクト内での反映先</th></tr>
@@ -260,18 +260,18 @@
             <tr><td>Name</td><td><code>HandsonAndroid01</code></td><td><code>settings.gradle.kts</code> の <code>rootProject.name</code>、<code>strings.xml</code> の <code>app_name</code>、テーマ名 <code>HandsonAndroid01Theme</code></td></tr>
             <tr><td>Package name</td><td><code>com.handson.android01</code></td><td><code>app/build.gradle.kts</code> の <code>namespace</code> と <code>applicationId</code>、Kotlin のパッケージ</td></tr>
             <tr><td>Save location</td><td>任意の作業ディレクトリ</td><td>—</td></tr>
-            <tr><td>Minimum SDK</td><td>API 26</td><td><code>app/build.gradle.kts</code> の <code>minSdk = 26</code></td></tr>
-            <tr><td>Language</td><td>Kotlin</td><td>アプリのソースコードを Kotlin で書く（<code>*.kt</code>）</td></tr>
-            <tr><td>Build configuration language</td><td>Kotlin DSL（<code>build.gradle.kts</code>）</td><td>ビルドスクリプトが <code>*.gradle.kts</code> になる</td></tr>
+            <tr><td>Minimum SDK</td><td><code>API 26 ("Oreo"; Android 8.0)</code></td><td><code>app/build.gradle.kts</code> の <code>minSdk = 26</code></td></tr>
+            <tr><td>Build configuration language</td><td><code>Kotlin DSL (build.gradle.kts) [Recommended]</code>（既定のまま）</td><td>ビルドスクリプトが <code>*.gradle.kts</code> になる</td></tr>
             </tbody>
           </table>
+          <p>Name を入力すると、Package name には <code>com.example.</code> で始まる値が自動で入るので、<code>com.handson.android01</code> に書き換えます。Minimum SDK の既定は API 24 なので、API 26 に変えます。この画面に言語（Language）の欄は無く、Empty Activity はアプリのコードを Kotlin で書くプロジェクトになります。</p>
           <p>Finish を押すと、Android Studio がプロジェクトを作り、Gradle の同期（Sync）を始めます。初回は Gradle 本体と依存ライブラリをダウンロードするので、完了まで待ちます。</p>
 
           <div class="callout callout--warning">
             <span class="callout__icon" aria-hidden="true">⚠️</span>
             <div class="callout__body">
               <p class="callout__title">ウィザードの生成内容は、Studio のバージョンで変わりうる</p>
-              <p>本教材のファイル内容は、Rabbit 1（2026.2.1.8）同梱のテンプレート定義と照合して一致を確認しました。ただし、ウィザードの実画面での生成は未確認です。Studio のバージョンでウィザードの出力は変わりうるため、自分の生成物と差分があれば教材側の内容に置き換えてください。版だけはこの後の手順で上げます。</p>
+              <p>本教材の「作成直後」のファイル内容は、Rabbit 1（2026.2.1.8）のウィザードで実際に生成したプロジェクトのものです。Studio のバージョンでウィザードの出力は変わりうるため、自分の生成物と差分があれば教材側の内容に置き換えてください。版だけはこの後の手順で上げます。</p>
             </div>
           </div>
 
@@ -286,6 +286,7 @@
             <tr><td><code>build.gradle.kts</code>（ルート）</td><td>プロジェクトで使うプラグインを宣言する（適用は各モジュールで行うため <code>apply false</code>）</td></tr>
             <tr><td><code>gradle/libs.versions.toml</code></td><td>Version Catalog。ライブラリ・プラグインとそのバージョン</td></tr>
             <tr><td><code>gradle/wrapper/gradle-wrapper.properties</code></td><td>Gradle Wrapper が使う Gradle の版（<code>gradle-9.6.0-bin.zip</code>）</td></tr>
+            <tr><td><code>gradle/gradle-daemon-jvm.properties</code></td><td>Gradle デーモンを動かす JDK の版（<code>toolchainVersion=25</code>）と、その JDK のダウンロード先</td></tr>
             <tr><td><code>gradlew</code> / <code>gradlew.bat</code> / <code>gradle/wrapper/gradle-wrapper.jar</code></td><td>Gradle Wrapper 本体。<code>./gradlew</code> で実行する</td></tr>
             <tr><td><code>gradle.properties</code></td><td>Gradle の動作設定（JVM のメモリ、configuration cache、Kotlin のコードスタイルなど）</td></tr>
             <tr><td><code>local.properties</code></td><td>Android SDK の場所（<code>sdk.dir</code>）。Android Studio が作る、マシン固有のファイル</td></tr>
@@ -293,14 +294,15 @@
             <tr><td><code>app/src/main/AndroidManifest.xml</code></td><td>アプリの構成（アイコン、テーマ、起動する Activity）</td></tr>
             <tr><td><code>app/src/main/java/com/handson/android01/MainActivity.kt</code></td><td>起動時に表示される画面。Compose で UI を組み立てる</td></tr>
             <tr><td><code>app/src/main/java/com/handson/android01/ui/theme/</code></td><td><code>Color.kt</code>（色）、<code>Type.kt</code>（文字のスタイル）、<code>Theme.kt</code>（アプリのテーマ）</td></tr>
-            <tr><td><code>app/src/main/res/</code></td><td>リソース。<code>values/strings.xml</code>（アプリ名）、<code>values/themes.xml</code>、ランチャーアイコン、バックアップ設定（<code>xml/</code>）</td></tr>
+            <tr><td><code>app/src/main/res/</code></td><td>リソース。<code>values/strings.xml</code>（アプリ名）、<code>values/themes.xml</code>、<code>values/colors.xml</code>、ランチャーアイコン、バックアップ設定（<code>xml/</code>）</td></tr>
+            <tr><td><code>app/src/main/keepRules/rules.keep</code></td><td>リリースビルドの最適化（R8）で残すコードを指定するキープルール。作成直後はコメントだけ</td></tr>
             <tr><td><code>app/src/test/.../ExampleUnitTest.kt</code></td><td>PC の JVM で動く単体テスト</td></tr>
             <tr><td><code>app/src/androidTest/.../ExampleInstrumentedTest.kt</code></td><td>エミュレータや実機の上で動く計装テスト</td></tr>
             <tr><td><code>.gitignore</code> / <code>app/.gitignore</code></td><td>ビルド成果物（<code>build/</code>）や <code>local.properties</code> などを Git の対象外にする</td></tr>
             </tbody>
           </table>
 
-          <p>ここからは、中心になるファイルを全文で見ていきます。まず <code>settings.gradle.kts</code> です。プラグイン（<code>pluginManagement</code>）と依存ライブラリ（<code>dependencyResolutionManagement</code>）を、どのリポジトリから取得するかを決めています。Google の Maven リポジトリからは、<code>com.android</code>・<code>com.google</code>・<code>androidx</code> で始まるグループだけを取得するよう絞り込んでいます。</p>
+          <p>ここからは、中心になるファイルを全文で見ていきます。まず <code>settings.gradle.kts</code> です。プラグイン（<code>pluginManagement</code>）と依存ライブラリ（<code>dependencyResolutionManagement</code>）を、どのリポジトリから取得するかを決めています。プラグインの取得では、Google の Maven リポジトリから <code>com.android</code>・<code>com.google</code>・<code>androidx</code> で始まるグループだけを取得するよう絞り込んでいます。中ほどの <code>plugins { }</code> では <code>foojay-resolver-convention</code> を適用しています。必要な JDK が手元に無い場合、foojay（JDK の配布元の一覧を提供するサービス）から JDK をダウンロードできるようにする Gradle のプラグインです。</p>
 
 <div class="code-block">
   <div class="code-block__header">
@@ -322,16 +324,13 @@
         gradlePluginPortal()
     }
 }
+plugins {
+    id(&quot;org.gradle.toolchains.foojay-resolver-convention&quot;) version &quot;1.0.0&quot;
+}
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        google {
-            content {
-                includeGroupByRegex(&quot;com\\.android.*&quot;)
-                includeGroupByRegex(&quot;com\\.google.*&quot;)
-                includeGroupByRegex(&quot;androidx.*&quot;)
-            }
-        }
+        google()
         mavenCentral()
     }
 }
@@ -349,14 +348,14 @@ include(&quot;:app&quot;)</code></pre>
     <span class="code-block__spacer"></span>
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
-  <pre><code class="language-kotlin">// Top-level build file where you can add configuration options common to all subprojects/modules.
+  <pre><code class="language-kotlin">// Top-level build file where you can add configuration options common to all sub-projects/modules.
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.compose) apply false
 }</code></pre>
 </div>
 
-          <p>Version Catalog の <code>gradle/libs.versions.toml</code> です（ウィザードが生成した直後の状態。ステップ 4 で 1 行ずつ追加します）。Compose のライブラリ（<code>androidx-ui</code> や <code>androidx-material3</code>）には <code>version.ref</code> がありません。バージョンは Compose BOM（<code>androidx-compose-bom</code>）が決めます。</p>
+          <p>Version Catalog の <code>gradle/libs.versions.toml</code> です（ウィザードが生成した直後の状態。ステップ 4 で 1 行ずつ追加します）。Compose のライブラリ（<code>androidx-compose-ui</code> や <code>androidx-compose-material3</code>）には <code>version.ref</code> がありません。バージョンは Compose BOM（<code>androidx-compose-bom</code>）が決めます。</p>
 
 <div class="code-block">
   <div class="code-block__header">
@@ -366,14 +365,14 @@ plugins {
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
   <pre><code class="language-toml">[versions]
-agp = &quot;9.4.0&quot;
-kotlin = &quot;2.2.10&quot;
-coreKtx = &quot;1.19.1&quot;
+agp = &quot;9.4.1&quot;
+coreKtx = &quot;1.10.1&quot;
 junit = &quot;4.13.2&quot;
-junitVersion = &quot;1.3.0&quot;
-espressoCore = &quot;3.7.0&quot;
-lifecycleRuntimeKtx = &quot;2.11.0&quot;
-activityCompose = &quot;1.13.0&quot;
+junitVersion = &quot;1.1.5&quot;
+espressoCore = &quot;3.5.1&quot;
+lifecycleRuntimeKtx = &quot;2.6.1&quot;
+activityCompose = &quot;1.8.0&quot;
+kotlin = &quot;2.2.10&quot;
 composeBom = &quot;2026.02.01&quot;
 
 [libraries]
@@ -384,20 +383,20 @@ androidx-espresso-core = { group = &quot;androidx.test.espresso&quot;, name = &q
 androidx-lifecycle-runtime-ktx = { group = &quot;androidx.lifecycle&quot;, name = &quot;lifecycle-runtime-ktx&quot;, version.ref = &quot;lifecycleRuntimeKtx&quot; }
 androidx-activity-compose = { group = &quot;androidx.activity&quot;, name = &quot;activity-compose&quot;, version.ref = &quot;activityCompose&quot; }
 androidx-compose-bom = { group = &quot;androidx.compose&quot;, name = &quot;compose-bom&quot;, version.ref = &quot;composeBom&quot; }
-androidx-ui = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui&quot; }
-androidx-ui-graphics = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-graphics&quot; }
-androidx-ui-tooling = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-tooling&quot; }
-androidx-ui-tooling-preview = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-tooling-preview&quot; }
-androidx-ui-test-junit4 = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-junit4&quot; }
-androidx-ui-test-manifest = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-manifest&quot; }
-androidx-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }
+androidx-compose-ui = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui&quot; }
+androidx-compose-ui-graphics = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-graphics&quot; }
+androidx-compose-ui-tooling = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-tooling&quot; }
+androidx-compose-ui-tooling-preview = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-tooling-preview&quot; }
+androidx-compose-ui-test-manifest = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-manifest&quot; }
+androidx-compose-ui-test-junit4 = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-junit4&quot; }
+androidx-compose-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }
 
 [plugins]
 android-application = { id = &quot;com.android.application&quot;, version.ref = &quot;agp&quot; }
 kotlin-compose = { id = &quot;org.jetbrains.kotlin.plugin.compose&quot;, version.ref = &quot;kotlin&quot; }</code></pre>
 </div>
 
-          <p>このままでも動きますが、本教材はこの後の項目と同じ版にそろえるため、3 つのバージョンを上げます。<code>agp</code>（AGP）、<code>kotlin</code>（Kotlin）、<code>composeBom</code>（Compose BOM）の 3 行を書き換えます。</p>
+          <p>このままでも動きますが、本教材はこの後の項目と同じ版にそろえるため、Kotlin・Compose BOM・AndroidX のライブラリの 7 つのバージョンを上げます。書き換えるのは、次の diff の 7 行です。<code>agp</code>（AGP）は生成時点で 9.4.1 なので、そのままにします。</p>
 
 <div class="code-block code-block--diff">
   <div class="code-block__header">
@@ -406,11 +405,11 @@ kotlin-compose = { id = &quot;org.jetbrains.kotlin.plugin.compose&quot;, version
     <span class="code-block__spacer"></span>
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
-  <pre><span class="diff-line">  ...</span><span class="diff-line">  [versions]</span><span class="diff-line diff-line--remove">- agp = &quot;9.4.0&quot;</span><span class="diff-line diff-line--remove">- kotlin = &quot;2.2.10&quot;</span><span class="diff-line diff-line--add">+ agp = &quot;9.4.1&quot;</span><span class="diff-line diff-line--add">+ kotlin = &quot;2.4.20&quot;</span><span class="diff-line">  coreKtx = &quot;1.19.1&quot;</span><span class="diff-line">  junit = &quot;4.13.2&quot;</span><span class="diff-line">  junitVersion = &quot;1.3.0&quot;</span><span class="diff-line">  espressoCore = &quot;3.7.0&quot;</span><span class="diff-line">  lifecycleRuntimeKtx = &quot;2.11.0&quot;</span><span class="diff-line">  activityCompose = &quot;1.13.0&quot;</span><span class="diff-line diff-line--remove">- composeBom = &quot;2026.02.01&quot;</span><span class="diff-line diff-line--add">+ composeBom = &quot;2026.09.00&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span></pre>
+  <pre><span class="diff-line">  [versions]</span><span class="diff-line">  agp = &quot;9.4.1&quot;</span><span class="diff-line diff-line--remove">- coreKtx = &quot;1.10.1&quot;</span><span class="diff-line diff-line--add">+ coreKtx = &quot;1.19.1&quot;</span><span class="diff-line">  junit = &quot;4.13.2&quot;</span><span class="diff-line diff-line--remove">- junitVersion = &quot;1.1.5&quot;</span><span class="diff-line diff-line--remove">- espressoCore = &quot;3.5.1&quot;</span><span class="diff-line diff-line--remove">- lifecycleRuntimeKtx = &quot;2.6.1&quot;</span><span class="diff-line diff-line--remove">- activityCompose = &quot;1.8.0&quot;</span><span class="diff-line diff-line--remove">- kotlin = &quot;2.2.10&quot;</span><span class="diff-line diff-line--remove">- composeBom = &quot;2026.02.01&quot;</span><span class="diff-line diff-line--add">+ junitVersion = &quot;1.3.0&quot;</span><span class="diff-line diff-line--add">+ espressoCore = &quot;3.7.0&quot;</span><span class="diff-line diff-line--add">+ lifecycleRuntimeKtx = &quot;2.11.0&quot;</span><span class="diff-line diff-line--add">+ activityCompose = &quot;1.13.0&quot;</span><span class="diff-line diff-line--add">+ kotlin = &quot;2.4.20&quot;</span><span class="diff-line diff-line--add">+ composeBom = &quot;2026.09.00&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span></pre>
 </div>
 
           <p>書き換えたら、Android Studio の上部に同期を促す表示が出るので <strong>Sync Now</strong> を押します。ターミナルで試す場合は、次のステップの <code>./gradlew</code> が実行のたびにカタログを読み込みます。</p>
-          <p>上げる版は、Google の Maven リポジトリに公開されている最新安定版です。AGP の最新版は <code>https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/maven-metadata.xml</code> で確認できます。版を上げた理由は、教材の前提版（AGP 9.4.1 / Kotlin 2.4.20 / Compose BOM 2026.09.00）に合わせるためです。</p>
+          <p>上げる版は、Google の Maven リポジトリと Maven Central に公開されている執筆時点の最新安定版です。たとえば Kotlin の最新版は Kotlin 公式のリリースページ（<code>https://kotlinlang.org/docs/releases.html</code>）、Compose BOM の最新版は Android Developers の BOM のページ（<code>https://developer.android.com/develop/ui/compose/bom</code>）で確認できます。版を上げた理由は、教材の前提版（Kotlin 2.4.20 / Compose BOM 2026.09.00 など）に合わせるためです。</p>
           <p>アプリモジュールの <code>app/build.gradle.kts</code> です（作成直後の状態）。</p>
 
 <div class="code-block">
@@ -434,7 +433,7 @@ android {
     defaultConfig {
         applicationId = &quot;com.handson.android01&quot;
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = &quot;1.0&quot;
 
@@ -443,16 +442,15 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile(&quot;proguard-android-optimize.txt&quot;),
-                &quot;proguard-rules.pro&quot;,
-            )
+            optimization {
+                enable = true
+                packageScope = setOf(&quot;androidx.**&quot;, &quot;kotlin.**&quot;, &quot;kotlinx.**&quot;)
+            }
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
     }
     buildFeatures {
         compose = true
@@ -460,30 +458,31 @@ android {
 }
 
 dependencies {
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.ui)
-    implementation(libs.androidx.ui.graphics)
-    implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.material3)
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(libs.androidx.ui.test.junit4)
-    debugImplementation(libs.androidx.ui.tooling)
-    debugImplementation(libs.androidx.ui.test.manifest)
+    androidTestImplementation(libs.androidx.junit)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
+    debugImplementation(libs.androidx.compose.ui.tooling)
 }</code></pre>
 </div>
 
           <ul>
             <li><code>compileSdk { version = release(37) }</code>: コンパイルに使う Android API のバージョンです。新しい API を使えるかどうかは、この値で決まります。</li>
             <li><code>minSdk = 26</code>: インストールできる最も古い Android のバージョン（Android 8.0）です。</li>
-            <li><code>targetSdk = 36</code>: アプリが動作確認済みとして宣言する Android のバージョンです。OS はこの値を見て、互換動作を切り替えます。</li>
+            <li><code>targetSdk = 37</code>: アプリが動作確認済みとして宣言する Android のバージョンです。OS はこの値を見て、互換動作を切り替えます。</li>
+            <li><code>release { optimization { ... } }</code>: リリースビルドで R8 による最適化を有効にする設定です。R8 に残させるコードの指定（キープルール）は <code>app/src/main/keepRules/rules.keep</code> に書きます。<code>packageScope</code> により、最適化の対象は androidx・kotlin・kotlinx のパッケージだけで、アプリ自身のコードは対象外です。この項目ではデバッグ版だけを作るので、ここは変更しません。</li>
             <li><code>buildFeatures { compose = true }</code>: Jetpack Compose を有効にします。</li>
-            <li><code>implementation(platform(libs.androidx.compose.bom))</code>: Compose BOM を依存に加えます。続く <code>libs.androidx.ui</code> などのバージョンは BOM から決まります。</li>
+            <li><code>implementation(platform(libs.androidx.compose.bom))</code>: Compose BOM を依存に加えます。続く <code>libs.androidx.compose.ui</code> などのバージョンは BOM から決まります。</li>
             <li><code>testImplementation</code> / <code>androidTestImplementation</code> / <code>debugImplementation</code>: それぞれ、単体テスト用・計装テスト用・デバッグビルド用だけに加える依存です。</li>
           </ul>
 
@@ -630,9 +629,9 @@ fun HandsonAndroid01Theme(
 </div>
 
           <p><code>dynamicColor</code> が <code>true</code> で、かつ Android 12（<code>Build.VERSION_CODES.S</code>）以上の端末では、壁紙から作られる配色（ダイナミックカラー）を使います。それより古い端末では、<code>Color.kt</code> の色で作った <code>LightColorScheme</code> / <code>DarkColorScheme</code> を使います。</p>
-          <p>そのほかのファイル（<code>gradle.properties</code>、<code>AndroidManifest.xml</code>、<code>.gitignore</code>）も全文を載せます。<code>org.gradle.configuration-cache=true</code> は、2 回目以降のビルドを速くする設定です。AndroidX（<code>android.useAndroidX</code>）と R クラスの分離（<code>android.nonTransitiveRClass</code>）は、AGP 9 では既定で有効なので書いていません。<code>AndroidManifest.xml</code> の <code>adjustResize</code> は、キーボードが表示されたときに入力欄が隠れないよう画面を縮める設定です。</p>
+          <p>そのほかのファイル（<code>gradle.properties</code>、<code>AndroidManifest.xml</code>、<code>.gitignore</code>、Gradle Wrapper とデーモンの設定）も全文を載せます。<code>org.gradle.configuration-cache=true</code> は、2 回目以降のビルドを速くする設定です。AndroidX（<code>android.useAndroidX</code>）と R クラスの分離（<code>android.nonTransitiveRClass</code>）は、AGP 9 では既定で有効なので書かれていません。<code>AndroidManifest.xml</code> の <code>adjustResize</code> は、キーボードが表示されたときに入力欄が隠れないよう画面を縮める設定です。</p>
 <details class="disclosure">
-  <summary class="disclosure__summary">gradle.properties / AndroidManifest.xml / .gitignore / gradle-wrapper.properties の全文を見る</summary>
+  <summary class="disclosure__summary">gradle.properties / AndroidManifest.xml / .gitignore / gradle-wrapper.properties / gradle-daemon-jvm.properties の全文を見る</summary>
   <div class="disclosure__body">
 
 <div class="code-block">
@@ -643,28 +642,22 @@ fun HandsonAndroid01Theme(
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
   <pre><code class="language-properties"># Project-wide Gradle settings.
-
 # IDE (e.g. Android Studio) users:
 # Gradle settings configured through the IDE *will override*
 # any settings specified in this file.
-
 # For more details on how to configure your build environment visit
 # http://www.gradle.org/docs/current/userguide/build_environment.html
-
 # Specifies the JVM arguments used for the daemon process.
 # The setting is particularly useful for tweaking memory settings.
 org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-
 # When configured, Gradle will run in incubating parallel mode.
 # This option should only be used with decoupled projects. For more details, visit
 # https://developer.android.com/r/tools/gradle-multi-project-decoupled-projects
 # org.gradle.parallel=true
-
 # When enabled, the Configuration Cache allows Gradle to skip the configuration
 # phase entirely if nothing that affects the build configuration (such as build scripts)
 # has changed. Additionally, Gradle applies performance optimizations to task execution.
 org.gradle.configuration-cache=true
-
 # Kotlin code style for this project: &quot;official&quot; or &quot;obsolete&quot;:
 kotlin.code.style=official</code></pre>
 </div>
@@ -689,8 +682,7 @@ kotlin.code.style=official</code></pre>
         android:label=&quot;@string/app_name&quot;
         android:roundIcon=&quot;@mipmap/ic_launcher_round&quot;
         android:supportsRtl=&quot;true&quot;
-        android:theme=&quot;@style/Theme.HandsonAndroid01&quot;
-        tools:targetApi=&quot;31&quot;&gt;
+        android:theme=&quot;@style/Theme.HandsonAndroid01&quot;&gt;
         &lt;activity
             android:name=&quot;.MainActivity&quot;
             android:exported=&quot;true&quot;
@@ -719,13 +711,18 @@ kotlin.code.style=official</code></pre>
   <pre><code class="language-plaintext">*.iml
 .gradle
 /local.properties
-/.idea
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
 .DS_Store
 /build
 /captures
 .externalNativeBuild
 .cxx
-.kotlin/</code></pre>
+local.properties</code></pre>
 </div>
 
 
@@ -736,15 +733,38 @@ kotlin.code.style=official</code></pre>
     <span class="code-block__spacer"></span>
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
-  <pre><code class="language-properties">distributionBase=GRADLE_USER_HOME
+  <pre><code class="language-properties">#Sat Oct 03 17:13:07 JST 2026
+distributionBase=GRADLE_USER_HOME
 distributionPath=wrapper/dists
+distributionSha256Sum=bbaeb2fef8710818cf0e261201dab964c572f92b942812df0c3620d62a529a01
 distributionUrl=https\://services.gradle.org/distributions/gradle-9.6.0-bin.zip
 networkTimeout=10000
-retries=0
-retryBackOffMs=500
 validateDistributionUrl=true
 zipStoreBase=GRADLE_USER_HOME
 zipStorePath=wrapper/dists</code></pre>
+</div>
+
+<p><code>gradle/gradle-daemon-jvm.properties</code> は、Gradle デーモンを動かす JDK の版（<code>toolchainVersion=25</code>）と、OS・CPU ごとの JDK のダウンロード先（<code>toolchainUrl.*</code>）を書いたファイルです。1 行目のコメントのとおり、Gradle の <code>updateDaemonJvm</code> タスクが生成します。手で編集する必要はありません。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Properties</span>
+    <span class="code-block__filename">gradle/gradle-daemon-jvm.properties</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-properties">#This file is generated by updateDaemonJvm
+toolchainUrl.FREE_BSD.AARCH64=https\://api.foojay.io/disco/v3.0/ids/cf726b4a1c84b50457225f9bba6d7650/redirect
+toolchainUrl.FREE_BSD.X86_64=https\://api.foojay.io/disco/v3.0/ids/fa1e318c287360478e3c83a9a3ef1007/redirect
+toolchainUrl.LINUX.AARCH64=https\://api.foojay.io/disco/v3.0/ids/cf726b4a1c84b50457225f9bba6d7650/redirect
+toolchainUrl.LINUX.X86_64=https\://api.foojay.io/disco/v3.0/ids/fa1e318c287360478e3c83a9a3ef1007/redirect
+toolchainUrl.MAC_OS.AARCH64=https\://api.foojay.io/disco/v3.0/ids/c2dd35c9d0aaf0ba6ad0791320f99dfc/redirect
+toolchainUrl.MAC_OS.X86_64=https\://api.foojay.io/disco/v3.0/ids/e5810bd7fd1f8a586644409d395a7e55/redirect
+toolchainUrl.UNIX.AARCH64=https\://api.foojay.io/disco/v3.0/ids/cf726b4a1c84b50457225f9bba6d7650/redirect
+toolchainUrl.UNIX.X86_64=https\://api.foojay.io/disco/v3.0/ids/fa1e318c287360478e3c83a9a3ef1007/redirect
+toolchainUrl.WINDOWS.AARCH64=https\://api.foojay.io/disco/v3.0/ids/7b3c4877c0749019e6805bb61e421497/redirect
+toolchainUrl.WINDOWS.X86_64=https\://api.foojay.io/disco/v3.0/ids/d76df094a9cbbabd3b08251f9e61444a/redirect
+toolchainVersion=25</code></pre>
 </div>
 
   </div>
@@ -785,16 +805,16 @@ zipStorePath=wrapper/dists</code></pre>
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">Reusing configuration cache.</span><span class="terminal__line">&gt; Task :app:preBuild UP-TO-DATE</span><span class="terminal__line">&gt; Task :app:generateDebugAssets UP-TO-DATE</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:compileDebugKotlin</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:stripDebugDebugSymbols</span><span class="terminal__line">Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so. Run with --info option to learn more.</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:packageDebug</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 8s</span><span class="terminal__line">36 actionable tasks: 36 executed</span><span class="terminal__line">Configuration cache entry reused.</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">Calculating task graph as no cached configuration is available for tasks: assembleDebug</span><span class="terminal__line">&gt; Task :app:preBuild UP-TO-DATE</span><span class="terminal__line">&gt; Task :app:generateDebugAssets UP-TO-DATE</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:compileDebugKotlin</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:stripDebugDebugSymbols</span><span class="terminal__line">Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so. Run with --info option to learn more.</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:packageDebug</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 38s</span><span class="terminal__line">36 actionable tasks: 36 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
 </div>
 
-          <p>出力は一部を省略しています。<code>&gt; Task :app:compileDebugKotlin</code> が Kotlin のコンパイル、<code>packageDebug</code> が APK の作成です。<code>BUILD SUCCESSFUL in 8s</code> がビルドの成功と所要時間を表します。</p>
+          <p>出力は一部を省略しています。<code>&gt; Task :app:compileDebugKotlin</code> が Kotlin のコンパイル、<code>packageDebug</code> が APK の作成です。<code>BUILD SUCCESSFUL in 38s</code> がビルドの成功と所要時間を表します。</p>
 
           <div class="callout callout--tip">
             <span class="callout__icon" aria-hidden="true">💡</span>
             <div class="callout__body">
               <p class="callout__title">初回のビルドは時間がかかる</p>
-              <p>初回は Gradle デーモンの起動と、AGP・Kotlin・AndroidX などの依存ライブラリのダウンロードが入るため、時間がかかります。ダウンロードにかかる時間は回線の速さによって変わり、数分かかることもあります。執筆環境では依存ライブラリを取得済みだったため 8 秒でした。2 回目以降はダウンロード済みのものを使い、変更のあったタスクだけを実行するので短くなります。</p>
+              <p>初回は Gradle デーモンの起動と、AGP・Kotlin・AndroidX などの依存ライブラリのダウンロードが入るため、時間がかかります。ダウンロードにかかる時間は回線の速さによって変わり、数分かかることもあります。執筆環境では依存ライブラリを取得済みで、Gradle デーモンも起動済みでしたが、構成キャッシュがまだ無かったため 38 秒でした。2 回目以降はダウンロード済みのものを使い、変更のあったタスクだけを実行するので短くなります。</p>
             </div>
           </div>
 
@@ -816,10 +836,10 @@ zipStorePath=wrapper/dists</code></pre>
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -l app/build/outputs/apk/debug/app-debug.apk</span><span class="terminal__line">-rw-r--r--  1 you  staff  11682451 10月  3 15:31 app/build/outputs/apk/debug/app-debug.apk</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -l app/build/outputs/apk/debug/app-debug.apk</span><span class="terminal__line">-rw-r--r--  1 you  staff  11720408 10月  3 20:00 app/build/outputs/apk/debug/app-debug.apk</span></pre>
 </div>
 
-          <p>デバッグ版の APK は約 11.7 MB（11,682,451 バイト）でした。デバッグ版は最適化や縮小をしていないため、リリース版より大きくなります。</p>
+          <p>デバッグ版の APK は約 11.7 MB（11,720,408 バイト）でした。デバッグ版は最適化や縮小をしていないため、リリース版より大きくなります。</p>
           <p>続いて、静的解析の lint と単体テストを実行します。Android Studio の Code &gt; Inspect Code に相当するのが <code>lint</code> です。</p>
 
 <div class="terminal">
@@ -829,10 +849,10 @@ zipStorePath=wrapper/dists</code></pre>
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew lint</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:lintReportDebug</span><span class="terminal__line">Wrote HTML report to file:///path/to/01-setup/app/build/reports/lint-results-debug.html</span><span class="terminal__line">Wrote SARIF report to file:///path/to/01-setup/app/build/reports/lint-results-debug.sarif</span><span class="terminal__line"></span><span class="terminal__line">&gt; Task :app:lintDebug</span><span class="terminal__line">&gt; Task :app:lint</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 14s</span><span class="terminal__line">27 actionable tasks: 10 executed, 17 up-to-date</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew test</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:testDebugUnitTest</span><span class="terminal__line">&gt; Task :app:test</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 3s</span><span class="terminal__line">24 actionable tasks: 5 executed, 19 up-to-date</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew lint</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:lintReportDebug</span><span class="terminal__line">Wrote HTML report to file:///path/to/01-setup/app/build/reports/lint-results-debug.html</span><span class="terminal__line">Wrote SARIF report to file:///path/to/01-setup/app/build/reports/lint-results-debug.sarif</span><span class="terminal__line"></span><span class="terminal__line">&gt; Task :app:lintDebug</span><span class="terminal__line">&gt; Task :app:lint</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 8s</span><span class="terminal__line">27 actionable tasks: 10 executed, 17 up-to-date</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew test</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:testDebugUnitTest</span><span class="terminal__line">&gt; Task :app:test</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 3s</span><span class="terminal__line">24 actionable tasks: 5 executed, 19 up-to-date</span></pre>
 </div>
 
-          <p><code>lint</code> は成功しますが、HTML のレポートには警告が 6 件出ます（<code>OldTargetApi</code>、<code>RedundantLabel</code>、<code>ObsoleteSdkInt</code>、<code>MonochromeLauncherIcon</code> の 2 件、<code>AndroidGradlePluginVersion</code>）。今は無視してよく、02 以降で扱います。<code>lint</code> の結果は HTML のレポートとして <code>app/build/reports/lint-results-debug.html</code> に書き出されます。<code>test</code> は <code>app/src/test/</code> の <code>ExampleUnitTest</code>（<code>2 + 2</code> が <code>4</code> であることを確かめるだけのテスト）を PC の JVM で実行します。</p>
+          <p><code>lint</code> は成功しますが、HTML のレポートには警告が 9 件出ます。内訳は、<code>UnusedResources</code> が 7 件（<code>colors.xml</code> の使われていない色）、<code>RedundantLabel</code> が 1 件、<code>AndroidGradlePluginVersion</code> が 1 件です。<code>RedundantLabel</code> は、<code>AndroidManifest.xml</code> の Activity の <code>android:label</code> がアプリのラベルと同じで不要だという指摘です。<code>AndroidGradlePluginVersion</code> は、より新しい Gradle（9.8.0）があることを知らせます。どれもウィザードの生成物に由来する警告で、今は無視して構いません。<code>lint</code> の結果は HTML のレポートとして <code>app/build/reports/lint-results-debug.html</code> に書き出されます。<code>test</code> は <code>app/src/test/</code> の <code>ExampleUnitTest</code>（<code>2 + 2</code> が <code>4</code> であることを確かめるだけのテスト）を PC の JVM で実行します。</p>
 
           <div class="callout callout--note">
             <span class="callout__icon" aria-hidden="true">ℹ️</span>
@@ -870,7 +890,7 @@ zipStorePath=wrapper/dists</code></pre>
     <span class="code-block__spacer"></span>
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
-  <pre><span class="diff-line">  ...</span><span class="diff-line">  lifecycleRuntimeKtx = &quot;2.11.0&quot;</span><span class="diff-line">  activityCompose = &quot;1.13.0&quot;</span><span class="diff-line">  composeBom = &quot;2026.09.00&quot;</span><span class="diff-line diff-line--add">+ kotlinxCoroutines = &quot;1.11.0&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  androidx-ui-test-junit4 = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-junit4&quot; }</span><span class="diff-line">  androidx-ui-test-manifest = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-manifest&quot; }</span><span class="diff-line">  androidx-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }</span><span class="diff-line diff-line--add">+ kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  </span><span class="diff-line">  [plugins]</span><span class="diff-line">  android-application = { id = &quot;com.android.application&quot;, version.ref = &quot;agp&quot; }</span><span class="diff-line">  ...</span></pre>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  activityCompose = &quot;1.13.0&quot;</span><span class="diff-line">  kotlin = &quot;2.4.20&quot;</span><span class="diff-line">  composeBom = &quot;2026.09.00&quot;</span><span class="diff-line diff-line--add">+ kotlinxCoroutines = &quot;1.11.0&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  androidx-compose-ui-test-manifest = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-manifest&quot; }</span><span class="diff-line">  androidx-compose-ui-test-junit4 = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-junit4&quot; }</span><span class="diff-line">  androidx-compose-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }</span><span class="diff-line diff-line--add">+ kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  </span><span class="diff-line">  [plugins]</span><span class="diff-line">  android-application = { id = &quot;com.android.application&quot;, version.ref = &quot;agp&quot; }</span><span class="diff-line">  ...</span></pre>
 </div>
 
           <p>次に、<code>app/build.gradle.kts</code> の <code>dependencies</code> で参照します。</p>
@@ -882,7 +902,7 @@ zipStorePath=wrapper/dists</code></pre>
     <span class="code-block__spacer"></span>
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
-  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.ui.graphics)</span><span class="diff-line">      implementation(libs.androidx.ui.tooling.preview)</span><span class="diff-line">      implementation(libs.androidx.material3)</span><span class="diff-line diff-line--add">+     implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">      androidTestImplementation(platform(libs.androidx.compose.bom))</span><span class="diff-line">      androidTestImplementation(libs.androidx.junit)</span><span class="diff-line">  ...</span></pre>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.compose.ui.tooling.preview)</span><span class="diff-line">      implementation(libs.androidx.core.ktx)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.runtime.ktx)</span><span class="diff-line diff-line--add">+     implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">      androidTestImplementation(platform(libs.androidx.compose.bom))</span><span class="diff-line">      androidTestImplementation(libs.androidx.compose.ui.test.junit4)</span><span class="diff-line">  ...</span></pre>
 </div>
 
           <p>Android Studio では、カタログやビルドスクリプトを変更すると、同期を促す表示がエディタの上部に出ます。Sync Now を押して同期してください。同期が終わると、<code>libs.kotlinx.coroutines.android</code> を補完できるようになります。</p>
@@ -916,7 +936,7 @@ zipStorePath=wrapper/dists</code></pre>
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:dependencies --configuration debugRuntimeClasspath</span><span class="terminal__line"></span><span class="terminal__line">&gt; Task :app:dependencies</span><span class="terminal__line"></span><span class="terminal__line">------------------------------------------------------------</span><span class="terminal__line">Project &#x27;:app&#x27;</span><span class="terminal__line">------------------------------------------------------------</span><span class="terminal__line"></span><span class="terminal__line">debugRuntimeClasspath - Runtime classpath of &#x27;/debug&#x27;.</span><span class="terminal__line">（中略）</span><span class="terminal__line">+--- androidx.core:core-ktx:1.19.1 (*)</span><span class="terminal__line">+--- androidx.lifecycle:lifecycle-runtime-ktx:2.11.0 (*)</span><span class="terminal__line">+--- androidx.activity:activity-compose:1.13.0 (*)</span><span class="terminal__line">+--- androidx.compose:compose-bom:2026.09.00</span><span class="terminal__line">（中略）</span><span class="terminal__line">+--- androidx.compose.ui:ui -&gt; 1.12.1 (*)</span><span class="terminal__line">+--- androidx.compose.ui:ui-graphics -&gt; 1.12.1 (*)</span><span class="terminal__line">+--- androidx.compose.ui:ui-tooling-preview -&gt; 1.12.1 (*)</span><span class="terminal__line">+--- androidx.compose.material3:material3 -&gt; 1.4.0 (*)</span><span class="terminal__line">\--- org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0 (*)</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:dependencies --configuration debugRuntimeClasspath</span><span class="terminal__line"></span><span class="terminal__line">&gt; Task :app:dependencies</span><span class="terminal__line"></span><span class="terminal__line">------------------------------------------------------------</span><span class="terminal__line">Project &#x27;:app&#x27;</span><span class="terminal__line">------------------------------------------------------------</span><span class="terminal__line"></span><span class="terminal__line">debugRuntimeClasspath - Runtime classpath of &#x27;/debug&#x27;.</span><span class="terminal__line">（中略）</span><span class="terminal__line">+--- androidx.compose:compose-bom:2026.09.00</span><span class="terminal__line">（中略）</span><span class="terminal__line">+--- androidx.activity:activity-compose:1.13.0 (*)</span><span class="terminal__line">+--- androidx.compose.material3:material3 -&gt; 1.4.0 (*)</span><span class="terminal__line">+--- androidx.compose.ui:ui -&gt; 1.12.1 (*)</span><span class="terminal__line">+--- androidx.compose.ui:ui-graphics -&gt; 1.12.1 (*)</span><span class="terminal__line">+--- androidx.compose.ui:ui-tooling-preview -&gt; 1.12.1 (*)</span><span class="terminal__line">+--- androidx.core:core-ktx:1.19.1 (*)</span><span class="terminal__line">+--- androidx.lifecycle:lifecycle-runtime-ktx:2.11.0 (*)</span><span class="terminal__line">\--- org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0 (*)</span></pre>
 </div>
 
           <p>最後の行に <code>kotlinx-coroutines-android:1.11.0</code> が出ていれば、カタログの追加が反映されています。<code>androidx.compose.ui:ui -&gt; 1.12.1</code> や <code>material3 -&gt; 1.4.0</code> の <code>-&gt;</code> の右側は、Compose BOM 2026.09.00 によって決まったバージョンです。カタログにはバージョンを書いていないのに、BOM の値で解決されていることが分かります。</p>
@@ -1081,7 +1101,7 @@ zipStorePath=wrapper/dists</code></pre>
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">Installed on 1 device.</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 3s</span><span class="terminal__line">39 actionable tasks: 1 executed, 38 up-to-date</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell dumpsys window | grep -E &quot;mCurrentFocus|mFocusedApp&quot;</span><span class="terminal__line">  mCurrentFocus=Window{26fde25 u0 com.handson.android01/com.handson.android01.MainActivity}</span><span class="terminal__line">  mFocusedApp=ActivityRecord{108038366 u0 com.handson.android01/.MainActivity t8}</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">Installed on 1 device.</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 1s</span><span class="terminal__line">39 actionable tasks: 1 executed, 38 up-to-date</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell dumpsys window | grep -E &quot;mCurrentFocus|mFocusedApp&quot;</span><span class="terminal__line">  mCurrentFocus=Window{5be760a u0 com.handson.android01/com.handson.android01.MainActivity}</span><span class="terminal__line">  mFocusedApp=ActivityRecord{70957440 u0 com.handson.android01/.MainActivity t6}</span></pre>
 </div>
 
           <p><code>mCurrentFocus</code> に <code>com.handson.android01/...MainActivity</code> が出ていれば、アプリが前面に表示されています。画面に表示されている文字は、<code>uiautomator</code> で画面の構造を書き出して確認できます。</p>
@@ -1093,7 +1113,7 @@ zipStorePath=wrapper/dists</code></pre>
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell uiautomator dump /sdcard/window.xml</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cat /sdcard/window.xml | grep -oE &#x27;text=&quot;[^&quot;]*&quot;&#x27;</span><span class="terminal__line">text=&quot;Hello, Compose!&quot;</span><span class="terminal__line">text=&quot;Kotlin 2.4.20 / Compose BOM 2026.09.00&quot;</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell uiautomator dump /sdcard/window.xml</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cat /sdcard/window.xml | grep -oE &#x27;text=&quot;[^&quot;]*&quot;&#x27;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;Hello, Compose!&quot;</span><span class="terminal__line">text=&quot;Kotlin 2.4.20 / Compose BOM 2026.09.00&quot;</span></pre>
 </div>
 
           <p>エミュレータの画面では、ステータスバーのすぐ下の左上に「Hello, Compose!」と「Kotlin 2.4.20 / Compose BOM 2026.09.00」の 2 行が表示されます。<code>Scaffold</code> の <code>innerPadding</code> を渡しているので、文字はステータスバーと重なりません。</p>
@@ -1110,9 +1130,11 @@ zipStorePath=wrapper/dists</code></pre>
 
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import org.junit.Assert.assertEquals
+
 import org.junit.Test
 import org.junit.runner.RunWith
+
+import org.junit.Assert.*
 
 /**
  * Instrumented test, which will execute on an Android device.
@@ -1138,7 +1160,7 @@ class ExampleInstrumentedTest {
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest</span><span class="terminal__line">Running tests on devices: Handson_Android36(AVD) - 16</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 10s</span><span class="terminal__line">72 actionable tasks: 34 executed, 38 up-to-date</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest</span><span class="terminal__line">Running tests on devices: Handson_Android36(AVD) - 16</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 4s</span><span class="terminal__line">72 actionable tasks: 34 executed, 38 up-to-date</span></pre>
 </div>
 
           <p>結果は <code>app/build/outputs/androidTest-results/connected/debug/</code> 配下の XML に書き出されます。執筆環境では <code>tests="1" failures="0" errors="0"</code> で、1 件のテストが成功しました。</p>
@@ -1209,7 +1231,7 @@ class ExampleInstrumentedTest {
             <span class="callout__icon" aria-hidden="true">⚠️</span>
             <div class="callout__body">
               <p class="callout__title">Gradle の実行に使う JDK のバージョン</p>
-              <p>AGP 9.4 の実行には JDK 17 以上が必要です。Android Studio からビルドする場合は、同梱の JDK（JBR）が使われます。Rabbit 1 同梱の JBR は JDK 25（25.0.3）です。ターミナルから <code>./gradlew</code> を実行する場合は、<code>java -version</code>（または <code>JAVA_HOME</code>）が指す JDK で動きます。この JDK が 17 以上であることを確認してください。</p>
+              <p>AGP 9.4 の実行には JDK 17 以上が必要です。Android Studio からビルドする場合は、同梱の JDK（JBR）が使われます。Rabbit 1 同梱の JBR は JDK 25（25.0.3）です。ターミナルから <code>./gradlew</code> を実行する場合、<code>./gradlew</code> を起動する JDK は <code>java -version</code>（または <code>JAVA_HOME</code>）が指すものです。この JDK が 17 以上であることを確認してください。執筆環境では、ターミナルの JDK（<code>./gradlew</code> を起動する側）は 21.0.1 のままで、ビルドは成功しました。ただし、実際にビルドを実行する Gradle デーモンは別で、<code>gradle-daemon-jvm.properties</code> の <code>toolchainVersion=25</code> に合う JDK 25 で動きます。Android Studio が起動中のときは、Studio の Gradle デーモン（JBR 25.0.3）が再利用され、ダウンロードは起きませんでした。Studio を使わずターミナルだけで実行し、PC に JDK 25 が見つからない場合は、Gradle が Eclipse Temurin の JDK 25（25.0.3）を <code>~/.gradle/jdks</code> に自動でダウンロードします（執筆環境では <code>--no-daemon</code> での初回実行時に起きました）。</p>
             </div>
           </div>
 

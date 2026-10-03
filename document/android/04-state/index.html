@@ -201,7 +201,7 @@
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">BUILD SUCCESSFUL in 16s</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">BUILD SUCCESSFUL in 4s</span></pre>
 </div>
 
       <p><code>BUILD SUCCESSFUL</code> と表示されれば準備は完了です。</p>
@@ -1850,7 +1850,7 @@ class TodoListPageTest {
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest</span><span class="terminal__line">Running tests on devices: Handson_Android36(AVD) - 16</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 52s</span><span class="terminal__line">86 actionable tasks: 15 executed, 71 up-to-date</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest</span><span class="terminal__line">Running tests on devices: Handson_Android36(AVD) - 16</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 5s</span><span class="terminal__line">86 actionable tasks: 15 executed, 71 up-to-date</span></pre>
 </div>
 
 
@@ -1861,7 +1861,7 @@ class TodoListPageTest {
             <tbody>
             <tr><td>ユニットテスト（<code>test</code>）</td><td>42 件すべて成功（この項目では増減なし）</td></tr>
             <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>27 件すべて成功（<code>ExampleInstrumentedTest</code> 1 件を除く Compose UI テストは 26 件。03 の 11 件から 15 件増えた）</td></tr>
-            <tr><td>lint</td><td>成功。警告は残りますが、03 から引き継いだアイコン関連など（<code>ObsoleteSdkInt</code>・<code>MonochromeLauncherIcon</code> など）で、この項目の変更とは関係ありません</td></tr>
+            <tr><td>lint</td><td>成功。警告 9 件は 01 の時点から出ているもの（<code>UnusedResources</code> × 7（<code>colors.xml</code> の使われていない色）、<code>RedundantLabel</code>、<code>AndroidGradlePluginVersion</code>）です。ほかに、<code>CounterScreen.kt</code> の <code>mutableStateOf(0)</code> に <code>mutableIntStateOf</code> を勧めるヒント（<code>AutoboxingStateCreation</code>）が 1 件出ます</td></tr>
             </tbody>
           </table>
 
