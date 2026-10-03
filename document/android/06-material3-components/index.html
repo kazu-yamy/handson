@@ -1875,7 +1875,7 @@ class TodoSheetAndDialogTest {
             <span class="callout__icon" aria-hidden="true">ℹ️</span>
             <div class="callout__body">
               <p class="callout__title">一覧の状態と ViewModel（07）</p>
-              <p>この項目では、Todo の一覧・絞り込み・シートの表示フラグを <code>TodoListPage</code> の <code>rememberSaveable</code> などで持ちました。次の項目（07）では、これらの状態を <code>ViewModel</code> と <code>StateFlow</code> に移す予定です。</p>
+              <p>この項目では、Todo の一覧・絞り込み・シートの表示フラグを <code>TodoListPage</code> の <code>rememberSaveable</code> などで持ちました。次の項目（07）では、このうち Todo の一覧と絞り込みを <code>ViewModel</code> と <code>StateFlow</code> に移します。シートの表示など UI 要素の状態は、Composable に残します。</p>
             </div>
           </div>
 
@@ -1902,10 +1902,10 @@ class TodoSheetAndDialogTest {
           <span class="lesson-nav__direction">← 前のレッスン</span>
           <span class="lesson-nav__title">05: Material3 と LazyColumn</span>
         </a>
-        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
-          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../07-viewmodel-stateflow/index.html">
+          <span class="lesson-nav__direction">次のレッスン →</span>
           <span class="lesson-nav__title">07: ViewModel と StateFlow</span>
-        </span>
+        </a>
       </nav>
 
     </div>
