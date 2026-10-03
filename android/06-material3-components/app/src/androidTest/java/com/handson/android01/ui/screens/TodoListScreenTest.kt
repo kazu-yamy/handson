@@ -1,6 +1,7 @@
 package com.handson.android01.ui.screens
 
 import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -14,6 +15,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.printToLog
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -91,7 +93,9 @@ class TodoListScreenTest {
 
         // 空のままでは追加ボタンは無効（後述のテスト）。文字を入れてから押す
         composeTestRule.onNodeWithTag("todo_input").performTextInput("buy milk")
-        composeTestRule.onNodeWithText("追加").performClick()
+        // キーボードが出るとシートが持ち上がり、タップの座標がずれることがある。
+        // 位置に関係なくクリックの処理を呼ぶ
+        composeTestRule.onNodeWithText("追加").performSemanticsAction(SemanticsActions.OnClick)
 
         assertEquals(1, clickCount)
     }

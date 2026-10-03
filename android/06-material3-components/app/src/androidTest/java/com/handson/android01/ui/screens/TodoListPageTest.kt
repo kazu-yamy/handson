@@ -1,5 +1,6 @@
 package com.handson.android01.ui.screens
 
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -13,6 +14,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.handson.android01.ui.theme.HandsonAndroid01Theme
@@ -53,7 +55,9 @@ class TodoListPageTest {
         composeTestRule.onNodeWithTag("fab_add").performClick()
 
         composeTestRule.onNodeWithTag("todo_input").performTextInput("buy milk")
-        composeTestRule.onNodeWithText("追加").performClick()
+        // キーボードが出るとシートが持ち上がり、タップの座標がずれることがある。
+        // 位置に関係なくクリックの処理を呼ぶ
+        composeTestRule.onNodeWithText("追加").performSemanticsAction(SemanticsActions.OnClick)
 
         // 行が 1 つ増え、件数の表示も変わる。未完了の行が増えるので完了数は 2 のまま
         composeTestRule.onAllNodesWithTag("todo_row").assertCountEquals(4)
@@ -68,7 +72,7 @@ class TodoListPageTest {
 
         composeTestRule.onNodeWithTag("todo_input").performTextInput("buy milk")
         composeTestRule.onNodeWithText("追加").assertIsEnabled()
-        composeTestRule.onNodeWithText("追加").performClick()
+        composeTestRule.onNodeWithText("追加").performSemanticsAction(SemanticsActions.OnClick)
 
         // 追加するとシートが閉じる（入力欄が画面から消える）
         composeTestRule.onNodeWithTag("add_sheet").assertDoesNotExist()
@@ -96,7 +100,7 @@ class TodoListPageTest {
         // 入力欄は、追加用のボトムシートの中にある。FAB で開いてから操作する
         composeTestRule.onNodeWithTag("fab_add").performClick()
         composeTestRule.onNodeWithTag("todo_input").performTextInput("buy milk")
-        composeTestRule.onNodeWithText("追加").performClick()
+        composeTestRule.onNodeWithText("追加").performSemanticsAction(SemanticsActions.OnClick)
 
         // 追加した行は未完了で始まる。未完了のセクションの 2 番目（全体の 2 番目のチェックボックス）に並ぶ
         composeTestRule.onAllNodes(isToggleable())[1].assertIsOff()

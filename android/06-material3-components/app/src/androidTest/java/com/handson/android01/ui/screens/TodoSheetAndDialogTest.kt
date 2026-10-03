@@ -1,5 +1,6 @@
 package com.handson.android01.ui.screens
 
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -8,6 +9,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeDown
@@ -47,7 +49,9 @@ class TodoSheetAndDialogTest {
         composeTestRule.onNodeWithTag("fab_add").performClick()
         composeTestRule.onNodeWithTag("todo_input").performTextInput("buy milk")
 
-        composeTestRule.onNodeWithTag("add_button").performClick()
+        // キーボードが出るとシートが持ち上がり、タップの座標がずれることがある。
+        // 位置に関係なくクリックの処理を呼ぶ
+        composeTestRule.onNodeWithTag("add_button").performSemanticsAction(SemanticsActions.OnClick)
 
         // hide() のアニメーションが終わったあとに、表示フラグが落ちてシートが消える
         composeTestRule.onNodeWithTag("add_sheet").assertDoesNotExist()
