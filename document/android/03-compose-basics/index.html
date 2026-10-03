@@ -206,7 +206,7 @@
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">&gt; Task :app:compileDebugKotlin</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 15s</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">&gt; Task :app:compileDebugKotlin</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 5s</span></pre>
 </div>
 
       <p><code>BUILD SUCCESSFUL</code> と表示されれば準備は完了です。</p>
@@ -625,7 +625,7 @@ private fun CountBadgePreview() {
     <span class="code-block__spacer"></span>
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
-  <pre><span class="diff-line">  ...</span><span class="diff-line">  androidx-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }</span><span class="diff-line diff-line--add">+ androidx-material-icons-core = { group = &quot;androidx.compose.material&quot;, name = &quot;material-icons-core&quot; }</span><span class="diff-line">  kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  ...</span></pre>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  androidx-compose-ui-test-junit4 = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-junit4&quot; }</span><span class="diff-line diff-line--add">+ androidx-compose-material-icons-core = { group = &quot;androidx.compose.material&quot;, name = &quot;material-icons-core&quot; }</span><span class="diff-line">  androidx-compose-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }</span><span class="diff-line">  ...</span></pre>
 </div>
 
 <div class="code-block code-block--diff">
@@ -635,10 +635,10 @@ private fun CountBadgePreview() {
     <span class="code-block__spacer"></span>
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
-  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.material3)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.material.icons.core)</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">  ...</span></pre>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.activity.compose)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.compose.material.icons.core)</span><span class="diff-line">      implementation(libs.androidx.compose.material3)</span><span class="diff-line">  ...</span></pre>
 </div>
 
-          <p>Version Catalog の <code>androidx-material-icons-core</code> は、Gradle からは <code>libs.androidx.material.icons.core</code>（<code>-</code> が <code>.</code> になる）で参照します。アイコンを大量に収録した <code>material-icons-extended</code> もありますが、この項目では使いません。</p>
+          <p>Version Catalog に追加したキーは <code>androidx-compose-material-icons-core</code> です。Gradle からは、<code>-</code> を <code>.</code> に変えた <code>libs.androidx.compose.material.icons.core</code> で参照します。01 で生成された Compose のライブラリと同じく <code>androidx-compose-</code> で始まる名前にし、アルファベット順で <code>material3</code> の前に置きます。アイコンを大量に収録した <code>material-icons-extended</code> もありますが、この項目では使いません。</p>
           <p>最後に、<code>TodoRow</code> の UI テストを書きます。</p>
 
 <div class="code-block">
@@ -960,6 +960,7 @@ private fun TodoListScreenPreview() {
   </div>
   <pre><code class="language-kotlin">package com.handson.android01.ui.theme
 
+import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -980,6 +981,16 @@ private val LightColorScheme = lightColorScheme(
     primary = Purple40,
     secondary = PurpleGrey40,
     tertiary = Pink40
+
+    /* Other default colors to override
+    background = Color(0xFFFFFBFE),
+    surface = Color(0xFFFFFBFE),
+    onPrimary = Color.White,
+    onSecondary = Color.White,
+    onTertiary = Color.White,
+    onBackground = Color(0xFF1C1B1F),
+    onSurface = Color(0xFF1C1B1F),
+    */
 )
 
 @Composable
@@ -1182,7 +1193,7 @@ private fun TodoListScreenScreenSizesMultiPreview() {
           </table>
 
           <p>マルチプレビューアノテーションは、<code>@Preview</code> を複数組み合わせたアノテーションです。1 つ付けるだけで、決まった条件の Preview が複数できます。<code>@PreviewLightDark</code> / <code>@PreviewFontScale</code> / <code>@PreviewScreenSizes</code> は、この項目で使う <code>ui-tooling-preview</code> 1.12.1 に含まれています。</p>
-          <p>Preview 関数をすべて <code>private</code> にしているのは、Preview は Android Studio で描くためだけの関数で、アプリのコードから呼ばれては困るからです。これは慣習で、公開のままでもビルドは通ります。ただし <code>private</code> にしてもコードからは消えません。このプロジェクトの release ビルドは <code>isMinifyEnabled = false</code>（テンプレートの設定）なので、R8 による縮小が行われず、Preview 関数も APK に含まれます。</p>
+          <p>Preview 関数をすべて <code>private</code> にしているのは、Preview は Android Studio で描くためだけの関数で、アプリのコードから呼ばれては困るからです。これは慣習で、公開のままでもビルドは通ります。ただし <code>private</code> にしてもコードからは消えません。このプロジェクトの release ビルドの <code>optimization</code> は、<code>packageScope</code> で androidx・kotlin・kotlinx のパッケージだけを対象にしており、アプリ自身のコードは R8 で縮小されません。そのため、Preview 関数も APK に含まれます。</p>
           <p>このファイルは Preview 用の関数だけなので、ターミナルではコンパイルが通ることを確かめます。</p>
 
 <div class="terminal">
@@ -1381,7 +1392,7 @@ class MainActivityTest {
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest --rerun</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 46s</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest --rerun</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 18s</span></pre>
 </div>
 
           <p>テスト結果の XML（<code>testsuite</code> 要素）を見ると、クラスごとの件数と失敗数が分かります。</p>
@@ -1436,7 +1447,7 @@ class MainActivityTest {
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest --rerun</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 19s</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest --rerun</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 17s</span></pre>
 </div>
 
           <table>
@@ -1446,7 +1457,7 @@ class MainActivityTest {
             <tbody>
             <tr><td>ユニットテスト（<code>test</code>）</td><td>42 件すべて成功（02 で書いた 41 件 + <code>ExampleUnitTest</code> 1 件。この項目では増減なし）</td></tr>
             <tr><td>Compose UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>11 件すべて成功（<code>ExampleInstrumentedTest</code> を含めて 12 件）</td></tr>
-            <tr><td>lint</td><td><code>0 errors, 6 warnings</code>。6 件はいずれも 01 の設定から引き継いだもの（<code>OldTargetApi</code>、<code>RedundantLabel</code>、<code>AndroidGradlePluginVersion</code>、<code>ObsoleteSdkInt</code>、<code>MonochromeLauncherIcon</code> × 2）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 9 件。9 件はいずれも 01 の時点から出ているもの（<code>UnusedResources</code> × 7（<code>colors.xml</code> の使われていない色）、<code>RedundantLabel</code>、<code>AndroidGradlePluginVersion</code>）</td></tr>
             </tbody>
           </table>
 
@@ -1579,7 +1590,7 @@ class MainActivityTest {
             <span class="callout__icon" aria-hidden="true">💡</span>
             <div class="callout__body">
               <p class="callout__title">Preview 関数は <code>private</code> にする</p>
-              <p>Preview 関数はアプリのコードから呼ぶものではないので <code>private</code> にします。慣習として <code>private</code> にします（本番コードに Preview が含まれないようにする意図）。<code>private</code> にしても関数はコードに残り、R8 で縮小しない設定（このプロジェクトの <code>isMinifyEnabled = false</code>）では release の APK にも含まれます。</p>
+              <p>Preview 関数はアプリのコードから呼ぶものではないので <code>private</code> にします。慣習として <code>private</code> にします（本番コードに Preview が含まれないようにする意図）。<code>private</code> にしても関数はコードに残り、R8 で縮小しない設定（このプロジェクトの release の <code>optimization</code> は <code>packageScope</code> で androidx・kotlin・kotlinx のパッケージだけが対象で、アプリ自身のコードは縮小されません）では release の APK にも含まれます。</p>
             </div>
           </div>
 

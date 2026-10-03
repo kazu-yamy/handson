@@ -1062,7 +1062,7 @@ class ExtensionsTest {
     <span class="code-block__spacer"></span>
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
-  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line diff-line--add">+     testImplementation(libs.kotlinx.coroutines.test)</span><span class="diff-line">      androidTestImplementation(platform(libs.androidx.compose.bom))</span><span class="diff-line">      androidTestImplementation(libs.androidx.junit)</span><span class="diff-line">  ...</span></pre>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line diff-line--add">+     testImplementation(libs.kotlinx.coroutines.test)</span><span class="diff-line">      androidTestImplementation(platform(libs.androidx.compose.bom))</span><span class="diff-line">      androidTestImplementation(libs.androidx.compose.ui.test.junit4)</span><span class="diff-line">  ...</span></pre>
 </div>
 
           <p><code>testImplementation</code> は、ユニットテスト（<code>src/test/</code>）のときだけ使う依存です。アプリ本体の APK には含まれません。Android Studio で編集した場合は、Sync Now で同期してください。</p>
@@ -1246,7 +1246,7 @@ class CoroutinesTest {
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb wait-for-device</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell getprop sys.boot_completed</span><span class="terminal__line">1</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell uiautomator dump /sdcard/window.xml</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cat /sdcard/window.xml | grep -oE &#x27;text=&quot;[^&quot;]*&quot;&#x27;</span><span class="terminal__line">text=&quot;3 件中 2 件完了&quot;</span><span class="terminal__line">text=&quot;[x] Learn Kotlin Basics&quot;</span><span class="terminal__line">text=&quot;[ ] Build Compose Screen&quot;</span><span class="terminal__line">text=&quot;[x] Write Unit Tests&quot;</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb wait-for-device</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell getprop sys.boot_completed</span><span class="terminal__line">1</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell uiautomator dump /sdcard/window.xml</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cat /sdcard/window.xml | grep -oE &#x27;text=&quot;[^&quot;]*&quot;&#x27;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;&quot;</span><span class="terminal__line">text=&quot;3 件中 2 件完了&quot;</span><span class="terminal__line">text=&quot;[x] Learn Kotlin Basics&quot;</span><span class="terminal__line">text=&quot;[ ] Build Compose Screen&quot;</span><span class="terminal__line">text=&quot;[x] Write Unit Tests&quot;</span></pre>
 </div>
 
           <p>1 行目に件数、続いて 3 件の Todo が表示されます。<code>title</code> は <code>toTitleCase()</code> で単語の先頭が大文字になっています。確認が終わったら、<code>adb emu kill</code> でエミュレータを止めます。</p>
@@ -1259,7 +1259,7 @@ class CoroutinesTest {
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 10s</span><span class="terminal__line">53 actionable tasks: 13 executed, 40 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 9s</span><span class="terminal__line">53 actionable tasks: 10 executed, 43 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
 </div>
 
           <p>ユニットテストは、01 からある <code>ExampleUnitTest</code> の 1 件と、この項目で書いた 41 件の合計 42 件で、失敗は 0 件でした。件数は <code>app/build/test-results/testDebugUnitTest/</code> の XML で確認できます。</p>
@@ -1280,7 +1280,7 @@ class CoroutinesTest {
             </tbody>
           </table>
 
-          <p>lint の結果は <code>0 errors, 6 warnings</code> でした。6 件の警告は、いずれも 01 の設定から引き継いだものです（<code>OldTargetApi</code>、<code>RedundantLabel</code>、<code>AndroidGradlePluginVersion</code>、<code>ObsoleteSdkInt</code>、<code>MonochromeLauncherIcon</code> × 2）。この項目の変更で増えた警告はありません。</p>
+          <p>lint の結果は、エラー 0 件・警告 9 件でした。9 件の警告は、いずれも 01 の時点から出ているものです。内訳は <code>UnusedResources</code> × 7（<code>colors.xml</code> の使われていない色）、<code>RedundantLabel</code>、<code>AndroidGradlePluginVersion</code> です。この項目の変更で増えた警告はありません。</p>
 
           <div class="step__check">
             <p class="step__check-title">✅ 確認ポイント</p>
