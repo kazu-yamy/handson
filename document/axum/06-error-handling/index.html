@@ -1,0 +1,1297 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06: エラーハンドリングとバリデーション | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">06</li>
+        </ol>
+        <h1 class="lesson-title">エラーハンドリングとバリデーション</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 05 で DB を使った CRUD の API を作り、次にエラーの応答を分かりやすくし、不正な入力を弾けるようにしたい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法（<code>enum</code> と <code>match</code>・<code>Result</code> と <code>?</code> 演算子・トレイトの実装）、<code>cargo run</code> と <code>curl</code> の基本操作</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../05-database/index.html">05: DB 接続と CRUD</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>独自のエラー型 <code>AppError</code> を定義し、<code>IntoResponse</code> を実装して、ステータスコードと JSON の本文を返す</li>
+          <li><code>From</code> を実装して <code>?</code> でエラーを変換し、ハンドラから <code>map_err</code> をなくす</li>
+          <li>入力値を検証するメソッドを書き、不正な値を 422 で返す</li>
+          <li><code>Json</code> extractor の拒否（<code>JsonRejection</code>）を <code>AppError</code> で受け止め、エラーの本文の形式をそろえる</li>
+          <li><code>IntoResponse</code> を実装していない型を返すと、ハンドラとして使えないことをコンパイルエラーから確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        05 の API は、エラーのときに <code>StatusCode</code> だけを返していました。そのため 404 や 500 の本文は空で、クライアントには原因が伝わりません。
+        また、<code>Json</code> extractor が不正なリクエストを拒否したときの本文は <code>text/plain</code> で、正常時の JSON と形式がそろっていません。
+        このレッスンでは、独自のエラー型 <code>AppError</code> を作ってハンドラが返すエラーの応答を <code>{"error": "..."}</code> という JSON にそろえ、名前のバリデーションも追加します。
+      </p>
+
+      <p>このレッスンの完成時には、エラーの応答が次のように変わります。ルートの構成は 05 と同じです。</p>
+
+      <table>
+        <thead>
+          <tr><th>状況</th><th>ステータス</th><th>05 までの本文</th><th>06 の本文</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>指定した <code>id</code> のユーザーがいない（<code>GET</code> / <code>PUT</code> / <code>DELETE</code>）</td><td>404</td><td>なし</td><td><code>{"error":"user not found"}</code></td></tr>
+          <tr><td>DB の操作に失敗した</td><td>500</td><td>なし</td><td><code>{"error":"internal server error"}</code></td></tr>
+          <tr><td><code>name</code> が空・空白だけ・前後の空白を除いて 51 文字以上（<code>POST</code> / <code>PUT</code>）</td><td>422</td><td>（検証していないので、そのまま保存される）</td><td><code>{"error":"name must not be empty"}</code> など</td></tr>
+          <tr><td>JSON の拒否（<code>content-type</code> なし・構文エラー・型の不一致）</td><td>415 / 400 / 422</td><td><code>text/plain</code> のメッセージ</td><td>同じメッセージを <code>{"error": ...}</code> に包んだ JSON</td></tr>
+          <tr><td>どのルートにもマッチしないパス</td><td>404</td><td><code>Not Found</code></td><td><code>{"error":"route not found"}</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Rust（rustc）1.98.1 / cargo 1.98.1（Rust edition 2024）で動作を確認しています。クレートのバージョンは axum 0.8.9 / tokio 1.53.1 / serde 1.0.229 / serde_json 1.0.151 / sqlx 0.9.0 です。いずれも 05 から変わりません。
+            バージョンは執筆時点（2026年9月）のものです。このレッスンでは新しいクレートを追加しません。エラー型は、axum に含まれる <code>IntoResponse</code> と <code>JsonRejection</code>、serde_json の <code>json!</code> だけで組み立てます。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">05 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>05 の完成コードをそのまま出発点にします。<code>05-database</code> ディレクトリがある場所で、次のコマンドを実行してください。ビルド結果の <code>target/</code> と DB ファイルの <code>app.db*</code> はコピーしません。コピーするのは <code>Cargo.toml</code>・<code>Cargo.lock</code>・<code>.gitignore</code>・<code>migrations/</code>・<code>src/</code> で、コピー先は新しいディレクトリ <code>06-error-handling</code> です。コマンドは何も表示せずに終わります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir 06-error-handling</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 05-database/Cargo.toml 05-database/Cargo.lock 05-database/.gitignore 05-database/migrations 05-database/src 06-error-handling/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 06-error-handling</span></pre>
+          </div>
+
+          <p>次に、<code>Cargo.toml</code> の <code>name</code> を <code>database</code> から <code>error-handling</code> に変更します。変更するのはこの 1 行だけです。このレッスンでは、新しいクレートは追加しません。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "database"</span><span class="diff-line diff-line--add">+ name = "error-handling"</span><span class="diff-line">  version = "0.1.0"</span></pre>
+          </div>
+
+          <p><code>src/main.rs</code> は 05 の完成形のまま使います。<code>app.db</code> はコピーしていないので、起動時に空の DB が作られます。サーバーを起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">   ...</span><span class="terminal__line">   Compiling axum v0.8.9</span><span class="terminal__line">   Compiling error-handling v0.1.0 (/path/to/06-error-handling)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.45s</span><span class="terminal__line">     Running `target/debug/error-handling`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <p>初回は依存クレートのコンパイルから始まります（出力の途中は省略しています）。別のターミナルを開き、05 と同じ応答が返ることを確かめます。最後の <code>/users/999</code> は存在しないユーザーです。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:13 GMT</span><span class="terminal__line"></span><span class="terminal__line">Hello from Handson Axum</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 15</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:13 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/999</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:13 GMT</span></pre>
+          </div>
+
+          <p><code>/users/999</code> の 404 は <code>content-length: 0</code> で、本文がありません。クライアントには「見つからない」ことしか伝わらず、何が見つからないのかは分かりません。このレッスンでは、こうしたエラーの応答に JSON の本文を付けていきます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Running `target/debug/error-handling`</code> が表示され、<code>/</code> が <code>Hello from Handson Axum</code> を返せば OK です。以降のコマンドは全て <code>06-error-handling</code> ディレクトリで実行します。確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">独自エラー型 AppError を作り、IntoResponse を実装する</h3>
+        </div>
+        <div class="step__body">
+          <p>05 のハンドラは、エラーを <code>StatusCode</code> だけで返していました。そのため本文は空です。そこで、アプリで起こるエラーを列挙した独自の型 <code>AppError</code> を作り、ステータスコードと JSON の本文をまとめて返せるようにします。まずは <code>get_user</code> だけを置き換えます。<code>AppConfig</code> の後ろに次のコードを追加し、<code>get_user</code> を変更してください。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">      app_name: String,</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ enum AppError {</span><span class="diff-line diff-line--add">+     NotFound,</span><span class="diff-line diff-line--add">+     Validation(String),</span><span class="diff-line diff-line--add">+     Database(sqlx::Error),</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ impl IntoResponse for AppError {</span><span class="diff-line diff-line--add">+     fn into_response(self) -&gt; Response {</span><span class="diff-line diff-line--add">+         let (status, message) = match self {</span><span class="diff-line diff-line--add">+             AppError::NotFound =&gt; (StatusCode::NOT_FOUND, "user not found".to_string()),</span><span class="diff-line diff-line--add">+             AppError::Validation(message) =&gt; (StatusCode::UNPROCESSABLE_ENTITY, message),</span><span class="diff-line diff-line--add">+             AppError::Database(error) =&gt; {</span><span class="diff-line diff-line--add">+                 eprintln!("database error: {error}");</span><span class="diff-line diff-line--add">+                 (</span><span class="diff-line diff-line--add">+                     StatusCode::INTERNAL_SERVER_ERROR,</span><span class="diff-line diff-line--add">+                     "internal server error".to_string(),</span><span class="diff-line diff-line--add">+                 )</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+         };</span><span class="diff-line diff-line--add">+         (status, Json(json!({ "error": message }))).into_response()</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  async fn main() {</span><span class="diff-line">      let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")</span><span class="diff-line">  ...</span><span class="diff-line">  async fn get_user(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line">      Path(id): Path&lt;i64&gt;,</span><span class="diff-line diff-line--remove">- ) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {</span><span class="diff-line">      let user = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users WHERE id = ?")</span><span class="diff-line">          .bind(id)</span><span class="diff-line">          .fetch_optional(&amp;state.pool)</span><span class="diff-line">          .await</span><span class="diff-line diff-line--remove">-         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--remove">-     user.map(Json).ok_or(StatusCode::NOT_FOUND)</span><span class="diff-line diff-line--add">+         .map_err(AppError::Database)?;</span><span class="diff-line diff-line--add">+     user.map(Json).ok_or(AppError::NotFound)</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  async fn update_user(</span></pre>
+          </div>
+          <ul>
+            <li><code>enum AppError</code>: このアプリで返すエラーの種類です。<code>NotFound</code> は対象が見つからない、<code>Validation</code> は入力値が不正（理由の文字列を持つ）、<code>Database</code> は DB 操作の失敗（sqlx のエラーを持つ）を表します。</li>
+            <li><code>impl IntoResponse for AppError</code>: axum は、ハンドラの戻り値を <code>IntoResponse</code> トレイトの <code>into_response</code> でレスポンスに変換します。<code>AppError</code> に実装すると、<code>Result&lt;_, AppError&gt;</code> の <code>Err</code> がそのままレスポンスになります。</li>
+            <li><code>match</code> で variant ごとにステータスコードとメッセージを決め、最後に <code>(status, Json(json!({ "error": message })))</code> をレスポンスに変換します。03 で使った「ステータスコードと <code>Json</code> のタプル」と同じ形です。</li>
+            <li><code>get_user</code>: 戻り値の型を <code>Result&lt;Json&lt;User&gt;, AppError&gt;</code> に変え、DB のエラーを <code>AppError::Database</code> に、見つからない場合を <code>AppError::NotFound</code> にします。</li>
+            <li><code>Json</code>・<code>json!</code>・<code>IntoResponse</code>・<code>Response</code> は 05 までに <code>use</code> 済みなので、<code>use</code> の追加は不要です。</li>
+          </ul>
+
+          <p>variant とレスポンスの対応は次のとおりです。</p>
+
+          <table>
+            <thead>
+              <tr><th>variant</th><th>ステータス</th><th>本文の <code>error</code></th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>NotFound</code></td><td>404 Not Found</td><td><code>user not found</code></td></tr>
+              <tr><td><code>Validation(String)</code></td><td>422 Unprocessable Entity</td><td>持っている文字列（ステップ 4 で使います）</td></tr>
+              <tr><td><code>Database(sqlx::Error)</code></td><td>500 Internal Server Error</td><td><code>internal server error</code>（エラーの詳細はサーバー側に <code>eprintln!</code> で出力）</td></tr>
+            </tbody>
+          </table>
+
+          <p><code>cargo build</code> でビルドします。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling error-handling v0.1.0 (/path/to/06-error-handling)</span><span class="terminal__line">warning: variant `Validation` is never constructed</span><span class="terminal__line">  --&gt; src/main.rs:38:5</span><span class="terminal__line">   |</span><span class="terminal__line">36 | enum AppError {</span><span class="terminal__line">   |      -------- variant in this enum</span><span class="terminal__line">37 |     NotFound,</span><span class="terminal__line">38 |     Validation(String),</span><span class="terminal__line">   |     ^^^^^^^^^^</span><span class="terminal__line">   |</span><span class="terminal__line">   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default</span><span class="terminal__line"></span><span class="terminal__line">warning: `error-handling` (bin "error-handling") generated 1 warning</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.96s</span></pre>
+          </div>
+
+          <p><code>Validation</code> はまだどこでも使っていないため、<code>never constructed</code> の警告が出ます。ステップ 4 のバリデーションで使い始めると消えるので、ここでは気にせず進めます。<code>cargo run</code> で起動し、2 つ目のターミナルから確かめます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/999</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 26</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:16 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"user not found"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"alice"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:16 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/1</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:16 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice"}</span></pre>
+          </div>
+
+          <p>存在しないユーザーの 404 に、<code>content-type: application/json</code> と本文 <code>{"error":"user not found"}</code> が付きました。ユーザーがいる場合の応答は 05 と変わりません。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/users/999</code> が 404 と <code>{"error":"user not found"}</code> を返し、<code>/users/1</code> が <code>alice</code> を返せば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">From を実装して ? でエラーを伝播する</h3>
+        </div>
+        <div class="step__body">
+          <p>残りのハンドラも <code>AppError</code> を返すように変えます。このとき、DB のエラーを毎回 <code>map_err</code> で変換しなくて済むよう、<code>sqlx::Error</code> から <code>AppError</code> への <code>From</code> を実装します。<code>impl IntoResponse for AppError</code> の後ろに <code>From</code> の実装を追加し、全ハンドラを次のように変更してください。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ impl From&lt;sqlx::Error&gt; for AppError {</span><span class="diff-line diff-line--add">+     fn from(error: sqlx::Error) -&gt; Self {</span><span class="diff-line diff-line--add">+         AppError::Database(error)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  async fn main() {</span><span class="diff-line">      let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")</span><span class="diff-line">  ...</span><span class="diff-line">      Json(json!({ "status": "ok" }))</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, StatusCode&gt; {</span><span class="diff-line diff-line--add">+ async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, AppError&gt; {</span><span class="diff-line">      let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users ORDER BY id")</span><span class="diff-line">          .fetch_all(&amp;state.pool)</span><span class="diff-line diff-line--remove">-         .await</span><span class="diff-line diff-line--remove">-         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--add">+         .await?;</span><span class="diff-line">      Ok(Json(users))</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  async fn create_user(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line">      Json(payload): Json&lt;CreateUser&gt;,</span><span class="diff-line diff-line--remove">- ) -&gt; Result&lt;(StatusCode, Json&lt;User&gt;), StatusCode&gt; {</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;(StatusCode, Json&lt;User&gt;), AppError&gt; {</span><span class="diff-line">      let user = sqlx::query_as::&lt;_, User&gt;("INSERT INTO users (name) VALUES (?) RETURNING id, name")</span><span class="diff-line">          .bind(&amp;payload.name)</span><span class="diff-line">          .fetch_one(&amp;state.pool)</span><span class="diff-line diff-line--remove">-         .await</span><span class="diff-line diff-line--remove">-         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--add">+         .await?;</span><span class="diff-line">      Ok((StatusCode::CREATED, Json(user)))</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">      let user = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users WHERE id = ?")</span><span class="diff-line">          .bind(id)</span><span class="diff-line">          .fetch_optional(&amp;state.pool)</span><span class="diff-line diff-line--remove">-         .await</span><span class="diff-line diff-line--remove">-         .map_err(AppError::Database)?;</span><span class="diff-line diff-line--add">+         .await?;</span><span class="diff-line">      user.map(Json).ok_or(AppError::NotFound)</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line">      Path(id): Path&lt;i64&gt;,</span><span class="diff-line">      Json(payload): Json&lt;CreateUser&gt;,</span><span class="diff-line diff-line--remove">- ) -&gt; Result&lt;Json&lt;User&gt;, StatusCode&gt; {</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {</span><span class="diff-line">      let user =</span><span class="diff-line">          sqlx::query_as::&lt;_, User&gt;("UPDATE users SET name = ? WHERE id = ? RETURNING id, name")</span><span class="diff-line">              .bind(&amp;payload.name)</span><span class="diff-line">              .bind(id)</span><span class="diff-line">              .fetch_optional(&amp;state.pool)</span><span class="diff-line diff-line--remove">-             .await</span><span class="diff-line diff-line--remove">-             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--remove">-     user.map(Json).ok_or(StatusCode::NOT_FOUND)</span><span class="diff-line diff-line--add">+             .await?;</span><span class="diff-line diff-line--add">+     user.map(Json).ok_or(AppError::NotFound)</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  async fn delete_user(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line">      Path(id): Path&lt;i64&gt;,</span><span class="diff-line diff-line--remove">- ) -&gt; Result&lt;StatusCode, StatusCode&gt; {</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;StatusCode, AppError&gt; {</span><span class="diff-line">      let result = sqlx::query("DELETE FROM users WHERE id = ?")</span><span class="diff-line">          .bind(id)</span><span class="diff-line">          .execute(&amp;state.pool)</span><span class="diff-line diff-line--remove">-         .await</span><span class="diff-line diff-line--remove">-         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;</span><span class="diff-line diff-line--add">+         .await?;</span><span class="diff-line">      if result.rows_affected() == 0 {</span><span class="diff-line diff-line--remove">-         Err(StatusCode::NOT_FOUND)</span><span class="diff-line diff-line--add">+         Err(AppError::NotFound)</span><span class="diff-line">      } else {</span><span class="diff-line">          Ok(StatusCode::NO_CONTENT)</span><span class="diff-line">      }</span></pre>
+          </div>
+          <ul>
+            <li><code>impl From&lt;sqlx::Error&gt; for AppError</code>: <code>sqlx::Error</code> を <code>AppError::Database</code> に包んで変換します。</li>
+            <li><code>?</code> 演算子は、<code>Err</code> を返すときに <code>From</code> で関数の戻り値のエラー型へ変換します。<code>From</code> を実装したので、<code>.await?</code> と書くだけで <code>sqlx::Error</code> が <code>AppError</code> になります。</li>
+            <li>05 の時点では、<code>list_users</code>・<code>create_user</code>・<code>get_user</code>・<code>update_user</code>・<code>delete_user</code> の 5 か所に <code>.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?</code> がありました。これが全て <code>.await?</code> になり、<code>map_err</code> の行は 5 行から 0 行になりました。ステップ 2 で <code>get_user</code> に書いた <code>map_err(AppError::Database)</code> も不要になります。</li>
+            <li>戻り値のエラー型は全て <code>StatusCode</code> から <code>AppError</code> に、<code>StatusCode::NOT_FOUND</code> は <code>AppError::NotFound</code> に変わりました。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Extension, Json, Router,
+    extract::{Path, Query, Request, State},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post, put},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sqlx::SqlitePool;
+use std::collections::HashMap;
+use std::time::Instant;
+
+#[derive(Clone, Serialize, sqlx::FromRow)]
+struct User {
+    id: i64,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    pool: SqlitePool,
+}
+
+#[derive(Clone)]
+struct AppConfig {
+    app_name: String,
+}
+
+enum AppError {
+    NotFound,
+    Validation(String),
+    Database(sqlx::Error),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -&gt; Response {
+        let (status, message) = match self {
+            AppError::NotFound =&gt; (StatusCode::NOT_FOUND, "user not found".to_string()),
+            AppError::Validation(message) =&gt; (StatusCode::UNPROCESSABLE_ENTITY, message),
+            AppError::Database(error) =&gt; {
+                eprintln!("database error: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".to_string(),
+                )
+            }
+        };
+        (status, Json(json!({ "error": message }))).into_response()
+    }
+}
+
+impl From&lt;sqlx::Error&gt; for AppError {
+    fn from(error: sqlx::Error) -&gt; Self {
+        AppError::Database(error)
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")
+        .await
+        .unwrap();
+
+    sqlx::migrate!().run(&amp;pool).await.unwrap();
+
+    let state = AppState { pool };
+
+    let protected_users = Router::new()
+        .route("/users", post(create_user))
+        .route("/users/{id}", put(update_user).delete(delete_user))
+        .route_layer(middleware::from_fn(require_api_key));
+
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users))
+        .route("/users/{id}", get(get_user))
+        .merge(protected_users)
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found)
+        .layer(Extension(AppConfig {
+            app_name: "Handson Axum".to_string(),
+        }))
+        .layer(middleware::from_fn(log_request))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn log_request(req: Request, next: Next) -&gt; Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = Instant::now();
+
+    let response = next.run(req).await;
+
+    let elapsed = start.elapsed();
+    println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());
+    response
+}
+
+async fn require_api_key(req: Request, next: Next) -&gt; Response {
+    let is_valid = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        == Some("secret");
+
+    if !is_valid {
+        return (StatusCode::UNAUTHORIZED, "invalid or missing x-api-key").into_response();
+    }
+
+    next.run(req).await
+}
+
+async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {
+    format!("Hello from {}", config.app_name)
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, AppError&gt; {
+    let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users ORDER BY id")
+        .fetch_all(&amp;state.pool)
+        .await?;
+    Ok(Json(users))
+}
+
+async fn create_user(
+    State(state): State&lt;AppState&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; Result&lt;(StatusCode, Json&lt;User&gt;), AppError&gt; {
+    let user = sqlx::query_as::&lt;_, User&gt;("INSERT INTO users (name) VALUES (?) RETURNING id, name")
+        .bind(&amp;payload.name)
+        .fetch_one(&amp;state.pool)
+        .await?;
+    Ok((StatusCode::CREATED, Json(user)))
+}
+
+async fn get_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    let user = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&amp;state.pool)
+        .await?;
+    user.map(Json).ok_or(AppError::NotFound)
+}
+
+async fn update_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+    Json(payload): Json&lt;CreateUser&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    let user =
+        sqlx::query_as::&lt;_, User&gt;("UPDATE users SET name = ? WHERE id = ? RETURNING id, name")
+            .bind(&amp;payload.name)
+            .bind(id)
+            .fetch_optional(&amp;state.pool)
+            .await?;
+    user.map(Json).ok_or(AppError::NotFound)
+}
+
+async fn delete_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;StatusCode, AppError&gt; {
+    let result = sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(id)
+        .execute(&amp;state.pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        Err(AppError::NotFound)
+    } else {
+        Ok(StatusCode::NO_CONTENT)
+    }
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; (StatusCode, &amp;'static str) {
+    (StatusCode::NOT_FOUND, "Not Found")
+}</code></pre>
+          </div>
+            </div>
+          </details>
+          <p><code>cargo build</code> します。<code>Validation</code> の警告はまだ出ます（途中は省略しています）。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling error-handling v0.1.0 (/path/to/06-error-handling)</span><span class="terminal__line">warning: variant `Validation` is never constructed</span><span class="terminal__line">   ...</span><span class="terminal__line">warning: `error-handling` (bin "error-handling") generated 1 warning</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.94s</span></pre>
+          </div>
+
+          <p><code>cargo run</code> で起動し、CRUD が変わらず動くことと、見つからない場合が JSON になることを確かめます。<code>app.db</code> には、ステップ 2 で追加した <code>alice</code>（<code>id</code> 1）が残っています。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 25</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:27 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"}]</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"bob"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 21</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:27 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":2,"name":"bob"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/2 -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"bobby"}'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:27 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":2,"name":"bobby"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/999 -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"x"}'</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 26</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:27 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"user not found"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X DELETE http://127.0.0.1:3000/users/2 -H 'x-api-key: secret'</span><span class="terminal__line">HTTP/1.1 204 No Content</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:27 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X DELETE http://127.0.0.1:3000/users/2 -H 'x-api-key: secret'</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 26</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:27 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"user not found"}</span></pre>
+          </div>
+
+          <p>更新・削除の対象がない場合も、<code>{"error":"user not found"}</code> が返ります。2 回目の <code>DELETE</code> は、1 回目で削除済みなので 404 です。</p>
+
+          <p><strong>DB エラーの 500 も確かめます。</strong>サーバーを止めてから、05 のステップ 7 と同様に、<code>list_users</code> の SQL の列名をわざと間違えます。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line"> </span><span class="diff-line">  async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, AppError&gt; {</span><span class="diff-line diff-line--remove">-     let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users ORDER BY id")</span><span class="diff-line diff-line--add">+     let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, nam FROM users ORDER BY id")</span><span class="diff-line">          .fetch_all(&amp;state.pool)</span><span class="diff-line">          .await?;</span></pre>
+          </div>
+          <p><code>cargo run</code> で起動し直して、一覧を取得します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 500 Internal Server Error</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 33</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:30 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"internal server error"}</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（サーバー側の出力）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line">listening on 127.0.0.1:3000</span><span class="terminal__line">database error: error returned from database: (code: 1) no such column: nam</span><span class="terminal__line">GET /users -&gt; 500 Internal Server Error (513.583µs)</span></pre>
+          </div>
+
+          <p>05 では 500 の本文は空でしたが、今度は <code>{"error":"internal server error"}</code> が返ります。一方、DB エラーの詳細（<code>no such column: nam</code>）は、サーバー側にだけ出力されます。<code>AppError::Database</code> の <code>eprintln!</code> によるものです。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">DB エラーの詳細をレスポンスに含めない</p>
+              <p>DB のエラーメッセージには、テーブル名や列名などの SQL の構造が含まれます。そのままクライアントに返すと、内部の情報が外部に漏れます。クライアントには決まった文言だけを返し、原因の調査に必要な詳細はサーバー側のログに出します。<code>AppError</code> の <code>match</code> でこの振り分けを 1 か所にまとめたので、ハンドラごとに気を付ける必要はありません。</p>
+            </div>
+          </div>
+          <p>確認できたらサーバーを止め、SQL の <code>nam</code> を <code>name</code> に戻してください。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>CRUD が 05 と同じように動き、存在しない <code>id</code> で <code>{"error":"user not found"}</code> が返れば OK です。SQL の誤りでは <code>{"error":"internal server error"}</code> が返り、サーバー側に <code>database error: ...</code> が出ることも確かめます。SQL を元に戻し、サーバーも止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">名前のバリデーションを追加する</h3>
+        </div>
+        <div class="step__body">
+          <p>ここまでの API は、<code>name</code> が空文字でもそのまま DB に保存します。<code>CreateUser</code> に入力値を検証する <code>validate</code> メソッドを追加し、不正な値なら <code>AppError::Validation</code>（422）を返します。<code>CreateUser</code> の定義の後ろにメソッドを追加し、<code>create_user</code> と <code>update_user</code> の先頭で呼び出してください。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">      name: String,</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ impl CreateUser {</span><span class="diff-line diff-line--add">+     fn validate(&amp;self) -&gt; Result&lt;(), AppError&gt; {</span><span class="diff-line diff-line--add">+         let name = self.name.trim();</span><span class="diff-line diff-line--add">+         if name.is_empty() {</span><span class="diff-line diff-line--add">+             return Err(AppError::Validation("name must not be empty".to_string()));</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+         if name.chars().count() &gt; 50 {</span><span class="diff-line diff-line--add">+             return Err(AppError::Validation(</span><span class="diff-line diff-line--add">+                 "name must be 50 characters or less".to_string(),</span><span class="diff-line diff-line--add">+             ));</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+         Ok(())</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  #[derive(Clone)]</span><span class="diff-line">  struct AppState {</span><span class="diff-line">      pool: SqlitePool,</span><span class="diff-line">  ...</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line">      Json(payload): Json&lt;CreateUser&gt;,</span><span class="diff-line">  ) -&gt; Result&lt;(StatusCode, Json&lt;User&gt;), AppError&gt; {</span><span class="diff-line diff-line--add">+     payload.validate()?;</span><span class="diff-line">      let user = sqlx::query_as::&lt;_, User&gt;("INSERT INTO users (name) VALUES (?) RETURNING id, name")</span><span class="diff-line">          .bind(&amp;payload.name)</span><span class="diff-line">          .fetch_one(&amp;state.pool)</span><span class="diff-line">  ...</span><span class="diff-line">      Path(id): Path&lt;i64&gt;,</span><span class="diff-line">      Json(payload): Json&lt;CreateUser&gt;,</span><span class="diff-line">  ) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {</span><span class="diff-line diff-line--add">+     payload.validate()?;</span><span class="diff-line">      let user =</span><span class="diff-line">          sqlx::query_as::&lt;_, User&gt;("UPDATE users SET name = ? WHERE id = ? RETURNING id, name")</span><span class="diff-line">              .bind(&amp;payload.name)</span></pre>
+          </div>
+          <ul>
+            <li><code>self.name.trim()</code>: 前後の空白を取り除いてから判定します。<code>trim()</code> を呼ばずに <code>is_empty()</code> だけで判定すると、<code>"   "</code>（空白だけ）の名前が通ってしまいます。判定は前後の空白を除いた値で行いますが、DB には送られた値をそのまま保存します。保存する値も整えるなら trim した値を <code>bind</code> しますが、このレッスンでは扱いません。</li>
+            <li><code>name.chars().count()</code>: 文字数を数えます。<code>len()</code> は UTF-8 のバイト数を返すため、日本語の名前では文字数より大きな値になります。たとえば「あ」は 3 バイトなので、<code>len()</code> で判定すると 17 文字の日本語名でも 50 を超えてしまいます。</li>
+            <li><code>payload.validate()?</code>: <code>validate</code> の戻り値は <code>Result&lt;(), AppError&gt;</code> なので、<code>?</code> でそのまま返せます。DB にアクセスする前に呼ぶので、不正な値は DB に届きません。</li>
+          </ul>
+
+          <p><code>cargo build</code> します。<code>Validation</code> を使い始めたので、ステップ 2 から出ていた警告が消えます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling error-handling v0.1.0 (/path/to/06-error-handling)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.99s</span></pre>
+          </div>
+
+          <p><code>cargo run</code> で起動し、空文字・空白だけ・51 文字の名前を送ります。51 文字の名前は <code>printf</code> で作って、シェルの変数に入れます。続けて、日本語 50 文字の名前、<code>PUT</code> での空文字、正しい名前も送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":""}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 34</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:40 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"name must not be empty"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"   "}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 34</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:40 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"name must not be empty"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> NAME51=$(printf 'a%.0s' $(seq 51))</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d "{\"name\":\"$NAME51\"}"</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 46</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:40 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"name must be 50 characters or less"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> JA50=$(printf 'あ%.0s' $(seq 50))</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d "{\"name\":\"$JA50\"}"</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 168</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:40 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":3,"name":"ああああああああああああああああああああああああああああああああああああああああああああああああああ"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/1 -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":""}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 34</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:40 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"name must not be empty"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"carol"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:40 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":4,"name":"carol"}</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（サーバー側の出力）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line">listening on 127.0.0.1:3000</span><span class="terminal__line">POST /users -&gt; 422 Unprocessable Entity (132.208µs)</span><span class="terminal__line">POST /users -&gt; 422 Unprocessable Entity (84µs)</span><span class="terminal__line">POST /users -&gt; 422 Unprocessable Entity (134.125µs)</span><span class="terminal__line">POST /users -&gt; 201 Created (1.38575ms)</span><span class="terminal__line">PUT /users/1 -&gt; 422 Unprocessable Entity (146.166µs)</span><span class="terminal__line">POST /users -&gt; 201 Created (787.792µs)</span></pre>
+          </div>
+
+          <p>空文字・空白だけ・51 文字は 422 になり、DB へは保存されません。日本語 50 文字の名前は、バイト数では 150 ですが文字数が 50 なので保存されます（<code>id</code> 3）。<code>id</code> 2 はステップ 3 で削除した <code>bob</code> の番号なので、再利用されていません。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>空文字と空白だけで <code>name must not be empty</code>、51 文字で <code>name must be 50 characters or less</code> が 422 で返れば OK です。日本語 50 文字と <code>carol</code> は 201 になります。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">JSON の拒否（415 / 400 / 422）も AppError で返す</h3>
+        </div>
+        <div class="step__body">
+          <p>03 で確かめたとおり、<code>Json</code> extractor は不正なリクエストを 415・400・422 で拒否します。このとき axum が返す本文は <code>text/plain</code> で、<code>AppError</code> の JSON とは形式が違います。この拒否（<code>JsonRejection</code>）も <code>AppError</code> で受け止めて、同じ <code>{"error": ...}</code> の形式で返します。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use axum::{</span><span class="diff-line">      Extension, Json, Router,</span><span class="diff-line diff-line--remove">-     extract::{Path, Query, Request, State},</span><span class="diff-line diff-line--add">+     extract::{Path, Query, Request, State, rejection::JsonRejection},</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line">      middleware::{self, Next},</span><span class="diff-line">      response::{IntoResponse, Response},</span><span class="diff-line">  ...</span><span class="diff-line">      NotFound,</span><span class="diff-line">      Validation(String),</span><span class="diff-line">      Database(sqlx::Error),</span><span class="diff-line diff-line--add">+     JsonRejection(JsonRejection),</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  impl IntoResponse for AppError {</span><span class="diff-line">  ...</span><span class="diff-line">                      "internal server error".to_string(),</span><span class="diff-line">                  )</span><span class="diff-line">              }</span><span class="diff-line diff-line--add">+             AppError::JsonRejection(rejection) =&gt; (rejection.status(), rejection.body_text()),</span><span class="diff-line">          };</span><span class="diff-line">          (status, Json(json!({ "error": message }))).into_response()</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ impl From&lt;JsonRejection&gt; for AppError {</span><span class="diff-line diff-line--add">+     fn from(rejection: JsonRejection) -&gt; Self {</span><span class="diff-line diff-line--add">+         AppError::JsonRejection(rejection)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  async fn main() {</span><span class="diff-line">      let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")</span><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">  async fn create_user(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--remove">-     Json(payload): Json&lt;CreateUser&gt;,</span><span class="diff-line diff-line--add">+     payload: Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;,</span><span class="diff-line">  ) -&gt; Result&lt;(StatusCode, Json&lt;User&gt;), AppError&gt; {</span><span class="diff-line diff-line--add">+     let Json(payload) = payload?;</span><span class="diff-line">      payload.validate()?;</span><span class="diff-line">      let user = sqlx::query_as::&lt;_, User&gt;("INSERT INTO users (name) VALUES (?) RETURNING id, name")</span><span class="diff-line">          .bind(&amp;payload.name)</span><span class="diff-line">  ...</span><span class="diff-line">  async fn update_user(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line">      Path(id): Path&lt;i64&gt;,</span><span class="diff-line diff-line--remove">-     Json(payload): Json&lt;CreateUser&gt;,</span><span class="diff-line diff-line--add">+     payload: Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;,</span><span class="diff-line">  ) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {</span><span class="diff-line diff-line--add">+     let Json(payload) = payload?;</span><span class="diff-line">      payload.validate()?;</span><span class="diff-line">      let user =</span><span class="diff-line">          sqlx::query_as::&lt;_, User&gt;("UPDATE users SET name = ? WHERE id = ? RETURNING id, name")</span></pre>
+          </div>
+          <ul>
+            <li><code>rejection::JsonRejection</code>: <code>Json</code> extractor が失敗したときのエラー型です。<code>use</code> の <code>extract::{...}</code> に追加します。</li>
+            <li><code>AppError::JsonRejection(JsonRejection)</code>: 拒否をそのまま持つ variant です。<code>into_response</code> では、<code>rejection.status()</code> でステータスコードを、<code>rejection.body_text()</code> でメッセージを取り出します。</li>
+            <li><code>impl From&lt;JsonRejection&gt; for AppError</code>: <code>sqlx::Error</code> と同じく、<code>?</code> で変換できるようにします。</li>
+            <li><code>payload: Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;</code>: extractor を <code>Result</code> で受け取ると、失敗しても axum がリクエストを拒否せず、<code>Err</code> としてハンドラに渡されます。<code>let Json(payload) = payload?;</code> で中身を取り出し、失敗なら <code>AppError::JsonRejection</code> として返します。</li>
+          </ul>
+
+          <p><code>JsonRejection</code> は、内部で失敗の種類を区別しています。主な種類は次のとおりです。<code>status()</code> がそれぞれに合ったステータスコードを返すので、ハンドラ側で分岐を書く必要はありません。</p>
+
+          <table>
+            <thead>
+              <tr><th>主な失敗の種類</th><th>例</th><th><code>status()</code></th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>MissingJsonContentType</code></td><td><code>content-type: application/json</code> がない</td><td>415 Unsupported Media Type</td></tr>
+              <tr><td><code>JsonSyntaxError</code></td><td>JSON として読めない（構文エラー）</td><td>400 Bad Request</td></tr>
+              <tr><td><code>JsonDataError</code></td><td>JSON としては読めたが <code>CreateUser</code> に変換できない</td><td>422 Unprocessable Entity</td></tr>
+            </tbody>
+          </table>
+
+          <p><code>cargo build</code> してから <code>cargo run</code> で起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling error-handling v0.1.0 (/path/to/06-error-handling)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.96s</span></pre>
+          </div>
+
+          <p>2 つ目のターミナルから、03 のステップ 5 と同じ 4 種類の不正なリクエストを送ります。最後に、<code>PUT</code> でも <code>content-type</code> を付けずに送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'x-api-key: secret' -d '{"name":"dave"}'</span><span class="terminal__line">HTTP/1.1 415 Unsupported Media Type</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 66</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:53 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"Expected request with `Content-Type: application/json`"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":'</span><span class="terminal__line">HTTP/1.1 400 Bad Request</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 104</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:53 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"Failed to parse the request body as JSON: name: EOF while parsing a value at line 1 column 8"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 109</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:53 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"Failed to deserialize the JSON body into the target type: missing field `name` at line 1 column 2"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name": 1}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 140</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:53 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"Failed to deserialize the JSON body into the target type: name: invalid type: integer `1`, expected a string at line 1 column 10"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PUT http://127.0.0.1:3000/users/1 -H 'x-api-key: secret' -d '{"name":"alice"}'</span><span class="terminal__line">HTTP/1.1 415 Unsupported Media Type</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 66</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:53 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"Expected request with `Content-Type: application/json`"}</span></pre>
+          </div>
+
+          <p>03 の時点の応答と比べると、ステータスコードは同じで、本文の形式だけが変わっています。</p>
+
+          <table>
+            <thead>
+              <tr><th>リクエスト</th><th>ステータス</th><th>03 の本文（<code>text/plain</code>）</th><th>06 の本文（<code>application/json</code>）</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>content-type</code> なし</td><td>415</td><td><code>Expected request with `Content-Type: application/json`</code></td><td><code>{"error":"Expected request with `Content-Type: application/json`"}</code></td></tr>
+              <tr><td><code>{"name":</code></td><td>400</td><td><code>Failed to parse the request body as JSON: ...</code></td><td><code>{"error":"Failed to parse the request body as JSON: ..."}</code></td></tr>
+              <tr><td><code>{}</code></td><td>422</td><td><code>Failed to deserialize the JSON body into the target type: missing field `name` ...</code></td><td><code>{"error":"Failed to deserialize the JSON body into the target type: missing field `name` ..."}</code></td></tr>
+              <tr><td><code>{"name": 1}</code></td><td>422</td><td><code>Failed to deserialize the JSON body into the target type: name: invalid type: integer `1`, expected a string ...</code></td><td><code>{"error":"Failed to deserialize the JSON body into the target type: name: invalid type: integer `1`, expected a string ..."}</code></td></tr>
+            </tbody>
+          </table>
+
+          <p><code>body_text()</code> は 03 で見た本文と同じ文字列を返します。そのためメッセージの中身は変わらず、<code>{"error": ...}</code> で包まれただけです。これで <code>AppError</code> と <code>JsonRejection</code> のどちらから作られたエラーも、本文が同じ形式になります。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>4 種類の不正なリクエストが順に 415・400・422・422 になれば OK です。全て <code>content-type: application/json</code> と <code>{"error": ...}</code> の本文で返ることも確かめます。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">fallback の 404 を JSON にする</h3>
+        </div>
+        <div class="step__body">
+          <p>最後に残ったテキストの 404 は、どのルートにもマッチしないときの <code>fallback</code> です。02 で作った <code>not_found</code> を、JSON を返すように変えます。</p>
+
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">      format!("search params: {params:?}")</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- async fn not_found() -&gt; (StatusCode, &amp;'static str) {</span><span class="diff-line diff-line--remove">-     (StatusCode::NOT_FOUND, "Not Found")</span><span class="diff-line diff-line--add">+ async fn not_found() -&gt; impl IntoResponse {</span><span class="diff-line diff-line--add">+     (</span><span class="diff-line diff-line--add">+         StatusCode::NOT_FOUND,</span><span class="diff-line diff-line--add">+         Json(json!({ "error": "route not found" })),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line">  }</span></pre>
+          </div>
+          <ul>
+            <li><code>impl IntoResponse</code>: 「<code>IntoResponse</code> を実装した何らかの型」を返すという書き方です。タプル <code>(StatusCode, Json&lt;...&gt;)</code> の具体的な型を書かずに済みます。</li>
+            <li>ユーザーの 404（<code>user not found</code>）と区別できるよう、メッセージは <code>route not found</code> にしています。</li>
+          </ul>
+
+          <p><code>root</code>・<code>health</code>・<code>get_user_post</code>・<code>search</code> は失敗しないハンドラなので、<code>AppError</code> には変えずにそのまま使います。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">変更後の src/main.rs 全体（このレッスンの完成形）を見る</summary>
+            <div class="disclosure__body">
+              <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Extension, Json, Router,
+    extract::{Path, Query, Request, State, rejection::JsonRejection},
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::{get, post, put},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sqlx::SqlitePool;
+use std::collections::HashMap;
+use std::time::Instant;
+
+#[derive(Clone, Serialize, sqlx::FromRow)]
+struct User {
+    id: i64,
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+impl CreateUser {
+    fn validate(&amp;self) -&gt; Result&lt;(), AppError&gt; {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err(AppError::Validation("name must not be empty".to_string()));
+        }
+        if name.chars().count() &gt; 50 {
+            return Err(AppError::Validation(
+                "name must be 50 characters or less".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct AppState {
+    pool: SqlitePool,
+}
+
+#[derive(Clone)]
+struct AppConfig {
+    app_name: String,
+}
+
+enum AppError {
+    NotFound,
+    Validation(String),
+    Database(sqlx::Error),
+    JsonRejection(JsonRejection),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -&gt; Response {
+        let (status, message) = match self {
+            AppError::NotFound =&gt; (StatusCode::NOT_FOUND, "user not found".to_string()),
+            AppError::Validation(message) =&gt; (StatusCode::UNPROCESSABLE_ENTITY, message),
+            AppError::Database(error) =&gt; {
+                eprintln!("database error: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".to_string(),
+                )
+            }
+            AppError::JsonRejection(rejection) =&gt; (rejection.status(), rejection.body_text()),
+        };
+        (status, Json(json!({ "error": message }))).into_response()
+    }
+}
+
+impl From&lt;sqlx::Error&gt; for AppError {
+    fn from(error: sqlx::Error) -&gt; Self {
+        AppError::Database(error)
+    }
+}
+
+impl From&lt;JsonRejection&gt; for AppError {
+    fn from(rejection: JsonRejection) -&gt; Self {
+        AppError::JsonRejection(rejection)
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let pool = SqlitePool::connect("sqlite://app.db?mode=rwc")
+        .await
+        .unwrap();
+
+    sqlx::migrate!().run(&amp;pool).await.unwrap();
+
+    let state = AppState { pool };
+
+    let protected_users = Router::new()
+        .route("/users", post(create_user))
+        .route("/users/{id}", put(update_user).delete(delete_user))
+        .route_layer(middleware::from_fn(require_api_key));
+
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/users", get(list_users))
+        .route("/users/{id}", get(get_user))
+        .merge(protected_users)
+        .route("/users/{user_id}/posts/{post_id}", get(get_user_post))
+        .route("/search", get(search))
+        .fallback(not_found)
+        .layer(Extension(AppConfig {
+            app_name: "Handson Axum".to_string(),
+        }))
+        .layer(middleware::from_fn(log_request))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+    println!("listening on {}", listener.local_addr().unwrap());
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn log_request(req: Request, next: Next) -&gt; Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = Instant::now();
+
+    let response = next.run(req).await;
+
+    let elapsed = start.elapsed();
+    println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());
+    response
+}
+
+async fn require_api_key(req: Request, next: Next) -&gt; Response {
+    let is_valid = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        == Some("secret");
+
+    if !is_valid {
+        return (StatusCode::UNAUTHORIZED, "invalid or missing x-api-key").into_response();
+    }
+
+    next.run(req).await
+}
+
+async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {
+    format!("Hello from {}", config.app_name)
+}
+
+async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, AppError&gt; {
+    let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users ORDER BY id")
+        .fetch_all(&amp;state.pool)
+        .await?;
+    Ok(Json(users))
+}
+
+async fn create_user(
+    State(state): State&lt;AppState&gt;,
+    payload: Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;,
+) -&gt; Result&lt;(StatusCode, Json&lt;User&gt;), AppError&gt; {
+    let Json(payload) = payload?;
+    payload.validate()?;
+    let user = sqlx::query_as::&lt;_, User&gt;("INSERT INTO users (name) VALUES (?) RETURNING id, name")
+        .bind(&amp;payload.name)
+        .fetch_one(&amp;state.pool)
+        .await?;
+    Ok((StatusCode::CREATED, Json(user)))
+}
+
+async fn get_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    let user = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&amp;state.pool)
+        .await?;
+    user.map(Json).ok_or(AppError::NotFound)
+}
+
+async fn update_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+    payload: Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    let Json(payload) = payload?;
+    payload.validate()?;
+    let user =
+        sqlx::query_as::&lt;_, User&gt;("UPDATE users SET name = ? WHERE id = ? RETURNING id, name")
+            .bind(&amp;payload.name)
+            .bind(id)
+            .fetch_optional(&amp;state.pool)
+            .await?;
+    user.map(Json).ok_or(AppError::NotFound)
+}
+
+async fn delete_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;StatusCode, AppError&gt; {
+    let result = sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(id)
+        .execute(&amp;state.pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        Err(AppError::NotFound)
+    } else {
+        Ok(StatusCode::NO_CONTENT)
+    }
+}
+
+async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+async fn not_found() -&gt; impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "route not found" })),
+    )
+}</code></pre>
+          </div>
+            </div>
+          </details>
+          <p><code>cargo build</code> してから <code>cargo run</code> で起動し、存在しないパスにリクエストを送ります。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling error-handling v0.1.0 (/path/to/06-error-handling)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.68s</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/no-such-route</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 27</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:56 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"route not found"}</span></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">API キーが必要なパスでは、未定義のメソッドも 401 になる</p>
+              <p>02 では、パスは合っているのにメソッドだけが違うと 405 になることを確かめました。しかし <code>/users/{id}</code> に <code>PATCH</code> を送ると、405 ではなく 401 が返ります。これは 04 で <code>protected_users</code> に <code>route_layer</code> で API キー認証を掛けた構成によるもので、06 で新たに変えた点はありません。この 401 は <code>require_api_key</code> ミドルウェアが返すもので <code>AppError</code> を通らないため、本文は <code>text/plain</code> のままです。</p>
+              <p>キーを付けて送った場合や、<code>/health</code> のようにキーが要らないパスでは 405 になります（キー付きの <code>PATCH /users/1</code> と <code>POST /health</code> は、どちらも本文なしの 405 でした）。405 は fallback と <code>AppError</code> のどちらも通らないので、本文は空のままです。405 を JSON にするには <code>Router::method_not_allowed_fallback</code> を使いますが、このレッスンでは扱いません。</p>
+            </div>
+          </div>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X PATCH http://127.0.0.1:3000/users/1</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">allow: GET,HEAD,PUT,DELETE</span><span class="terminal__line">content-length: 28</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:09:56 GMT</span><span class="terminal__line"></span><span class="terminal__line">invalid or missing x-api-key</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/no-such-route</code> が 404 と <code>{"error":"route not found"}</code> を返せば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">IntoResponse を外すとどうなるかを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p><code>AppError</code> が <code>IntoResponse</code> を実装していないとどうなるかを、わざと起こして確かめます。サーバーを止めた状態で、<code>impl IntoResponse for AppError { ... }</code> のブロック全体を、行頭に <code>//</code> を付けてコメントアウトします。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">// impl IntoResponse for AppError {
+//     fn into_response(self) -&gt; Response {
+//         let (status, message) = match self {
+//             AppError::NotFound =&gt; (StatusCode::NOT_FOUND, "user not found".to_string()),
+//             AppError::Validation(message) =&gt; (StatusCode::UNPROCESSABLE_ENTITY, message),
+//             AppError::Database(error) =&gt; {
+//                 eprintln!("database error: {error}");
+//                 (
+//                     StatusCode::INTERNAL_SERVER_ERROR,
+//                     "internal server error".to_string(),
+//                 )
+//             }
+//             AppError::JsonRejection(rejection) =&gt; (rejection.status(), rejection.body_text()),
+//         };
+//         (status, Json(json!({ "error": message }))).into_response()
+//     }
+// }</code></pre>
+          </div>
+          <p><code>cargo build</code> します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling error-handling v0.1.0 (/path/to/06-error-handling)</span><span class="terminal__line">error[E0277]: the trait bound `fn(State&lt;AppState&gt;, ...) -&gt; ... {create_user}: Handler&lt;_, _&gt;` is not satisfied</span><span class="terminal__line">   --&gt; src/main.rs:99:31</span><span class="terminal__line">    |</span><span class="terminal__line"> 99 |         .route("/users", post(create_user))</span><span class="terminal__line">    |                          ---- ^^^^^^^^^^^ the trait `Handler&lt;_, _&gt;` is not implemented for fn item `fn(State&lt;AppState&gt;, Result&lt;Json&lt;...&gt;, ...&gt;) -&gt; ... {create_user}`</span><span class="terminal__line">    |                          |</span><span class="terminal__line">    |                          required by a bound introduced by this call</span><span class="terminal__line">    |</span><span class="terminal__line">    = note: Consider using `#[axum::debug_handler]` to improve the error message</span><span class="terminal__line">note: required by a bound in `post`</span><span class="terminal__line">   --&gt; .../axum-0.8.9/src/routing/method_routing.rs:167:16</span><span class="terminal__line">    |</span><span class="terminal__line">167 |             H: Handler&lt;T, S&gt;,</span><span class="terminal__line">    |                ^^^^^^^^^^^^^ required by this bound in `post`</span><span class="terminal__line">...</span><span class="terminal__line">445 | top_level_handler_fn!(post, POST);</span><span class="terminal__line">    | ---------------------------------</span><span class="terminal__line">    | |                     |</span><span class="terminal__line">    | |                     required by a bound in this function</span><span class="terminal__line">    | in this macro invocation</span><span class="terminal__line">    = note: the full name for the type has been written to '.../long-type-....txt'</span><span class="terminal__line">    = note: consider using `--verbose` to print the full type name to the console</span><span class="terminal__line">    = note: this error originates in the macro `top_level_handler_fn` (in Nightly builds, run with -Z macro-backtrace for more info)</span><span class="terminal__line"></span><span class="terminal__line">   ...</span><span class="terminal__line"></span><span class="terminal__line">For more information about this error, try `rustc --explain E0277`.</span><span class="terminal__line">error: could not compile `error-handling` (bin "error-handling") due to 5 previous errors</span></pre>
+          </div>
+
+          <p>エラーは <code>AppError</code> の定義ではなく、ルーティングの <code>post(create_user)</code> などの行で報告されます。<code>Handler&lt;_, _&gt;</code> is not implemented は「この関数は axum のハンドラとして使えない」という意味です。<code>AppError</code> が <code>IntoResponse</code> を実装していないため、<code>Result&lt;_, AppError&gt;</code> を返す関数はレスポンスを作れず、ハンドラと認められません。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">エラーの場所と原因が離れて表示される</p>
+              <p>同じ形のエラーが 5 つ出ます。<code>Result&lt;_, AppError&gt;</code> を返すハンドラの全てです（出力の 2 つ目以降は省略しています）。メッセージには <code>IntoResponse</code> という語が出てきません。<code>Handler&lt;_, _&gt;</code> is not satisfied が出たら、ハンドラの引数と戻り値の型が axum の要件を満たしているかを確認しましょう。戻り値のエラー型が独自の型なら、<code>IntoResponse</code> の実装を疑います。なお、出力にある <code>#[axum::debug_handler]</code> を使うには、<code>Cargo.toml</code> で axum に <code>features = ["macros"]</code> を指定する必要があります。このレッスンでは追加しません。</p>
+            </div>
+          </div>
+          <p>確認できたら、コメントアウトを外して元に戻してください。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Handler&lt;_, _&gt;</code> is not satisfied のエラーが 5 個出て、ビルドが失敗することを確認できれば OK です。コメントアウトを外し、<code>cargo build</code> が通る状態に戻しておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">ビルド・Lint・フォーマットを確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>仕上げに、ビルド・静的解析（Clippy）・書式の確認をまとめて行います。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling error-handling v0.1.0 (/path/to/06-error-handling)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy --all-targets</span><span class="terminal__line">   ...</span><span class="terminal__line">    Checking sqlx v0.9.0</span><span class="terminal__line">    Checking error-handling v0.1.0 (/path/to/06-error-handling)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.60s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span></pre>
+          </div>
+
+          <p><code>cargo fmt --check</code> は何も表示せずに終わります。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>use</code> を手で折り返すと <code>cargo fmt --check</code> が差分を出す</p>
+              <p>ステップ 5 で <code>rejection::JsonRejection</code> を追加したときに、<code>extract::{...}</code> を複数行に手で折り返したとします。すると rustfmt の整形結果と違うため、<code>cargo fmt --check</code> が差分を表示します。差分が出たら <code>cargo fmt</code> を実行して整形してください。</p>
+            </div>
+          </div>
+          <p>最後に、DB ファイルを消した状態から起動し、正常系とエラーの両方を通しで確かめます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -f app.db*</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo run</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s</span><span class="terminal__line">     Running `target/debug/error-handling`</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 2</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:10:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">[]</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST http://127.0.0.1:3000/users -H 'content-type: application/json' -H 'x-api-key: secret' -d '{"name":"alice"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:10:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/users/999</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 26</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:10:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"user not found"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i http://127.0.0.1:3000/nope</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 27</span><span class="terminal__line">date: Sat, 26 Sep 2026 10:10:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":"route not found"}</span></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（サーバー側の出力）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line">listening on 127.0.0.1:3000</span><span class="terminal__line">GET /users -&gt; 200 OK (472.125µs)</span><span class="terminal__line">POST /users -&gt; 201 Created (1.211167ms)</span><span class="terminal__line">GET /users/999 -&gt; 404 Not Found (351.709µs)</span><span class="terminal__line">GET /nope -&gt; 404 Not Found (34.834µs)</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo build</code> と <code>cargo clippy --all-targets</code> がエラーや警告を出さずに終わり、<code>cargo fmt --check</code> が何も表示しなければ OK です。空の DB から起動して、ハンドラが返すエラーの本文が <code>{"error": ...}</code> の JSON になれば完成です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">05 のプロジェクトをコピーし、<code>Cargo.toml</code> の <code>name</code> を <code>error-handling</code> に変えて起動できた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>AppError</code> に <code>IntoResponse</code> を実装し、404 に <code>{"error":"user not found"}</code> の本文を付けた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>From&lt;sqlx::Error&gt;</code> を実装し、5 か所の <code>map_err</code> を <code>?</code> だけにした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">DB エラーの詳細はサーバー側にだけ出力され、クライアントには <code>internal server error</code> だけが返ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>trim()</code> と <code>chars().count()</code> で名前を検証し、空・空白だけ・51 文字以上を 422 にした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;</code> で拒否を受け取り、415・400・422 の本文を JSON にした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>fallback</code> の 404 を <code>{"error":"route not found"}</code> にした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>IntoResponse</code> の実装を外すと、<code>Handler&lt;_, _&gt;</code> is not satisfied のコンパイルエラーになることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>cargo build</code>・<code>cargo clippy --all-targets</code>・<code>cargo fmt --check</code> が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>variant `Validation` is never constructed</code> の警告が出る</p>
+          <p>ステップ 2〜3 では <code>Validation</code> をまだ使っていないため、この警告が出ます。ステップ 4 で <code>validate</code> から使い始めると消えます。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Handler&lt;_, _&gt;</code> is not satisfied でビルドが失敗する</p>
+          <p>ハンドラの戻り値のエラー型が <code>IntoResponse</code> を実装しているか確認してください。<code>impl IntoResponse for AppError</code> を消したりコメントアウトしたままにしたりすると、ステップ 7 と同じエラーになります。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">空白だけの名前が 422 にならない</p>
+          <p><code>validate</code> で <code>trim()</code> を呼んでから <code>is_empty()</code> で判定しているか確認してください（ステップ 4 を参照）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">415・400・422 の本文が JSON にならない</p>
+          <p>ハンドラの引数が <code>Json(payload): Json&lt;CreateUser&gt;</code> のままになっていないか確認してください。<code>Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;</code> で受け取らないと、axum が <code>text/plain</code> の本文で拒否します（ステップ 5 を参照）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">コードを変えたのに結果が変わらない</p>
+          <p><code>cargo run</code> で起動したサーバーは、ソースコードを保存しても変更を反映しません。各ステップでコードを変えたら、前のサーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めてから <code>cargo run</code> し直してください。止め忘れたまま別のターミナルで起動すると、ポート 3000 が使用中のエラーになります（01 の「つまずきポイント」を参照）。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        独自のエラー型 <code>AppError</code> に <code>IntoResponse</code> を実装し、ハンドラが返すエラーの応答を <code>{"error": "..."}</code> という JSON にそろえました。
+        <code>From</code> を実装したことで、DB のエラーも JSON の拒否も <code>?</code> だけで <code>AppError</code> に変換でき、ハンドラから <code>map_err</code> がなくなりました。
+        入力値の検証は <code>validate</code> メソッドにまとめ、不正な値は DB へアクセスする前に 422 で返します。
+        最終的な <code>AppError</code> とレスポンスの対応は次のとおりです。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>variant</th><th>作られる場所</th><th>ステータス</th><th>本文の <code>error</code></th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>NotFound</code></td><td><code>get_user</code>・<code>update_user</code>・<code>delete_user</code> で対象がないとき</td><td>404</td><td><code>user not found</code></td></tr>
+          <tr><td><code>Validation(String)</code></td><td><code>CreateUser::validate</code></td><td>422</td><td>検証で失敗した理由</td></tr>
+          <tr><td><code>Database(sqlx::Error)</code></td><td>sqlx のエラーから <code>?</code>（<code>From</code>）で変換</td><td>500</td><td><code>internal server error</code>（詳細はサーバー側に出力）</td></tr>
+          <tr><td><code>JsonRejection(JsonRejection)</code></td><td><code>Json</code> extractor の拒否から <code>?</code>（<code>From</code>）で変換</td><td><code>rejection.status()</code>（415 / 400 / 422）</td><td><code>rejection.body_text()</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/06-error-handling</code> の <code>axum/06-error-handling/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <h2 id="track-summary">Axum トラックのまとめ</h2>
+      <p>
+        このレッスンで Axum トラックは終わりです。01 で最小のサーバーを起動し、02 でルーティングとパス・クエリパラメーター、03 で JSON の受け渡しを学びました。
+        04 で共有状態とミドルウェアによる API キー認証を加え、05 で SQLite に保存する CRUD の API に仕上げました。
+        そして 06 で、ハンドラが返すエラーの応答を JSON にそろえ、入力値の検証を加えました。
+        ルーティング・extractor・状態・ミドルウェア・DB・エラー処理という、Web API を作るときの基本的な部品が一通りそろったことになります。
+      </p>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../05-database/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">05: DB 接続と CRUD</span>
+        </a>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../../index.html">
+          <span class="lesson-nav__direction">Axum トラックはここまで →</span>
+          <span class="lesson-nav__title">ハンズオン一覧へ戻る</span>
+        </a>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
