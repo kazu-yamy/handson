@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>09: Ktor と serialization で API 取得 | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">09</li>
+        </ol>
+        <h1 class="lesson-title">Ktor と serialization で API 取得</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 08 で一覧と詳細の 2 画面を作った人</li>
+          <li class="lesson-meta__item">📋 前提: 08 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること。エミュレータからインターネットに接続できること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../08-navigation3/index.html">08: Navigation 3</a></li>
+          <li class="lesson-meta__item">🧩 版: Kotlin 2.4.20 / AGP 9.4.1 / Compose BOM 2026.09.00 / Ktor 3.6.0 / kotlinx-serialization-json 1.11.0</li>
+          <li class="lesson-meta__item">🌿 完成コード: ブランチ <code>android/09-ktor-serialization</code></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>Ktor Client と <code>ContentNegotiation</code> で Web API から JSON を取得し、<code>@Serializable</code> な DTO にデコードしてアプリのモデルに変換できる</li>
+          <li>ViewModel から API を呼び、読み込み中・成功・失敗（エラーの文言と再試行）を画面に出し分けられる</li>
+          <li><code>expectSuccess</code>・<code>HttpTimeout</code>・<code>CancellationException</code> の投げ直しで、失敗を正しく扱える</li>
+          <li>既存のテストを <code>MockEngine</code> の偽のサーバーにつなぎ替え、テストがネットワークに出ないようにできる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        08 までのアプリは、ViewModel が 1 秒待ってから、アプリの中で作ったデモデータ（<code>demoTodos(20)</code>）を一覧に入れていました（07 の疑似読み込み）。
+        この項目では、これをインターネット上の Web API からの取得に置き換えます。HTTP 通信には Ktor Client、JSON の変換には kotlinx.serialization を使います。</p>
+      <p>前提知識として、07 の <code>viewModelScope</code> と <code>SavedStateHandle</code> を使います。既存のテストのつなぎ替えでは、07 のテスト用ディスパッチャー（<code>runTest</code>・<code>StandardTestDispatcher</code>・<code>UnconfinedTestDispatcher</code>）が出てきます。08 で導入した serialization プラグイン（<code>@Serializable</code>）も使います。</p>
+
+      <h3 id="api">取得する API</h3>
+      <p>取得先は JSONPlaceholder（<code>https://jsonplaceholder.typicode.com</code>）の <code>/todos</code> です。JSONPlaceholder は、外部の練習用の公開 API です。<code>_limit=20</code> を付けて、先頭の 20 件だけを取得します（付けないと 200 件が返ります）。次のレスポンスは、筆者が 2026年10月4日 05:18（日本時間）に取得したものの先頭部分です。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s &quot;https://jsonplaceholder.typicode.com/todos?_limit=20&quot;</span><span class="terminal__line">[</span><span class="terminal__line">  {</span><span class="terminal__line">    &quot;userId&quot;: 1,</span><span class="terminal__line">    &quot;id&quot;: 1,</span><span class="terminal__line">    &quot;title&quot;: &quot;delectus aut autem&quot;,</span><span class="terminal__line">    &quot;completed&quot;: false</span><span class="terminal__line">  },</span><span class="terminal__line">  {</span><span class="terminal__line">    &quot;userId&quot;: 1,</span><span class="terminal__line">    &quot;id&quot;: 2,</span><span class="terminal__line">    &quot;title&quot;: &quot;quis ut nam facilis et officia qui&quot;,</span><span class="terminal__line">    &quot;completed&quot;: false</span><span class="terminal__line">  },</span><span class="terminal__line">（以下略）</span></pre>
+</div>
+
+      <p>全体は 20 件の配列でした。<code>completed</code> の値が <code>true</code> のものは、そのうち 11 件です。1 件の項目は <code>userId</code>・<code>id</code>・<code>title</code>・<code>completed</code> の 4 つです。外部のサービスなので、取得する時期によっては、内容が変わっている可能性もあります。</p>
+      <p>この項目で API から行うのは、一覧の取得だけです。追加・完了切替・削除は、これまでどおりアプリのメモリ上（と <code>SavedStateHandle</code>）だけで行い、API には書き込みません。</p>
+
+      <h3 id="what-we-build">この項目で作るもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>作るもの</th><th>主に変えるファイル</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>API から Todo を取得し、JSON をデコードして logcat で確かめる</td><td><code>TodoDto.kt</code>・<code>TodoApi.kt</code>（新規）・<code>AndroidManifest.xml</code>・<code>MainActivity.kt</code>（確認用。ステップ 2 で戻す）</td></tr>
+            <tr><td>2</td><td>ViewModel から API を呼び、読み込み中・成功・失敗（再試行）を表示する。既存のテストを偽のサーバーにつなぎ替える</td><td><code>AppContainer.kt</code>（新規）・<code>TodoApi.kt</code>・<code>TodoListUiState.kt</code>・<code>TodoListViewModel.kt</code>・<code>TodoListScreen.kt</code>・<code>TodoListPage.kt</code>・<code>FakeTodoServer.kt</code>・<code>FakeTodoApiRule.kt</code>（新規）と既存のテスト</td></tr>
+            <tr><td>3</td><td>完成状態のテスト結果を確かめ、機内モードで失敗表示と再試行を確かめ、release の APK をエミュレータで動かす</td><td>なし</td></tr>
+            </tbody>
+          </table>
+
+      <p>テストの件数は、08 と同じ単体テスト 53 件・UI テスト 63 件のままです。この項目では既存のテストを偽のサーバーにつなぎ替えるだけで、<code>MockEngine</code> を使った新しいテストは、次の項目（10）で足します。</p>
+
+      <h3 id="versions">使用バージョン</h3>
+      <p>01〜08 と同じく、Kotlin 2.4.20 / AGP 9.4.1 / Compose BOM 2026.09.00 で作成しています。この項目では、次のライブラリを追加します。</p>
+
+          <table>
+            <thead>
+            <tr><th>ライブラリ</th><th>版</th><th>使うもの</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>io.ktor:ktor-client-core</code></td><td>3.6.0</td><td><code>HttpClient</code> 本体・<code>HttpTimeout</code></td></tr>
+            <tr><td><code>io.ktor:ktor-client-android</code></td><td>3.6.0</td><td>エンジン（実際に通信する部分）。通信はプラットフォームの <code>HttpURLConnection</code> が行う</td></tr>
+            <tr><td><code>io.ktor:ktor-client-content-negotiation</code></td><td>3.6.0</td><td>本文と Kotlin の型を変換する <code>ContentNegotiation</code> プラグイン</td></tr>
+            <tr><td><code>io.ktor:ktor-serialization-kotlinx-json</code></td><td>3.6.0</td><td><code>ContentNegotiation</code> に登録する JSON の変換（<code>json(...)</code>）</td></tr>
+            <tr><td><code>org.jetbrains.kotlinx:kotlinx-serialization-json</code></td><td>1.11.0</td><td>JSON の設定（<code>Json { }</code>）</td></tr>
+            <tr><td><code>io.ktor:ktor-client-mock</code>（テストのみ）</td><td>3.6.0</td><td><code>MockEngine</code>（ステップ 2 の偽のサーバー）</td></tr>
+            </tbody>
+          </table>
+
+      <p>Ktor の 5 つは、執筆時点（2026年10月）の Maven Central で最新の安定版です。<code>kotlinx-serialization-json</code> は、Maven Central の最新が <code>1.12.0-RC</code>（リリース候補）です。そのため、08 の <code>kotlinx-serialization-core</code> と同じ安定版の 1.11.0 にそろえます。</p>
+
+      <h3 id="engine">エンジンに Android エンジンを選んだ理由</h3>
+      <p>Ktor Client は、実際に通信する部分を「エンジン」として差し替えられます。Ktor 3.6.0 のドキュメント（Client engines）は、Android 向けに OkHttp エンジンと Android エンジンを挙げています。この教材は、サードパーティのライブラリを使わず、公式のパッケージだけで構成する方針です。そこで、サードパーティの HTTP ライブラリ（OkHttp は Square 製）に依存しない Android エンジン（<code>ktor-client-android</code>）を使います。通信はプラットフォームの <code>HttpURLConnection</code> が行うので、端末のネットワークセキュリティ設定（cleartext の禁止など）がそのまま効きます。Android エンジンは HTTP/2 と WebSockets に対応しませんが、この項目の用途（HTTPS の GET で JSON を取得する）には不要です。エンジンは <code>HttpClient(エンジン)</code> の引数で替えられるので、後で替えてもコードはほとんど変わりません。</p>
+      <p>コードは Ktor と kotlinx.serialization の公式の API だけを使います。ただし、Ktor の artifact の推移的依存として、okio などのライブラリは入ります。<code>ktor-serialization-kotlinx-json</code> が YAML のライブラリを経由して引き込むもので、コードからは直接使いません。</p>
+
+      <h2 id="prepare">準備</h2>
+      <p>08 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 09 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid08&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid09&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid08&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid09&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span></pre>
+</div>
+      <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // Step 1: 変数・関数・文字列テンプレート・when 式</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid08&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid09&quot;</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できる。型は推論されるが、ここでは Int のまま</span><span class="diff-line">  var counter = 0</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          counter = 0</span><span class="diff-line">          assertEquals(1, incrementCounter())</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid08&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid09&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+      <p>パッケージ名（<code>com.handson.android01</code>）は 08 と同じく変えません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:mergeProjectDexDebug</span><span class="terminal__line">&gt; Task :app:packageDebug</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">&gt; Task :app:createDebugApkListingFileRedirect</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 16s</span><span class="terminal__line">38 actionable tasks: 38 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+      <p><code>BUILD SUCCESSFUL</code> と表示されれば準備は完了です。かかる時間は、Gradle デーモンが起動済みかどうかで変わります。エミュレータも 08 と同じ手順で起動しておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">emulator-5554	device</span></pre>
+</div>
+      <p>この項目では、エミュレータからインターネットに接続します。接続できることも確かめておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 8.8.8.8</span><span class="terminal__line">（中略）</span><span class="terminal__line">1 packets transmitted, 1 received, 0% packet loss</span></pre>
+</div>
+      <p><code>1 received</code> と表示されれば、エミュレータからインターネットに出られます。</p>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">API からデータを取得してデコードする</h3>
+        </div>
+        <div class="step__body">
+          <p>API が返す JSON を Kotlin のデータクラスに変換（デコード）して受け取るところまでを作ります。画面にはまだつながず、起動時に 1 回だけ取得して、結果を logcat に出して確かめます。画面へのつなぎ込みはステップ 2 で行います。</p>
+          <p>まず、依存を追加します。Ktor のライブラリは同じ版にそろえるので、Version Catalog では <code>ktor</code> という 1 つの版の指定を共用します。<code>kotlinx-serialization-json</code> は、08 で追加した <code>kotlinx-serialization-core</code> と同じ版の指定（<code>kotlinxSerialization</code>）を使います。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  kotlinxCoroutines = &quot;1.11.0&quot;</span><span class="diff-line">  navigation3 = &quot;1.2.0&quot;</span><span class="diff-line">  kotlinxSerialization = &quot;1.11.0&quot;</span><span class="diff-line diff-line--add">+ ktor = &quot;3.6.0&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  kotlinx-coroutines-test = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-test&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  kotlinx-serialization-core = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-serialization-core&quot;, version.ref = &quot;kotlinxSerialization&quot; }</span><span class="diff-line diff-line--add">+ kotlinx-serialization-json = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-serialization-json&quot;, version.ref = &quot;kotlinxSerialization&quot; }</span><span class="diff-line diff-line--add">+ ktor-client-android = { group = &quot;io.ktor&quot;, name = &quot;ktor-client-android&quot;, version.ref = &quot;ktor&quot; }</span><span class="diff-line diff-line--add">+ ktor-client-content-negotiation = { group = &quot;io.ktor&quot;, name = &quot;ktor-client-content-negotiation&quot;, version.ref = &quot;ktor&quot; }</span><span class="diff-line diff-line--add">+ ktor-client-core = { group = &quot;io.ktor&quot;, name = &quot;ktor-client-core&quot;, version.ref = &quot;ktor&quot; }</span><span class="diff-line diff-line--add">+ ktor-serialization-kotlinx-json = { group = &quot;io.ktor&quot;, name = &quot;ktor-serialization-kotlinx-json&quot;, version.ref = &quot;ktor&quot; }</span><span class="diff-line">  </span><span class="diff-line">  [plugins]</span><span class="diff-line">  android-application = { id = &quot;com.android.application&quot;, version.ref = &quot;agp&quot; }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.navigation3.ui)</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      implementation(libs.kotlinx.serialization.core)</span><span class="diff-line diff-line--add">+     implementation(libs.kotlinx.serialization.json)</span><span class="diff-line diff-line--add">+     implementation(libs.ktor.client.android)</span><span class="diff-line diff-line--add">+     implementation(libs.ktor.client.content.negotiation)</span><span class="diff-line diff-line--add">+     implementation(libs.ktor.client.core)</span><span class="diff-line diff-line--add">+     implementation(libs.ktor.serialization.kotlinx.json)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">      testImplementation(libs.kotlinx.coroutines.test)</span><span class="diff-line">      androidTestImplementation(platform(libs.androidx.compose.bom))</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>次に、インターネットに接続する権限 <code>INTERNET</code> を、アプリのマニフェストで宣言します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/AndroidManifest.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;?xml version=&quot;1.0&quot; encoding=&quot;utf-8&quot;?&gt;</span><span class="diff-line">  &lt;manifest xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;</span><span class="diff-line">      xmlns:tools=&quot;http://schemas.android.com/tools&quot;&gt;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     &lt;uses-permission android:name=&quot;android.permission.INTERNET&quot; /&gt;</span><span class="diff-line">  </span><span class="diff-line">      &lt;application</span><span class="diff-line">          android:allowBackup=&quot;true&quot;</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>INTERNET</code> を書き忘れると、通信できない</p>
+              <p>ビルド時に作られるマージ後のマニフェスト（依存のマニフェストを合わせたもの）で、<code>INTERNET</code> はこの 1 行の 1 件だけでした。<code>ktor-client-android</code> を含め、どのライブラリも <code>INTERNET</code> を宣言していません。自分で宣言するライブラリもあり、その場合は書き忘れても動いてしまいます。この項目の構成では、書き忘れるとすぐに気づけます。</p>
+              <p>筆者は、マージされた権限を取り除く次の指定で、権限が無い状態を完成状態のコードで再現しました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">XML</span>
+    <span class="code-block__filename">AndroidManifest.xml（実験用。試した後は元に戻す）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-xml">&lt;uses-permission android:name=&quot;android.permission.INTERNET&quot; tools:node=&quot;remove&quot; /&gt;</code></pre>
+</div>
+
+              <p>起動すると、アプリは落ちずに、一覧の代わりに「予期しないエラーが発生しました」と表示されました（ステップ 2 で作る失敗表示）。ViewModel の <code>catch</code> に一時的にログ出力を入れて見た logcat の抜粋です（実験後は元へ戻しました）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">logcat</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">E TodoApi : failed: java.lang.SecurityException: Permission denied (missing INTERNET permission?)</span><span class="terminal__line">E TodoApi : java.lang.SecurityException: Permission denied (missing INTERNET permission?)</span><span class="terminal__line">E TodoApi : \tat java.net.Inet6AddressImpl.lookupHostByName(Inet6AddressImpl.java:150)</span><span class="terminal__line">（以下略）</span></pre>
+</div>
+
+              <p>例外は Ktor の呼び出しの中で投げられるので、呼び出し側の <code>try/catch</code> で捕まります。<code>SecurityException</code> は <code>IOException</code> のサブクラスではないので、「ネットワークに接続できません」ではなく「予期しないエラー」の文言になります。</p>
+            </div>
+          </div>
+          <p>API の JSON の 1 件分を表す型を作ります。<code>data/TodoDto.kt</code> を新しく作ります（<code>data</code> フォルダも新規）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoDto.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import com.handson.android01.kotlin.Todo
+import kotlinx.serialization.Serializable
+
+// API が返す JSON の 1 件分の形（https://jsonplaceholder.typicode.com/todos の要素）。
+// アプリ内で使う Todo とは別の型にして、API の都合（userId など）をアプリの中に持ち込まない。
+// @Serializable: Kotlin のシリアライズプラグインが、JSON との変換コードをコンパイル時に生成する
+@Serializable
+data class TodoDto(
+    val userId: Int,
+    val id: Int,
+    val title: String,
+    val completed: Boolean,
+)
+
+// API の形からアプリの Todo への変換
+fun TodoDto.toTodo(): Todo = Todo(id = id, title = title, done = completed)</code></pre>
+</div>
+          <ul>
+            <li><code>@Serializable</code> を付けると、Kotlin の serialization プラグイン（08 で導入済み）が、JSON との変換コードをコンパイル時に作ります。</li>
+            <li><code>TodoDto</code> は API の JSON の形（<code>userId</code>・<code>completed</code>）をそのまま持ちます。アプリの <code>Todo</code> は、画面の都合（<code>done</code>・<code>Parcelable</code>）を持ちます。型を分けておくと、API の都合がアプリの中に広がりません。</li>
+            <li>2 つの型の変換は、<code>toTodo()</code> の 1 か所だけにします。</li>
+          </ul>
+          <p>取得処理をまとめるクラスを作ります。<code>data/TodoApi.kt</code> を新しく作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoApi.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import com.handson.android01.kotlin.Todo
+import io.ktor.client.HttpClient
+import io.ktor.client.call.body
+import io.ktor.client.engine.HttpClientEngine
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.get
+import io.ktor.client.request.parameter
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.serialization.json.Json
+
+// 練習用の公開 API（jsonplaceholder）から Todo を取得する。
+// HttpClient は引数で受け取る（テストでは、通信しない MockEngine 入りの HttpClient を渡すため）
+class TodoApi(
+    private val client: HttpClient,
+    private val baseUrl: String = &quot;https://jsonplaceholder.typicode.com&quot;,
+) {
+    // 取得して、アプリの Todo に変換して返す。失敗時は例外を投げる（呼び出し側で捕まえる）。
+    // suspend 関数だが、通信は Ktor のエンジン（Android）がバックグラウンドのスレッド（Dispatchers.IO）で行うので、メインスレッドから呼んでも画面は固まらない
+    suspend fun fetchTodos(limit: Int = 20): List&lt;Todo&gt; {
+        val dtos: List&lt;TodoDto&gt; = client.get(&quot;$baseUrl/todos&quot;) { parameter(&quot;_limit&quot;, limit) }.body()
+        return dtos.map { it.toTodo() }
+    }
+}
+
+// アプリでも、テストでも同じ設定の HttpClient を作る。違うのはエンジンだけ（アプリ = Android、テスト = MockEngine）
+fun createTodoHttpClient(engine: HttpClientEngine): HttpClient = HttpClient(engine) {
+    // 2xx 以外のステータスを例外にする。既定は false で、404 や 500 でもそのまま本文のデコードに進んでしまう
+    expectSuccess = true
+    install(ContentNegotiation) {
+        json(
+            Json {
+                // API の JSON にあって TodoDto に無い項目（今回は無いが、API が項目を足したとき）を無視する
+                ignoreUnknownKeys = true
+            },
+        )
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li><code>TodoApi</code> は <code>HttpClient</code> を引数で受け取ります。テストでは、通信しない <code>MockEngine</code> 入りの <code>HttpClient</code> に差し替えます（ステップ 2）。<code>baseUrl</code> も引数にして、テストでリクエスト先を確かめやすくしています。</li>
+            <li><code>client.get(...).body()</code> は、レスポンスの本文を、受け取る変数の型（<code>List&lt;TodoDto&gt;</code>）にデコードします。デコードは <code>ContentNegotiation</code> プラグインに登録した <code>json(...)</code> が行います。</li>
+            <li><code>createTodoHttpClient(engine)</code> は、<code>HttpClient</code> の設定を 1 か所にまとめた関数です。アプリは Android エンジン、テストは <code>MockEngine</code> と、エンジンだけを替えます。テストも本番と同じ JSON の設定を通ります。</li>
+            <li><code>expectSuccess = true</code> は、2xx 以外のステータスを例外にする設定です。既定の <code>false</code> のままだと、404 や 500 でも例外にならず、本文のデコードに進みます。HTTP エラーなのに「JSON の形が違う」という別の失敗に見えてしまいます。実際にどう見えるかは、次の項目（10）でテストを使って確かめます。</li>
+            <li><code>ignoreUnknownKeys = true</code> は、JSON にあって <code>TodoDto</code> に無い項目を無視する設定です。今の API の 4 項目はすべて <code>TodoDto</code> にあるので、外しても動きます。ただし、外したままだと、API が項目を 1 つ足しただけでデコードに失敗するようになります。</li>
+          </ul>
+          <p>動作を確かめるため、<code>MainActivity</code> で起動時に 1 回だけ取得して、結果を logcat に出します。<strong>この確認用のコードは、ステップ 2 で消します。</strong></p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01</span><span class="diff-line">  </span><span class="diff-line">  import android.os.Bundle</span><span class="diff-line diff-line--add">+ import android.util.Log</span><span class="diff-line">  import androidx.activity.ComponentActivity</span><span class="diff-line">  import androidx.activity.compose.setContent</span><span class="diff-line">  import androidx.activity.enableEdgeToEdge</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxSize</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line diff-line--add">+ import androidx.lifecycle.lifecycleScope</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoApi</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.createTodoHttpClient</span><span class="diff-line">  import com.handson.android01.ui.navigation.TodoApp</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line diff-line--add">+ import io.ktor.client.engine.android.Android</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.launch</span><span class="diff-line">  </span><span class="diff-line">  class MainActivity : ComponentActivity() {</span><span class="diff-line">      override fun onCreate(savedInstanceState: Bundle?) {</span><span class="diff-line">          super.onCreate(savedInstanceState)</span><span class="diff-line">          enableEdgeToEdge()</span><span class="diff-line diff-line--add">+         // ステップ 1 の確認用（ステップ 2 で消す）: 起動時に API を呼んで、結果を logcat に出す</span><span class="diff-line diff-line--add">+         lifecycleScope.launch {</span><span class="diff-line diff-line--add">+             try {</span><span class="diff-line diff-line--add">+                 val todos = TodoApi(createTodoHttpClient(Android.create())).fetchTodos()</span><span class="diff-line diff-line--add">+                 Log.d(&quot;TodoApi&quot;, &quot;fetched ${todos.size} todos, first = ${todos.first()}&quot;)</span><span class="diff-line diff-line--add">+             } catch (e: Exception) {</span><span class="diff-line diff-line--add">+                 Log.e(&quot;TodoApi&quot;, &quot;failed: $e&quot;)</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">          setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line">                  TodoApp(modifier = Modifier.fillMaxSize())</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>インストールして起動し、数秒待ってから logcat を見ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">Installed on 1 device.</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s TodoApi AndroidRuntime</span><span class="terminal__line">（行頭の日時などは省略）</span><span class="terminal__line">… fetched 20 todos, first = Todo(id=1, title=delectus aut autem, done=false)</span></pre>
+</div>
+          <p>20 件を取得し、先頭の 1 件が <code>Todo</code> に変換されています。<code>title</code> は API の JSON と同じ小文字です。</p>
+          <p><code>fetchTodos</code> は <code>suspend</code> 関数で、メインスレッドから呼んでいます。筆者は完成状態のコード（<code>viewModelScope</code> から呼ぶ）で、スレッド名を出してみました。出したのは、呼ぶ前後と、エンジンが <code>HttpURLConnection</code> を設定するコールバック（<code>requestConfig</code>）の中です。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">logcat</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">D TodoApi : before: main</span><span class="terminal__line">D TodoApi : engine: DefaultDispatcher-worker-2</span><span class="terminal__line">D TodoApi : after: main</span></pre>
+</div>
+          <p>呼ぶ前と後はどちらも <code>main</code> で、通信はエンジンが <code>Dispatchers.IO</code> のスレッド（<code>DefaultDispatcher-worker-N</code>）で行います。<code>NetworkOnMainThreadException</code> は出ず、画面も固まりませんでした。そのため、呼び出し側で <code>withContext(Dispatchers.IO)</code> に切り替える必要はありません。</p>
+          <p>ここで、わざと間違えるとどうなるかを見ておきます。どれも筆者がコードを一時的に変えて 1 回ずつ試した結果です（試した後は元へ戻しました）。自分で試す場合も、必ず元へ戻してください。</p>
+
+          <table>
+            <thead>
+            <tr><th>変えたこと</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>TodoDto</code> から <code>userId</code> を消し、<code>ignoreUnknownKeys = true</code> も消す</td><td><code>JsonConvertException</code>（<code>Encountered an unknown key 'userId'</code>）。<code>ignoreUnknownKeys = true</code> を戻すと、<code>userId</code> が無いままでも取得できる</td></tr>
+            <tr><td><code>TodoDto</code> の <code>@Serializable</code> を外す</td><td>コンパイルは通り、実行時に <code>SerializationException</code>（<code>Serializer for type argument 'TodoDto' is not found</code>）</td></tr>
+            <tr><td><code>baseUrl</code> を <code>http://</code> にする</td><td><code>IOException</code>（<code>Cleartext HTTP traffic to ... not permitted</code>）。暗号化していない通信（cleartext）は既定で禁止されている。<code>try/catch</code> で捕まえられ、アプリは落ちない（ステップ 2 の後は「ネットワークに接続できません」と表示される）</td></tr>
+            </tbody>
+          </table>
+          <p>1 行目のエラーメッセージには、レスポンスの JSON 本文の一部が入っていました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">logcat</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">failed: io.ktor.serialization.JsonConvertException: Illegal input: Unexpected JSON token at offset 11: Encountered an unknown key &#x27;userId&#x27; at path: $[0]</span><span class="terminal__line">Use &#x27;ignoreUnknownKeys = true&#x27; in &#x27;Json {}&#x27; builder or &#x27;@JsonIgnoreUnknownKeys&#x27; annotation to ignore unknown keys.</span><span class="terminal__line">JSON input: [</span><span class="terminal__line">  {</span><span class="terminal__line">    &quot;userId&quot;: 1,</span><span class="terminal__line">    &quot;id&quot;: 1,</span></pre>
+</div>
+          <p>例外のメッセージには、サーバーから受け取った内容が入ることもあります。そのため、ステップ 2 では <code>e.message</code> を画面にそのまま出さず、例外の種類から文言を作ります。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">ほかの 2 つの実験のエラーメッセージを見る</summary>
+            <div class="disclosure__body">
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">logcat（@Serializable を外したとき）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">failed: kotlinx.serialization.SerializationException: Serializer for type argument &#x27;TodoDto&#x27; is not found for &#x27;List&#x27;. Ensure that the listed type is marked as &#x27;@Serializable&#x27;.</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">logcat（http:// にしたとき）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">failed: java.io.IOException: Cleartext HTTP traffic to jsonplaceholder.typicode.com not permitted</span></pre>
+</div>
+              <p><code>@Serializable</code> の付け忘れは、08 のキーと同じく、コンパイルでは気づけません。<code>body&lt;List&lt;TodoDto&gt;&gt;()</code> の型パラメータは、コンパイラが検査しないためです。<code>http://</code> の失敗は、サーバーが https へリダイレクトしてくれるかどうかに関係なく、最初の接続で起きます。</p>
+            </div>
+          </details>
+          <p>ビルド・lint・単体テスト・UI テストをまとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 18s</span><span class="terminal__line">86 actionable tasks: 86 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+          <p>筆者の出力は、アプリをアンインストールし、Gradle のビルド結果も無い状態から実行したものです。そのため、86 個のタスクがすべて実行されています。かかる時間と、実行されるタスクの数は、環境と直前の状態で変わります。このステップでは画面を変えていないので、テストは 08 と同じ UI テスト 63 件・単体テスト 53 件で、すべて成功します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>logcat に <code>fetched 20 todos</code> が出ていれば OK です。<code>@Serializable</code>・<code>ignoreUnknownKeys</code>・<code>INTERNET</code> の役割を説明できるようにしておきます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">ViewModel につなぎ、読み込み・成功・失敗を表示する</h3>
+        </div>
+        <div class="step__body">
+          <p>07 の疑似読み込み（<code>delay</code> の後に <code>initialTodos</code> を入れる）を、<code>TodoApi</code> からの取得に置き換えます。取得に失敗したら、一覧の代わりにエラーの文言と「再試行」ボタンを出します。ステップ 1 の確認用コードは消します。</p>
+          <p>まず、<code>MainActivity</code> をステップ 1 の前に戻します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01</span><span class="diff-line">  </span><span class="diff-line">  import android.os.Bundle</span><span class="diff-line diff-line--remove">- import android.util.Log</span><span class="diff-line">  import androidx.activity.ComponentActivity</span><span class="diff-line">  import androidx.activity.compose.setContent</span><span class="diff-line">  import androidx.activity.enableEdgeToEdge</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxSize</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line diff-line--remove">- import androidx.lifecycle.lifecycleScope</span><span class="diff-line diff-line--remove">- import com.handson.android01.data.TodoApi</span><span class="diff-line diff-line--remove">- import com.handson.android01.data.createTodoHttpClient</span><span class="diff-line">  import com.handson.android01.ui.navigation.TodoApp</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line diff-line--remove">- import io.ktor.client.engine.android.Android</span><span class="diff-line diff-line--remove">- import kotlinx.coroutines.launch</span><span class="diff-line">  </span><span class="diff-line">  class MainActivity : ComponentActivity() {</span><span class="diff-line">      override fun onCreate(savedInstanceState: Bundle?) {</span><span class="diff-line">          super.onCreate(savedInstanceState)</span><span class="diff-line">          enableEdgeToEdge()</span><span class="diff-line diff-line--remove">-         // ステップ 1 の確認用（ステップ 2 で消す）: 起動時に API を呼んで、結果を logcat に出す</span><span class="diff-line diff-line--remove">-         lifecycleScope.launch {</span><span class="diff-line diff-line--remove">-             try {</span><span class="diff-line diff-line--remove">-                 val todos = TodoApi(createTodoHttpClient(Android.create())).fetchTodos()</span><span class="diff-line diff-line--remove">-                 Log.d(&quot;TodoApi&quot;, &quot;fetched ${todos.size} todos, first = ${todos.first()}&quot;)</span><span class="diff-line diff-line--remove">-             } catch (e: Exception) {</span><span class="diff-line diff-line--remove">-                 Log.e(&quot;TodoApi&quot;, &quot;failed: $e&quot;)</span><span class="diff-line diff-line--remove">-             }</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line">          setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line">                  TodoApp(modifier = Modifier.fillMaxSize())</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>次に、ViewModel に渡す <code>TodoApi</code> の置き場所を作ります。<code>data/AppContainer.kt</code> を新しく作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/AppContainer.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import io.ktor.client.engine.android.Android
+
+// アプリ全体で使う部品の置き場所（手書きの最小の DI）。ViewModel は、ここから TodoApi を受け取る。
+// HttpClient は接続を使い回すので、画面ごとに作らず、アプリで 1 つを使い回す。
+// Hilt を導入する項目では、この object をなくして、Hilt に作らせる
+object AppContainer {
+
+    private val defaultTodoApi: TodoApi by lazy { TodoApi(createTodoHttpClient(Android.create())) }
+
+    // テストが、通信しない TodoApi に差し替えるための入口（本番のコードは触らない）
+    var todoApiOverride: TodoApi? = null
+
+    val todoApi: TodoApi get() = todoApiOverride ?: defaultTodoApi
+}</code></pre>
+</div>
+          <ul>
+            <li><code>viewModel()</code> の既定のファクトリは、「引数なし」か「<code>SavedStateHandle</code> だけ」のコンストラクタを探して呼びます。<code>TodoApi</code> を渡す手段が無いので、ViewModel は <code>AppContainer</code> から受け取ります（下の ViewModel の副コンストラクタ）。</li>
+            <li><code>HttpClient</code> は、接続を使い回せるように、画面や ViewModel ごとには作らず、アプリで 1 つを使い回します（<code>by lazy</code> で最初に使うときに 1 回だけ作る）。</li>
+            <li><code>todoApiOverride</code> は、テストが通信しない <code>TodoApi</code> に差し替えるための入口です。使い方は、このステップの後半で見ます。</li>
+            <li>これは、依存（部品）の受け渡しを手で書いた最小の形です。12 で Hilt（DI のライブラリ）を導入するときに、この <code>object</code> をなくして Hilt に作らせます。</li>
+          </ul>
+          <p><code>createTodoHttpClient</code> に、呼び出し全体のタイムアウトを足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoApi.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import io.ktor.client.HttpClient</span><span class="diff-line">  import io.ktor.client.call.body</span><span class="diff-line">  import io.ktor.client.engine.HttpClientEngine</span><span class="diff-line diff-line--add">+ import io.ktor.client.plugins.HttpTimeout</span><span class="diff-line">  import io.ktor.client.plugins.contentnegotiation.ContentNegotiation</span><span class="diff-line">  import io.ktor.client.request.get</span><span class="diff-line">  import io.ktor.client.request.parameter</span><span class="diff-line">  ...</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line">  // アプリでも、テストでも同じ設定の HttpClient を作る。違うのはエンジンだけ（アプリ = Android、テスト = MockEngine）</span><span class="diff-line diff-line--remove">- fun createTodoHttpClient(engine: HttpClientEngine): HttpClient = HttpClient(engine) {</span><span class="diff-line diff-line--add">+ fun createTodoHttpClient(</span><span class="diff-line diff-line--add">+     engine: HttpClientEngine,</span><span class="diff-line diff-line--add">+     // 1 回の呼び出し（送信から受信の完了まで）の上限</span><span class="diff-line diff-line--add">+     requestTimeoutMillis: Long = 15_000L,</span><span class="diff-line diff-line--add">+ ): HttpClient = HttpClient(engine) {</span><span class="diff-line">      // 2xx 以外のステータスを例外にする。既定は false で、404 や 500 でもそのまま本文のデコードに進んでしまう</span><span class="diff-line">      expectSuccess = true</span><span class="diff-line diff-line--add">+     // 何も指定しないと、Android エンジンは接続 100 秒・読み取り 100 秒（パケットの間隔）だけで、呼び出し全体の上限は無い。</span><span class="diff-line diff-line--add">+     // 少しずつ送り続ける相手だと、読み込み中のまま終わらないので、全体の上限を足す。</span><span class="diff-line diff-line--add">+     // 接続のタイムアウトは 15 秒に揃えられる（Android エンジンは、呼び出し全体の上限より長い接続のタイムアウトを、その値まで縮める）。読み取りの 100 秒は、そのまま</span><span class="diff-line diff-line--add">+     install(HttpTimeout) {</span><span class="diff-line diff-line--add">+         this.requestTimeoutMillis = requestTimeoutMillis</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">      install(ContentNegotiation) {</span><span class="diff-line">          json(</span><span class="diff-line">              Json {</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>何も指定しないと、Android エンジンは既定値（<code>AndroidEngineConfig</code>）で動きます。Ktor 3.6.0 のソースでは、接続 100 秒・読み取り 100 秒で、呼び出し全体の上限はありません。「読み取り 100 秒」はデータが届く間隔の上限です。少しずつ送り続ける相手だと、いつまでも読み込み中のまま終わりません。</p>
+          <p>そこで、<code>HttpTimeout</code> プラグインで、呼び出し全体の上限（15 秒）を足しました。全体の上限を 15 秒にすると、接続のタイムアウトも 15 秒にそろえられます。Android エンジンが、全体の上限より長い接続のタイムアウトを、その値まで縮めるためです（Ktor 3.6.0 のソースの <code>AndroidURLConnectionUtils.kt</code>）。読み取りの 100 秒は、そのままです。</p>
+          <p><code>HttpTimeout</code> は <code>ktor-client-core</code> に入っていて、依存の追加は要りません。上限を超えると <code>HttpRequestTimeoutException</code> が投げられます。筆者が上限を一時的に 1 ミリ秒にして起動すると「通信がタイムアウトしました」と表示され、Android エンジンでも効くことを確かめました。上限を引数にしてあるのは、次の項目（10）のテストで短い値にするためです。</p>
+          <p>画面の状態に、失敗の文言を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListUiState.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      val filter: TodoFilter = TodoFilter.All,</span><span class="diff-line">      // 読み込み中かどうか。true のあいだ、画面は一覧の代わりに読み込み表示を出す</span><span class="diff-line">      val isLoading: Boolean = false,</span><span class="diff-line diff-line--add">+     // 読み込みに失敗したときの、画面に出すメッセージ。null なら失敗していない。</span><span class="diff-line diff-line--add">+     // 失敗中（isLoading = false かつ errorMessage != null）は、一覧の代わりにエラー表示と「再試行」を出す</span><span class="diff-line diff-line--add">+     val errorMessage: String? = null,</span><span class="diff-line">  )</span></pre>
+</div>
+          <p>ViewModel を、<code>TodoApi</code> から取得する形に書き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListViewModel.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.lifecycle.SavedStateHandle</span><span class="diff-line">  import androidx.lifecycle.ViewModel</span><span class="diff-line">  import androidx.lifecycle.viewModelScope</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.AppContainer</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoApi</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line diff-line--remove">- import kotlinx.coroutines.delay</span><span class="diff-line diff-line--add">+ import io.ktor.client.call.NoTransformationFoundException</span><span class="diff-line diff-line--add">+ import io.ktor.client.network.sockets.ConnectTimeoutException</span><span class="diff-line diff-line--add">+ import io.ktor.client.network.sockets.SocketTimeoutException</span><span class="diff-line diff-line--add">+ import io.ktor.client.plugins.HttpRequestTimeoutException</span><span class="diff-line diff-line--add">+ import io.ktor.client.plugins.ResponseException</span><span class="diff-line diff-line--add">+ import io.ktor.serialization.ContentConvertException</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.CancellationException</span><span class="diff-line">  import kotlinx.coroutines.flow.MutableStateFlow</span><span class="diff-line">  import kotlinx.coroutines.flow.StateFlow</span><span class="diff-line">  import kotlinx.coroutines.flow.asStateFlow</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.flow.update</span><span class="diff-line">  import kotlinx.coroutines.flow.updateAndGet</span><span class="diff-line">  import kotlinx.coroutines.launch</span><span class="diff-line diff-line--add">+ import kotlinx.serialization.SerializationException</span><span class="diff-line diff-line--add">+ import java.io.IOException</span><span class="diff-line">  </span><span class="diff-line">  // 画面状態を持つ ViewModel。画面回転（Activity の作り直し）では破棄されず、同じインスタンスが使われ続ける。</span><span class="diff-line">  // SavedStateHandle: プロセスが終了されても残したい値の入れ物。Activity の onSaveInstanceState の Bundle に保存され、</span><span class="diff-line">  // プロセスが作り直されたときに、保存した値が入った状態で渡される</span><span class="diff-line">  class TodoListViewModel(</span><span class="diff-line">      private val savedStateHandle: SavedStateHandle,</span><span class="diff-line diff-line--remove">-     private val initialTodos: List&lt;Todo&gt;,</span><span class="diff-line diff-line--remove">-     // 読み込みに見立てて待つ時間。テストでは 0 や仮想時間で動かす</span><span class="diff-line diff-line--remove">-     private val loadDelayMillis: Long,</span><span class="diff-line diff-line--add">+     // Todo の取得元。テストでは、通信しない MockEngine 入りの TodoApi を渡す</span><span class="diff-line diff-line--add">+     private val api: TodoApi,</span><span class="diff-line">  ) : ViewModel() {</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // viewModel() の既定のファクトリは、引数なし、または SavedStateHandle だけのコンストラクタを探して呼ぶ</span><span class="diff-line diff-line--remove">-     constructor(savedStateHandle: SavedStateHandle) : this(savedStateHandle, demoTodos(20), loadDelayMillis = 1_000L)</span><span class="diff-line diff-line--add">+     // viewModel() の既定のファクトリは、引数なし、または SavedStateHandle だけのコンストラクタを探して呼ぶ。</span><span class="diff-line diff-line--add">+     // そのため、アプリでは TodoApi を AppContainer（手書きの置き場所）から受け取る</span><span class="diff-line diff-line--add">+     constructor(savedStateHandle: SavedStateHandle) : this(savedStateHandle, AppContainer.todoApi)</span><span class="diff-line">  </span><span class="diff-line">      // 書き込めるのは ViewModel の中だけ。外には読み取り専用の StateFlow として公開する。</span><span class="diff-line diff-line--remove">-     // 保存されていればそれを使う（読み込み済みなので isLoading は false）。無ければ空の一覧と isLoading = true で始め、下の init で読み込む。</span><span class="diff-line diff-line--add">+     // 保存されていればそれを使う（読み込み済みなので isLoading は false で、取得し直さない）。無ければ空の一覧と isLoading = true で始め、下の init で読み込む。</span><span class="diff-line">      // ArrayList&lt;Todo&gt; は、要素が Parcelable なので保存できる</span><span class="diff-line">      private val restoredTodos = savedStateHandle.get&lt;ArrayList&lt;Todo&gt;&gt;(KEY_TODOS)</span><span class="diff-line">      private val _uiState = MutableStateFlow(</span><span class="diff-line">  ...</span><span class="diff-line">      val uiState: StateFlow&lt;TodoListUiState&gt; = _uiState.asStateFlow()</span><span class="diff-line">  </span><span class="diff-line">      init {</span><span class="diff-line diff-line--remove">-         if (restoredTodos == null) {</span><span class="diff-line diff-line--remove">-             // viewModelScope: ViewModel が破棄される（onCleared）ときに、中の処理もまとめてキャンセルされるスコープ。</span><span class="diff-line diff-line--remove">-             // 既定のディスパッチャーは Dispatchers.Main.immediate</span><span class="diff-line diff-line--remove">-             viewModelScope.launch {</span><span class="diff-line diff-line--remove">-                 // 読み込みに見立てた待ち時間（実際のアプリでは、ここでサーバーや DB から読む）</span><span class="diff-line diff-line--remove">-                 delay(loadDelayMillis)</span><span class="diff-line diff-line--remove">-                 update { it.copy(todos = initialTodos, isLoading = false) }</span><span class="diff-line diff-line--add">+         if (restoredTodos == null) load()</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // API から取得して、成功なら一覧を入れ、失敗なら失敗の状態にする。</span><span class="diff-line diff-line--add">+     // viewModelScope: ViewModel が破棄される（onCleared）ときに、中の処理もまとめてキャンセルされるスコープ。</span><span class="diff-line diff-line--add">+     // 既定のディスパッチャーは Dispatchers.Main.immediate。通信は Ktor のエンジンが別のスレッドで行うので、withContext は要らない</span><span class="diff-line diff-line--add">+     private fun load() {</span><span class="diff-line diff-line--add">+         viewModelScope.launch {</span><span class="diff-line diff-line--add">+             try {</span><span class="diff-line diff-line--add">+                 val todos = api.fetchTodos()</span><span class="diff-line diff-line--add">+                 update { it.copy(todos = todos, isLoading = false, errorMessage = null) }</span><span class="diff-line diff-line--add">+             } catch (e: CancellationException) {</span><span class="diff-line diff-line--add">+                 // キャンセルは「失敗」ではない。握りつぶさずに投げ直す（握りつぶすと、キャンセルされたコルーチンが止まらない）</span><span class="diff-line diff-line--add">+                 throw e</span><span class="diff-line diff-line--add">+             } catch (e: Exception) {</span><span class="diff-line diff-line--add">+                 // 失敗の状態は SavedStateHandle に書かない。書くと、復元のときに「読み込み済みの空の一覧」と見分けがつかず、取得し直されない</span><span class="diff-line diff-line--add">+                 _uiState.update { it.copy(isLoading = false, errorMessage = e.toUserMessage()) }</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // 失敗中の「再試行」。読み込み中に戻してから、もう一度取得する（読み込み中・失敗していないときは何もしない）</span><span class="diff-line diff-line--add">+     fun retry() {</span><span class="diff-line diff-line--add">+         if (_uiState.value.errorMessage == null) return</span><span class="diff-line diff-line--add">+         _uiState.update { it.copy(isLoading = true, errorMessage = null) }</span><span class="diff-line diff-line--add">+         load()</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      // 状態の更新はすべてここを通す。updateAndGet は、今の値から新しい値を作って入れ替え、入れ替えたあとの値を返す</span><span class="diff-line">      // （複数の更新が重なっても取りこぼさない）。その値を SavedStateHandle にも書く</span><span class="diff-line">      private fun update(transform: (TodoListUiState) -&gt; TodoListUiState) {</span><span class="diff-line">          val newState = _uiState.updateAndGet(transform)</span><span class="diff-line diff-line--remove">-         savedStateHandle[KEY_TODOS] = ArrayList(newState.todos)</span><span class="diff-line diff-line--remove">-         savedStateHandle[KEY_FILTER] = newState.filter</span><span class="diff-line diff-line--add">+         // 読み込み中・失敗中の一覧は「まだ取得していない空」なので保存しない（保存すると、復元のときに取得し直されない）</span><span class="diff-line diff-line--add">+         if (!newState.isLoading &amp;&amp; newState.errorMessage == null) {</span><span class="diff-line diff-line--add">+             savedStateHandle[KEY_TODOS] = ArrayList(newState.todos)</span><span class="diff-line diff-line--add">+             savedStateHandle[KEY_FILTER] = newState.filter</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      fun addTodo(title: String) {</span><span class="diff-line">  ...</span><span class="diff-line">          update { it.copy(filter = filter) }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // 例外を、画面に出す文言にする。e.message はそのまま出さない（レスポンスの本文が入ることがある）</span><span class="diff-line diff-line--add">+     private fun Exception.toUserMessage(): String = when (this) {</span><span class="diff-line diff-line--add">+         // タイムアウトは IOException のサブクラスもあるので、IOException より先に調べる</span><span class="diff-line diff-line--add">+         is HttpRequestTimeoutException, is ConnectTimeoutException, is SocketTimeoutException -&gt; &quot;通信がタイムアウトしました&quot;</span><span class="diff-line diff-line--add">+         is ResponseException -&gt; &quot;サーバーがエラーを返しました（HTTP ${response.status.value}）&quot;</span><span class="diff-line diff-line--add">+         is IOException -&gt; &quot;ネットワークに接続できません&quot;</span><span class="diff-line diff-line--add">+         is ContentConvertException, is SerializationException, is NoTransformationFoundException -&gt; &quot;データの形式が正しくありません&quot;</span><span class="diff-line diff-line--add">+         else -&gt; &quot;予期しないエラーが発生しました&quot;</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      private companion object {</span><span class="diff-line">          const val KEY_TODOS = &quot;todos&quot;</span><span class="diff-line">          const val KEY_FILTER = &quot;filter&quot;</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li>主コンストラクタで <code>TodoApi</code> を受け取ります。07 の <code>initialTodos</code> と <code>loadDelayMillis</code> は不要になりました。テストでは、ここに通信しない <code>TodoApi</code> を渡します。</li>
+            <li><code>catch (e: CancellationException) { throw e }</code> を、<code>catch (e: Exception)</code> より先に書きます。<code>CancellationException</code> は「失敗」ではなく「キャンセルされた」という合図です。<code>catch (e: Exception)</code> だけだと、画面を離れて ViewModel が破棄されるときのキャンセルまで失敗として扱い、状態をエラーに書き換えてしまいます。キャンセルされたコルーチンの終了も妨げます。</li>
+            <li><code>Throwable</code> ではなく <code>Exception</code> を捕まえるのは、<code>OutOfMemoryError</code> などの <code>Error</code> を握りつぶさないためです。</li>
+            <li>画面に出す文言は、例外の種類から作ります（<code>toUserMessage()</code>）。<code>e.message</code> は出しません。ステップ 1 で見たとおり、レスポンスの本文が入ることがあるためです。タイムアウトの例外には <code>IOException</code> のサブクラスもあるので、<code>when</code> では <code>IOException</code> より先に並べます。</li>
+            <li>失敗の状態は <code>SavedStateHandle</code> に保存しません。失敗中の一覧は「まだ取得していない空」です。保存すると、プロセスの再生成の後に「読み込み済みの空の一覧」として復元され、取得し直されずに空の画面になります。そのため、失敗は <code>_uiState.update</code> で直接書き、成功だけを保存付きの <code>update</code> に通します。<code>update</code> の中でも、読み込み中・失敗中は保存しません。</li>
+            <li>保存済みの一覧があれば（プロセスの再生成）、07 と同じく取得し直しません。</li>
+            <li><code>retry()</code> は失敗中だけ動きます。読み込み中に何度押されても、取得は 1 回だけです。</li>
+          </ul>
+          <p>画面（<code>TodoListScreen</code>）に、失敗の表示を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.material.icons.filled.Check</span><span class="diff-line">  import androidx.compose.material.icons.filled.Delete</span><span class="diff-line">  import androidx.compose.material.icons.filled.KeyboardArrowUp</span><span class="diff-line diff-line--add">+ import androidx.compose.material.icons.filled.Warning</span><span class="diff-line">  import androidx.compose.material3.AlertDialog</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.Button</span><span class="diff-line">  import androidx.compose.material3.Card</span><span class="diff-line">  import androidx.compose.material3.CardDefaults</span><span class="diff-line">  import androidx.compose.material3.CircularProgressIndicator</span><span class="diff-line">  ...</span><span class="diff-line">      onAddSheetDismiss: () -&gt; Unit = {},</span><span class="diff-line">      onDeleteDone: () -&gt; Unit = {},</span><span class="diff-line">      isLoading: Boolean = false,</span><span class="diff-line diff-line--add">+     // 読み込みに失敗したときのメッセージ。null でなければ、一覧の代わりにエラー表示と「再試行」を出す</span><span class="diff-line diff-line--add">+     errorMessage: String? = null,</span><span class="diff-line diff-line--add">+     onRetry: () -&gt; Unit = {},</span><span class="diff-line">      onOpenDetail: (id: Int) -&gt; Unit = {},</span><span class="diff-line">  ) {</span><span class="diff-line diff-line--add">+     // 読み込み中と失敗中は、まだ一覧が無いので、一覧に対する操作（一括削除・追加・件数）を出さない</span><span class="diff-line diff-line--add">+     val hasList = !isLoading &amp;&amp; errorMessage == null</span><span class="diff-line">      // rememberLazyListState: スクロール位置を覚える。LazyColumn に渡すと、位置を読んだり動かしたりできる</span><span class="diff-line">      val listState = rememberLazyListState()</span><span class="diff-line">      val scope = rememberCoroutineScope()</span><span class="diff-line">  ...</span><span class="diff-line">              TopAppBar(</span><span class="diff-line">                  title = { Text(&quot;Todo&quot;) },</span><span class="diff-line">                  actions = {</span><span class="diff-line diff-line--remove">-                     // 読み込み中は、一括削除も件数バッジも出さない（操作できず、「0 件」と誤解させるため）</span><span class="diff-line diff-line--remove">-                     if (!isLoading) {</span><span class="diff-line diff-line--add">+                     // 読み込み中・失敗中は、一括削除も件数バッジも出さない（操作できず、「0 件」と誤解させるため）</span><span class="diff-line diff-line--add">+                     if (hasList) {</span><span class="diff-line">                          // 完了済みをまとめて削除する。取り消せない操作なので、確認ダイアログを挟む</span><span class="diff-line">                          IconButton(</span><span class="diff-line">                              onClick = { showDeleteDoneDialog = true },</span><span class="diff-line">  ...</span><span class="diff-line">          snackbarHost = { SnackbarHost(snackbarHostState) },</span><span class="diff-line">          // floatingActionButton: 右下に浮かぶボタンの置き場所。2 つ並べたいときは Column に入れる</span><span class="diff-line">          floatingActionButton = {</span><span class="diff-line diff-line--remove">-             // 読み込み中は、読み込み表示だけを出す。追加すると、読み込み後の上書きで消えてしまう</span><span class="diff-line diff-line--remove">-             if (!isLoading) Column(</span><span class="diff-line diff-line--add">+             // 読み込み中・失敗中は、追加の入口を出さない。追加すると、読み込み後の上書きで消えてしまう</span><span class="diff-line diff-line--add">+             if (hasList) Column(</span><span class="diff-line">                  horizontalAlignment = Alignment.End,</span><span class="diff-line">                  verticalArrangement = Arrangement.spacedBy(12.dp),</span><span class="diff-line">              ) {</span><span class="diff-line">  ...</span><span class="diff-line">                      contentAlignment = Alignment.Center,</span><span class="diff-line">                  ) {</span><span class="diff-line">                      CircularProgressIndicator()</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line diff-line--add">+                 return@Column</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+             if (errorMessage != null) {</span><span class="diff-line diff-line--add">+                 // 失敗中: サマリ・フィルタ・一覧は出さず、理由と「再試行」だけにする</span><span class="diff-line diff-line--add">+                 Box(</span><span class="diff-line diff-line--add">+                     modifier = Modifier</span><span class="diff-line diff-line--add">+                         .weight(1f)</span><span class="diff-line diff-line--add">+                         .fillMaxWidth()</span><span class="diff-line diff-line--add">+                         .testTag(&quot;error_state&quot;),</span><span class="diff-line diff-line--add">+                     contentAlignment = Alignment.Center,</span><span class="diff-line diff-line--add">+                 ) {</span><span class="diff-line diff-line--add">+                     Column(</span><span class="diff-line diff-line--add">+                         horizontalAlignment = Alignment.CenterHorizontally,</span><span class="diff-line diff-line--add">+                         verticalArrangement = Arrangement.spacedBy(16.dp),</span><span class="diff-line diff-line--add">+                     ) {</span><span class="diff-line diff-line--add">+                         Icon(</span><span class="diff-line diff-line--add">+                             Icons.Default.Warning,</span><span class="diff-line diff-line--add">+                             contentDescription = null,</span><span class="diff-line diff-line--add">+                             modifier = Modifier.size(48.dp),</span><span class="diff-line diff-line--add">+                             tint = MaterialTheme.colorScheme.error,</span><span class="diff-line diff-line--add">+                         )</span><span class="diff-line diff-line--add">+                         Text(</span><span class="diff-line diff-line--add">+                             text = errorMessage,</span><span class="diff-line diff-line--add">+                             style = MaterialTheme.typography.bodyLarge,</span><span class="diff-line diff-line--add">+                             color = MaterialTheme.colorScheme.onSurfaceVariant,</span><span class="diff-line diff-line--add">+                         )</span><span class="diff-line diff-line--add">+                         Button(onClick = onRetry, modifier = Modifier.testTag(&quot;retry_button&quot;)) {</span><span class="diff-line diff-line--add">+                             Text(&quot;再試行&quot;)</span><span class="diff-line diff-line--add">+                         }</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line">                  }</span><span class="diff-line">                  return@Column</span><span class="diff-line">              }</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>読み込み中と失敗中は、まだ一覧がありません。<code>hasList</code> が <code>false</code> のあいだは、07 の読み込み中と同じく、一覧に対する操作（一括削除・件数バッジ・追加の FAB）を出しません。失敗中は、本文にもサマリ・フィルタ・一覧を出さず、理由と「再試行」だけにします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      TodoListScreen(</span><span class="diff-line">          todos = uiState.todos,</span><span class="diff-line">          isLoading = uiState.isLoading,</span><span class="diff-line diff-line--add">+         errorMessage = uiState.errorMessage,</span><span class="diff-line diff-line--add">+         onRetry = viewModel::retry,</span><span class="diff-line">          snackbarHostState = snackbarHostState,</span><span class="diff-line">          filter = uiState.filter,</span><span class="diff-line">          onFilterChange = viewModel::setFilter,</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">失敗表示のプレビュー（<code>TodoListScreenPreviews.kt</code>）の追加を見る</summary>
+            <div class="disclosure__body">
+              <p>ファイルの末尾（最後の <code>TodoListScreenScreenSizesMultiPreview</code> の後）に、次の関数を追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreenPreviews.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  @PreviewScreenSizes</span><span class="diff-line">  @Composable</span><span class="diff-line">  private fun TodoListScreenScreenSizesMultiPreview() {</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line">          TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ // 読み込みに失敗した状態（エラー表示と「再試行」）</span><span class="diff-line diff-line--add">+ @Preview(name = &quot;error&quot;, showBackground = true)</span><span class="diff-line diff-line--add">+ @Composable</span><span class="diff-line diff-line--add">+ private fun TodoListScreenErrorPreview() {</span><span class="diff-line diff-line--add">+     HandsonAndroid01Theme {</span><span class="diff-line diff-line--add">+         TodoListScreen(</span><span class="diff-line diff-line--add">+             todos = emptyList(),</span><span class="diff-line diff-line--add">+             inputState = rememberTextFieldState(),</span><span class="diff-line diff-line--add">+             onToggle = { _, _ -&gt; },</span><span class="diff-line diff-line--add">+             onAddClick = {},</span><span class="diff-line diff-line--add">+             errorMessage = &quot;ネットワークに接続できません&quot;,</span><span class="diff-line diff-line--add">+         )</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+            </div>
+          </details>
+          <h4>既存のテストを偽のサーバーにつなぎ替える</h4>
+          <p>ViewModel のコンストラクタが変わったので、07・08 で書いたテストはこのままではコンパイルできません。ViewModel は、<code>TodoApi</code>（その先の API）を受け取る形になりました。そのため、本物の <code>MainActivity</code> を起動するテストは、このままだと本物の API から取得してしまいます。テストがネットワークに出ないよう、偽の応答を返す仕組みが必要です。</p>
+          <p>そこで、Ktor のテスト用エンジン <code>MockEngine</code>（<code>ktor-client-mock</code>）を入れ、既存のテストを「通信しない偽のサーバー」（<code>FakeTodoServer</code>）につなぎ替えます。この項目では新しいテストは足しません。<code>MockEngine</code> を使ったテストの書き方（API の失敗・ViewModel の再試行・失敗表示のテスト）は、次の項目（10）で扱います。</p>
+          <p>テスト用の依存（<code>ktor-client-mock</code>）を追加します。単体テストと UI テストの両方で使います。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  ktor-client-android = { group = &quot;io.ktor&quot;, name = &quot;ktor-client-android&quot;, version.ref = &quot;ktor&quot; }</span><span class="diff-line">  ktor-client-content-negotiation = { group = &quot;io.ktor&quot;, name = &quot;ktor-client-content-negotiation&quot;, version.ref = &quot;ktor&quot; }</span><span class="diff-line">  ktor-client-core = { group = &quot;io.ktor&quot;, name = &quot;ktor-client-core&quot;, version.ref = &quot;ktor&quot; }</span><span class="diff-line diff-line--add">+ ktor-client-mock = { group = &quot;io.ktor&quot;, name = &quot;ktor-client-mock&quot;, version.ref = &quot;ktor&quot; }</span><span class="diff-line">  ktor-serialization-kotlinx-json = { group = &quot;io.ktor&quot;, name = &quot;ktor-serialization-kotlinx-json&quot;, version.ref = &quot;ktor&quot; }</span><span class="diff-line">  </span><span class="diff-line">  [plugins]</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.ktor.serialization.kotlinx.json)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">      testImplementation(libs.kotlinx.coroutines.test)</span><span class="diff-line diff-line--add">+     testImplementation(libs.ktor.client.mock)</span><span class="diff-line">      androidTestImplementation(platform(libs.androidx.compose.bom))</span><span class="diff-line">      androidTestImplementation(libs.androidx.compose.ui.test.junit4)</span><span class="diff-line">      androidTestImplementation(libs.androidx.espresso.core)</span><span class="diff-line">      androidTestImplementation(libs.androidx.junit)</span><span class="diff-line diff-line--add">+     androidTestImplementation(libs.ktor.client.mock)</span><span class="diff-line">      debugImplementation(libs.androidx.compose.ui.test.manifest)</span><span class="diff-line">      debugImplementation(libs.androidx.compose.ui.tooling)</span><span class="diff-line">  }</span></pre>
+</div>
+          <p>単体テスト側に、偽のサーバーを作ります。<code>test/.../ui/screens/FakeTodoServer.kt</code> を新しく作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/FakeTodoServer.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import com.handson.android01.data.TodoApi
+import com.handson.android01.data.TodoDto
+import com.handson.android01.data.createTodoHttpClient
+import com.handson.android01.kotlin.Todo
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+// テスト用の偽のサーバー。MockEngine が、ネットワークに出ずにレスポンスを返す。
+// status と todos は、テストの途中で書き換えられる（失敗 → 再試行で成功、を作るため）。
+// dispatcher を渡すと、エンジンの処理がそのディスパッチャーで動く。テスト用のディスパッチャーを渡せば、delayMillis が仮想時間になる
+class FakeTodoServer(
+    var todos: List&lt;Todo&gt;,
+    var status: HttpStatusCode = HttpStatusCode.OK,
+    private val delayMillis: Long = 0L,
+    dispatcher: CoroutineDispatcher? = null,
+) {
+    private val engine = MockEngine(
+        MockEngineConfig().apply {
+            this.dispatcher = dispatcher
+            addHandler {
+                delay(delayMillis)
+                val body = Json.encodeToString(todos.map { TodoDto(userId = 1, id = it.id, title = it.title, completed = it.done) })
+                // Content-Type を付けないと、ContentNegotiation が JSON として読んでくれない
+                respond(body, status, headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()))
+            }
+        },
+    )
+
+    val api = TodoApi(createTodoHttpClient(engine))
+
+    val requestCount: Int get() = engine.requestHistory.size
+}</code></pre>
+</div>
+          <ul>
+            <li><code>MockEngine</code> は、ネットワークに出ずに、ハンドラーで決めたレスポンスを返すエンジンです。<code>createTodoHttpClient(engine)</code> に渡すので、本番と同じ設定（JSON・<code>expectSuccess</code>・タイムアウト）を通ります。</li>
+            <li><code>respond</code> には <code>Content-Type: application/json</code> を付けます。付けないと、<code>ContentNegotiation</code> が JSON として読みません。</li>
+            <li><code>dispatcher</code> にテスト用のディスパッチャーを渡すと、ハンドラーの <code>delay(delayMillis)</code> が仮想時間になります。07 の「待ち時間を仮想時間で進める」テストが、そのまま書けます。</li>
+            <li><code>status</code> と <code>todos</code> は <code>var</code> で、テストの途中で書き換えられます。<code>requestCount</code> は、偽のサーバーが受けたリクエストの回数です。どちらも、次の項目（10）で失敗と再試行をテストするときに使います。</li>
+          </ul>
+          <p>UI テスト側にも、同じ役割の偽のサーバーと、<code>AppContainer</code> を差し替えるルールを作ります。UI テストからは単体テストのファイルが見えないので、<code>androidTest/.../ui/screens/</code> にもう 1 つ置きます。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">UI テスト用の <code>FakeTodoServer.kt</code> の全文を見る</summary>
+            <div class="disclosure__body">
+              <p>単体テスト用との違いは、ディスパッチャーを受け取らないこと（応答は実時間で返る）と、<code>todos</code> の既定値が <code>demoTodoList</code>（3 件）であることです。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/FakeTodoServer.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import com.handson.android01.data.TodoApi
+import com.handson.android01.data.TodoDto
+import com.handson.android01.data.createTodoHttpClient
+import com.handson.android01.kotlin.Todo
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import kotlinx.coroutines.delay
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+// テスト用の偽のサーバー。MockEngine が、ネットワークに出ずにレスポンスを返す。
+// status や todos は、テストの途中で書き換えられる（失敗 → 再試行で成功、を作るため）
+class FakeTodoServer(
+    var todos: List&lt;Todo&gt; = demoTodoList,
+    var status: HttpStatusCode = HttpStatusCode.OK,
+    // 応答を返すまでの待ち時間（実時間）
+    private val delayMillis: Long = 0L,
+) {
+    private val engine = MockEngine {
+        delay(delayMillis)
+        val body = Json.encodeToString(todos.map { TodoDto(userId = 1, id = it.id, title = it.title, completed = it.done) })
+        // Content-Type を付けないと、ContentNegotiation が JSON として読んでくれない
+        respond(body, status, headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()))
+    }
+
+    val api = TodoApi(createTodoHttpClient(engine))
+
+    val requestCount: Int get() = engine.requestHistory.size
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/FakeTodoApiRule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import com.handson.android01.data.AppContainer
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
+
+// 実際の Activity（MainActivity）を起動するテスト用: アプリが使う TodoApi を、ネットワークに出ない偽のサーバーのものに差し替える。
+// Activity を起動するルールより外側に置く（RuleChain.outerRule）。そうしないと、起動のあとに差し替えることになる
+class FakeTodoApiRule(val server: FakeTodoServer = FakeTodoServer(demoTodos(20))) : TestWatcher() {
+
+    override fun starting(description: Description) {
+        AppContainer.todoApiOverride = server.api
+    }
+
+    override fun finished(description: Description) {
+        AppContainer.todoApiOverride = null
+    }
+}</code></pre>
+</div>
+          <p>本物の <code>MainActivity</code> を起動するテストは、次の 3 つです。</p>
+          <ul>
+            <li><code>MainActivityTest</code></li>
+            <li><code>TodoNavigationRestorationTest</code></li>
+            <li><code>TodoListViewModelRecreationTest</code></li>
+          </ul>
+          <p>どれも、次のように <code>RuleChain</code> で <code>FakeTodoApiRule</code> を外側に置きます。JUnit のルールは外側から順に動くので、Activity が起動する<strong>前に</strong> <code>TodoApi</code> が差し替わります。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/MainActivityTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule</span><span class="diff-line">  import androidx.compose.ui.test.onNodeWithText</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line diff-line--add">+ import com.handson.android01.ui.screens.FakeTodoApiRule</span><span class="diff-line">  import org.junit.Rule</span><span class="diff-line diff-line--add">+ import org.junit.rules.RuleChain</span><span class="diff-line">  import org.junit.Test</span><span class="diff-line">  import org.junit.runner.RunWith</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      // createAndroidComposeRule&lt;MainActivity&gt;(): 実際の Activity を起動してテストする。</span><span class="diff-line">      // createComposeRule() と違い、setContent は使わず、アプリ本来の画面をそのまま確かめる</span><span class="diff-line diff-line--add">+     // アプリが使う TodoApi を、起動の前に偽のサーバーへ差し替える（ネットワークに出ない）</span><span class="diff-line diff-line--add">+     private val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      @get:Rule</span><span class="diff-line diff-line--remove">-     val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()</span><span class="diff-line diff-line--add">+     val rules: RuleChain = RuleChain.outerRule(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun launchedActivity_showsTodoListScreen() {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">差し替えを忘れると、テストが本物の API を見て失敗する</p>
+              <p>筆者は最初、<code>TodoNavigationRestorationTest</code> を直さないまま UI テストを実行しました。このテストだけが、次のように失敗しました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">テスト結果</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">java.lang.AssertionError: Failed to assert the following: (Text + EditableText = [Task 2])</span><span class="terminal__line">Semantics of the node: Node #377 …, Tag: &#x27;detail_title&#x27;</span><span class="terminal__line">Text = &#x27;[Delectus Aut Autem]&#x27;</span></pre>
+</div>
+
+              <p>本物の API から取得した 1 件目（<code>Delectus Aut Autem</code>）が表示されていました。ネットワークに依存するテストは、通信が遅い・落ちているだけでも失敗します。テストは偽のサーバーにつなぎます。<code>createComposeRule()</code> のテストは、<code>testViewModel()</code> で ViewModel を作るので、元からネットワークに出ません。</p>
+            </div>
+          </div>
+          <p>残りのテストの変更は機械的な置き換えです。下の 5 ファイルを開いて、差分どおりに直します。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">ViewModel の単体テスト（<code>TodoListViewModelTest.kt</code>）の変更を見る</summary>
+            <div class="disclosure__body">
+              <p>ViewModel を、偽のサーバーにつないで作るようにします。偽のサーバーにも、<code>setMain</code> したものと同じディスパッチャーを渡します。テスト本体（何を確かめるか）は変えません。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/TodoListViewModelTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import androidx.lifecycle.SavedStateHandle</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.CoroutineDispatcher</span><span class="diff-line">  import kotlinx.coroutines.Dispatchers</span><span class="diff-line">  import kotlinx.coroutines.ExperimentalCoroutinesApi</span><span class="diff-line">  import kotlinx.coroutines.flow.toList</span><span class="diff-line">  ...</span><span class="diff-line">          Dispatchers.resetMain()</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // 偽のサーバーは、渡されたディスパッチャーで動く。テスト用のディスパッチャーなら、応答までの待ち時間（delayMillis）は仮想時間になる</span><span class="diff-line">      private fun viewModel(</span><span class="diff-line">          saved: SavedStateHandle = SavedStateHandle(),</span><span class="diff-line diff-line--remove">-         loadDelayMillis: Long = 1_000L,</span><span class="diff-line diff-line--remove">-     ) = TodoListViewModel(saved, todos, loadDelayMillis)</span><span class="diff-line diff-line--add">+         responseDelayMillis: Long = 1_000L,</span><span class="diff-line diff-line--add">+         dispatcher: CoroutineDispatcher,</span><span class="diff-line diff-line--add">+     ) = TodoListViewModel(saved, FakeTodoServer(todos, delayMillis = responseDelayMillis, dispatcher = dispatcher).api)</span><span class="diff-line">  </span><span class="diff-line">      // StandardTestDispatcher: launch した処理はキューに入るだけで、テスト側が進める（runCurrent / advanceTimeBy / advanceUntilIdle）まで動かない。</span><span class="diff-line">      // delay は仮想時間なので、待たずに時間だけ進められる</span><span class="diff-line">      @Test</span><span class="diff-line">      fun standardDispatcher_loadingFinishesWhenVirtualTimeAdvances() = runTest(StandardTestDispatcher()) {</span><span class="diff-line diff-line--remove">-         Dispatchers.setMain(StandardTestDispatcher(testScheduler))</span><span class="diff-line diff-line--remove">-         val vm = viewModel(loadDelayMillis = 1_000L)</span><span class="diff-line diff-line--add">+         val dispatcher = StandardTestDispatcher(testScheduler)</span><span class="diff-line diff-line--add">+         Dispatchers.setMain(dispatcher)</span><span class="diff-line diff-line--add">+         val vm = viewModel(responseDelayMillis = 1_000L, dispatcher = dispatcher)</span><span class="diff-line">  </span><span class="diff-line">          // 作った直後: 読み込み中で、一覧は空</span><span class="diff-line">          assertTrue(vm.uiState.value.isLoading)</span><span class="diff-line">  ...</span><span class="diff-line">      // 待ち時間が 0 でも、Standard では launch の中身は runCurrent するまで動かない</span><span class="diff-line">      @Test</span><span class="diff-line">      fun standardDispatcher_doesNotRunLaunchedWorkUntilTold() = runTest(StandardTestDispatcher()) {</span><span class="diff-line diff-line--remove">-         Dispatchers.setMain(StandardTestDispatcher(testScheduler))</span><span class="diff-line diff-line--remove">-         val vm = viewModel(loadDelayMillis = 0L)</span><span class="diff-line diff-line--add">+         val dispatcher = StandardTestDispatcher(testScheduler)</span><span class="diff-line diff-line--add">+         Dispatchers.setMain(dispatcher)</span><span class="diff-line diff-line--add">+         val vm = viewModel(responseDelayMillis = 0L, dispatcher = dispatcher)</span><span class="diff-line">  </span><span class="diff-line">          assertTrue(vm.uiState.value.isLoading)</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">      // UnconfinedTestDispatcher: launch した処理は、最初の中断点（delay など）まで、呼び出した場所でそのまま実行される</span><span class="diff-line">      @Test</span><span class="diff-line">      fun unconfinedDispatcher_runsLaunchedWorkEagerly() = runTest {</span><span class="diff-line diff-line--remove">-         Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))</span><span class="diff-line diff-line--remove">-         val vm = viewModel(loadDelayMillis = 0L)</span><span class="diff-line diff-line--add">+         val dispatcher = UnconfinedTestDispatcher(testScheduler)</span><span class="diff-line diff-line--add">+         Dispatchers.setMain(dispatcher)</span><span class="diff-line diff-line--add">+         val vm = viewModel(responseDelayMillis = 0L, dispatcher = dispatcher)</span><span class="diff-line">  </span><span class="diff-line">          // runCurrent なしで、もう読み込みが終わっている</span><span class="diff-line">          assertFalse(vm.uiState.value.isLoading)</span><span class="diff-line">  ...</span><span class="diff-line">      // StateFlow は値が変わったときだけ通知し、collect が追いつく前の途中の値は飛ばされる（conflation）</span><span class="diff-line">      @Test</span><span class="diff-line">      fun uiState_emitsLoadingThenLoadedThenToggled() = runTest {</span><span class="diff-line diff-line--remove">-         Dispatchers.setMain(StandardTestDispatcher(testScheduler))</span><span class="diff-line diff-line--remove">-         val vm = viewModel(loadDelayMillis = 1_000L)</span><span class="diff-line diff-line--add">+         val dispatcher = StandardTestDispatcher(testScheduler)</span><span class="diff-line diff-line--add">+         Dispatchers.setMain(dispatcher)</span><span class="diff-line diff-line--add">+         val vm = viewModel(responseDelayMillis = 1_000L, dispatcher = dispatcher)</span><span class="diff-line">          val states = mutableListOf&lt;TodoListUiState&gt;()</span><span class="diff-line">          backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.toList(states) }</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      // 以降のテストは、読み込み済み（待ち時間 0 + Unconfined）の状態から始める</span><span class="diff-line">      private fun loadedViewModel(saved: SavedStateHandle = SavedStateHandle()): TodoListViewModel {</span><span class="diff-line diff-line--remove">-         Dispatchers.setMain(UnconfinedTestDispatcher())</span><span class="diff-line diff-line--remove">-         return viewModel(saved, loadDelayMillis = 0L)</span><span class="diff-line diff-line--add">+         val dispatcher = UnconfinedTestDispatcher()</span><span class="diff-line diff-line--add">+         Dispatchers.setMain(dispatcher)</span><span class="diff-line diff-line--add">+         return viewModel(saved, responseDelayMillis = 0L, dispatcher = dispatcher)</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">  ...</span></pre>
+</div>
+
+            </div>
+          </details>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">UI テストの補助関数（<code>TestViewModels.kt</code>）の変更を見る</summary>
+            <div class="disclosure__body">
+              <p><code>testViewModel()</code> は、偽のサーバーにつないだ ViewModel を作ります。<code>api</code> を渡さなければ、<code>initialTodos</code> をすぐに返すサーバーを使います。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TestViewModels.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line diff-line--add">+ import androidx.lifecycle.createSavedStateHandle</span><span class="diff-line">  import androidx.lifecycle.viewmodel.compose.viewModel</span><span class="diff-line diff-line--remove">- import androidx.lifecycle.createSavedStateHandle</span><span class="diff-line">  import androidx.lifecycle.viewmodel.initializer</span><span class="diff-line">  import androidx.lifecycle.viewmodel.viewModelFactory</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoApi</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // テスト用: 初期データを指定して ViewModel を作る。待ち時間は 0 にして、最初の描画から一覧が出ているようにする。</span><span class="diff-line diff-line--add">+ // テスト用: 偽のサーバー（FakeTodoServer）につないだ ViewModel を作る。api を渡さなければ、initialTodos をすぐに返すサーバーを使う。</span><span class="diff-line">  // viewModel(factory = ...) は、同じ ViewModelStoreOwner（ここでは Activity）の中では同じインスタンスを返す</span><span class="diff-line">  @Composable</span><span class="diff-line diff-line--remove">- fun testViewModel(initialTodos: List&lt;Todo&gt; = demoTodoList, loadDelayMillis: Long = 0L): TodoListViewModel =</span><span class="diff-line diff-line--remove">-     viewModel(factory = viewModelFactory { initializer { TodoListViewModel(createSavedStateHandle(), initialTodos, loadDelayMillis) } })</span><span class="diff-line diff-line--add">+ fun testViewModel(initialTodos: List&lt;Todo&gt; = demoTodoList, api: TodoApi? = null): TodoListViewModel =</span><span class="diff-line diff-line--add">+     viewModel(</span><span class="diff-line diff-line--add">+         factory = viewModelFactory {</span><span class="diff-line diff-line--add">+             initializer { TodoListViewModel(createSavedStateHandle(), api ?: FakeTodoServer(initialTodos).api) }</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line diff-line--add">+     )</span></pre>
+</div>
+
+            </div>
+          </details>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">本物の Activity を起動する残り 2 つの UI テストの変更を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/navigation/TodoNavigationRestorationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.performClick</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line">  import com.handson.android01.MainActivity</span><span class="diff-line diff-line--add">+ import com.handson.android01.ui.screens.FakeTodoApiRule</span><span class="diff-line">  import org.junit.Rule</span><span class="diff-line diff-line--add">+ import org.junit.rules.RuleChain</span><span class="diff-line">  import org.junit.Test</span><span class="diff-line">  import org.junit.runner.RunWith</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">  @RunWith(AndroidJUnit4::class)</span><span class="diff-line">  class TodoNavigationRestorationTest {</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     private val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // アプリが使う TodoApi を、起動の前に偽のサーバーへ差し替える（ネットワークに出ない）</span><span class="diff-line">      @get:Rule</span><span class="diff-line diff-line--remove">-     val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()</span><span class="diff-line diff-line--add">+     val rules: RuleChain = RuleChain.outerRule(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun detailScreen_survivesActivityRecreation() {</span><span class="diff-line diff-line--remove">-         // 一覧は ViewModel が 1 秒ほど「読み込み」をしてから出る。行が出るのを待つ</span><span class="diff-line diff-line--add">+         // 一覧は ViewModel が偽のサーバーから取得してから出る。行が出るのを待つ</span><span class="diff-line">          composeTestRule.waitUntil(timeoutMillis = 5_000) {</span><span class="diff-line">              composeTestRule.onAllNodesWithTag(&quot;todo_title&quot;).fetchSemanticsNodes().isNotEmpty()</span><span class="diff-line">          }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListViewModelRecreationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line">  import com.handson.android01.MainActivity</span><span class="diff-line">  import org.junit.Rule</span><span class="diff-line diff-line--add">+ import org.junit.rules.RuleChain</span><span class="diff-line">  import org.junit.Test</span><span class="diff-line">  import org.junit.runner.RunWith</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">  @RunWith(AndroidJUnit4::class)</span><span class="diff-line">  class TodoListViewModelRecreationTest {</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     private val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // アプリが使う TodoApi を、起動の前に偽のサーバーへ差し替える（ネットワークに出ない）</span><span class="diff-line">      @get:Rule</span><span class="diff-line diff-line--remove">-     val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()</span><span class="diff-line diff-line--add">+     val rules: RuleChain = RuleChain.outerRule(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun toggles_surviveActivityRecreation() {</span><span class="diff-line diff-line--remove">-         // 起動直後は読み込み中（疑似の待ち時間は 1 秒）。待ち時間は実時間なので、一覧が出るまで waitUntil で待つ</span><span class="diff-line diff-line--add">+         // 起動直後は読み込み中（偽のサーバーの応答を待つ）。応答は別のスレッドから届くので、一覧が出るまで waitUntil で待つ</span><span class="diff-line">          composeTestRule.waitUntil(timeoutMillis = 5_000L) {</span><span class="diff-line">              composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).fetchSemanticsNodes().isNotEmpty()</span><span class="diff-line">          }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+            </div>
+          </details>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み込み表示の UI テスト（<code>TodoLoadingTest.kt</code>）の変更を見る</summary>
+            <div class="disclosure__body">
+              <p>07 では ViewModel の待ち時間（500 ミリ秒）で読み込み中を作っていました。偽のサーバーが 500 ミリ秒かけて応答する形に置き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoLoadingTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      @get:Rule</span><span class="diff-line">      val composeTestRule = createComposeRule()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     private val server = FakeTodoServer(delayMillis = 500L)</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun screen_whenLoading_showsOnlyIndicator() {</span><span class="diff-line">  ...</span><span class="diff-line">      fun page_showsIndicatorUntilLoaded_thenShowsRows() {</span><span class="diff-line">          composeTestRule.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 // 待ち時間は viewModelScope の delay（実時間）。Compose のテスト用クロックでは進まないので、waitUntil で待つ</span><span class="diff-line diff-line--remove">-                 TodoListPage(viewModel = testViewModel(loadDelayMillis = 500L))</span><span class="diff-line diff-line--add">+                 // 偽のサーバーが 500 ミリ秒（実時間）かけて応答する。Compose のテスト用クロックでは進まないので、waitUntil で待つ</span><span class="diff-line diff-line--add">+                 TodoListPage(viewModel = testViewModel(api = server.api))</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;loading&quot;).assertIsDisplayed()</span><span class="diff-line">  ...</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>まとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 59s</span><span class="terminal__line">86 actionable tasks: 48 executed, 38 up-to-date</span><span class="terminal__line">Configuration cache entry reused.</span></pre>
+</div>
+          <p>テストの件数は 08 と同じ UI テスト 63 件・単体テスト 53 件で、すべて成功します。テストはつなぎ替えただけで、増やしていないためです。</p>
+          <p>アプリでも確かめます。インストールして起動し、約 6 秒後に <code>uiautomator dump</code> で画面の情報を取り出しました（08 と同じ方法です）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">Installed on 1 device.</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span></pre>
+</div>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">一覧画面（text と content-desc を出現順に並べたもの）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">20 件中 11 件完了 / すべて / 未完了 / 完了 / Delectus Aut Autem / 未完了 / 削除 / Quis Ut Nam Facilis Et Officia Qui / 未完了 / 削除 / Fugiat Veniam Minus / 未完了 / 削除 / Laboriosam Mollitia Et Enim Quasi Adipisci Quia Provident Illum / 未完了 / 削除 / Qui Ullam Ratione Quibusdam Voluptatem Quia Omnis / 未完了 / 削除 / Illo Expedita Consequatur Quia In / 未完了 / 削除 / Molestiae Perspiciatis Ipsa / 未完了 / 削除 / Et Doloremque Nulla / 未完了 / 未完了 / Todo / 完了済みをすべて削除 / 9 / 追加</code></pre>
+</div>
+          <p>API の 20 件のうち、画面に収まっている先頭の 8 行が出ています。<code>completed: true</code> は 11 件で、「9」は未完了の件数バッジです。行の「削除」と、「完了済みをすべて削除」「追加」は、アイコンボタンの説明（content-desc）です。text 属性だけを抜き出すと、この 3 つは出ません。タイトルの各単語の先頭が大文字なのは、02 で作った表示用の拡張関数が各単語の先頭を大文字にしているためです（API の値は <code>delectus aut autem</code>）。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>起動すると API の 20 件が一覧に出れば OK です。テストは UI テスト 63 件・単体テスト 53 件がすべて成功します。失敗表示と再試行は、ステップ 3 で機内モードを使って確かめます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>最後に、完成状態でビルド・lint・単体テスト・UI テストをまとめて実行します。エミュレータは起動しておいてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 50s</span><span class="terminal__line">86 actionable tasks: 2 executed, 84 up-to-date</span><span class="terminal__line">Configuration cache entry reused.</span></pre>
+</div>
+          <p>ステップ 2 の最後の状態が完成状態です。筆者の出力は、ステップ 2 の実行の直後にもう一度実行したものです。入力が変わっていないので、多くのタスクが <code>up-to-date</code>（実行を省略）になっています。UI テストは再実行され、63 件が成功しました。結果をまとめます。</p>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト（<code>test</code>）</td><td>53 件すべて成功（08 と同じ件数）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>63 件すべて成功（08 と同じ件数）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 9 件。内訳は <code>UnusedResources</code> × 7、<code>AndroidGradlePluginVersion</code>、<code>RedundantLabel</code> です。ほかにヒント（<code>AutoboxingStateCreation</code>）が 1 件出ます。08 と同じ件数で、この項目で足したコードへの指摘はありません</td></tr>
+            <tr><td>debug APK</td><td><code>app/build/outputs/apk/debug/app-debug.apk</code> は約 14MB（<code>./gradlew clean</code> の後のビルドで 14,377,248 バイト。08 の約 12MB から増えた。縮小しない debug には、Ktor・kotlinx-serialization-json と、それらが使うライブラリがすべて入る）</td></tr>
+            </tbody>
+          </table>
+
+          <table>
+            <thead>
+            <tr><th>テストクラス</th><th>種類</th><th>件数</th><th>この項目での変更</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>TodoListViewModelTest</code></td><td>単体</td><td>11</td><td>ステップ 2 で偽のサーバーにつなぎ替えた</td></tr>
+            <tr><td>08 までのその他の単体テスト</td><td>単体</td><td>42</td><td>準備で <code>BasicsTest</code> の期待値を変えた</td></tr>
+            <tr><td>08 までの UI テスト</td><td>UI</td><td>63</td><td>ステップ 2 で偽のサーバーにつなぎ替えた</td></tr>
+            </tbody>
+          </table>
+          <p>テストの件数が 08 から増えていないのは、新しいテストを次の項目（10）で足すためです。</p>
+          <h4>機内モードで失敗表示と再試行を確かめる</h4>
+          <p>debug 版をインストールした状態で、通信できないときの表示を確かめます。まず、エミュレータを機内モードにします。機内モードにした直後は、まだ通信できることがあります。<code>ping</code> で、インターネットに出られないことを確かめてから、アプリを終了して起動し直します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 -W 2 8.8.8.8</span><span class="terminal__line">connect: Network is unreachable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>約 6 秒後に、画面の文字を取り出しました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">機内モードで起動したとき</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">ネットワークに接続できません / 再試行 / Todo</code></pre>
+</div>
+          <p>画面の中央に、警告アイコン・文言・「再試行」ボタンだけが表示されます。追加の FAB・一括削除・件数バッジは出ません。このときの例外は <code>java.net.UnknownHostException</code>（ホスト名を解決できない）で、<code>IOException</code> のサブクラスです。</p>
+          <p>次に、機内モードを解除し、<code>ping</code> が通ることを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 -W 2 8.8.8.8</span><span class="terminal__line">PING 8.8.8.8 (8.8.8.8) 56(84) bytes of data.</span><span class="terminal__line">（中略）</span><span class="terminal__line">1 packets transmitted, 1 received, 0% packet loss, time 0ms</span></pre>
+</div>
+          <p>エミュレータの <code>ping</code> は、<code>wrong data byte</code> や <code>time of day goes back</code> といった警告を出すことがあります。疎通には影響しないので、<code>1 received</code> の行で判断します。</p>
+          <p>通ることを確かめたら、画面の「再試行」を押します。数秒待ってから画面の文字を取り出すと、<code>20 件中 11 件完了 / すべて / 未完了 / 完了 / Delectus Aut Autem / …</code> と、ステップ 2 と同じ一覧に戻っていました。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">機内モードの解除を忘れない</p>
+              <p>解除しないまま「再試行」を押すと、同じ失敗表示のままです。この後の release の確認も失敗します。試したら、必ず機内モードを解除して、<code>ping</code> が通ることを確かめます。</p>
+            </div>
+          </div>
+          <h4>release ビルドでも動くことを確かめる</h4>
+          <p>release ビルドでは、R8 がコードを縮小・最適化します（01 で <code>release</code> の <code>optimization { enable = true }</code> を設定しました）。縮小で serialization や Ktor が壊れていないかを、release の APK を起動して確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:minifyReleaseWithR8</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 28s</span><span class="terminal__line">51 actionable tasks: 48 executed, 3 up-to-date</span></pre>
+</div>
+          <p>作られる <code>app/build/outputs/apk/release/app-release-unsigned.apk</code>（約 1.7MB）は、署名されていない APK です。そのままではインストールできないので、ここでは確認のためだけに、debug 用の鍵（<code>~/.android/debug.keystore</code>）で署名します。署名はプロジェクトの外の作業用ディレクトリで行い、ビルドの設定には何も足しません。配布用の署名は、後の項目で扱います。</p>
+          <p>次のコマンドの <code>build-tools/37.0.0</code> は、筆者の環境の版です。<code>~/Library/Android/sdk/build-tools/</code> にインストール済みの版に読み替えてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp app/build/outputs/apk/release/app-release-unsigned.apk &lt;作業用ディレクトリ&gt;/rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd &lt;作業用ディレクトリ&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out rel-signed.apk rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner verify --verbose rel-signed.apk</span><span class="terminal__line">Verifies</span><span class="terminal__line">Verified using v1 scheme (JAR signing): false</span><span class="terminal__line">Verified using v2 scheme (APK Signature Scheme v2): true</span><span class="terminal__line">Verified using v3 scheme (APK Signature Scheme v3): true</span><span class="terminal__line">Verified using v3.1 scheme (APK Signature Scheme v3.1): false</span><span class="terminal__line">Verified using v3.2 scheme (APK Signature Scheme v3.2): false</span><span class="terminal__line">Verified using v4 scheme (APK Signature Scheme v4): false</span><span class="terminal__line">Verified for SourceStamp: false</span><span class="terminal__line">Number of signers: 1</span></pre>
+</div>
+          <p><code>apksigner sign</code> は、成功すると何も表示しません。署名と同時に <code>rel-signed.apk.idsig</code> もできます（<code>adb install</code> の増分インストール用）。</p>
+          <p>エミュレータには、ここまでで入れた debug 版が入っています。この手順の release 版は debug 用の鍵で署名したので、debug 版と署名の鍵が同じで、アンインストールしなくても <code>adb install</code> で上書きできました。ここでは debug 版のデータを残さず、まっさらな状態で release 版を確かめるために、先に debug 版をアンインストールします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm list packages com.handson.android01</span><span class="terminal__line">package:com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb install rel-signed.apk</span><span class="terminal__line">Serving...</span><span class="terminal__line">All files should be loaded. Notifying the device.</span><span class="terminal__line">Performing Incremental Install</span><span class="terminal__line">Success</span><span class="terminal__line">Install command complete in 623 ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -c</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p><code>pm list packages</code> の出力で、debug 版が入っていることがわかります。<code>adb uninstall</code> の <code>Success</code> は、その debug 版を消せたという表示です。</p>
+          <p>約 6 秒後の画面は、debug と同じ一覧（<code>20 件中 11 件完了 / すべて / 未完了 / 完了 / Delectus Aut Autem / …</code>）でした。release でも、API から取得して JSON をデコードできています。<code>Delectus Aut Autem</code> を押した詳細画面も表示できました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">詳細画面（release。戻るボタンはアイコンなので文字に出ない）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">Delectus Aut Autem / 未完了 / 削除 / Todo の詳細</code></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -c &quot;FATAL EXCEPTION&quot;</span><span class="terminal__line">0</span></pre>
+</div>
+          <p>keep ルール（<code>app/src/main/keepRules/rules.keep</code>）は足していません。この環境で 1 回確かめた範囲では、<code>assembleRelease</code> の出力に R8 の警告（<code>Missing class</code> など）は出ず、release でも一覧の取得と詳細の表示が動きました。各ライブラリが R8 向けに同梱しているルールの中身までは確かめていません。確認が終わったら、作業用ディレクトリにコピーした APK と署名した APK は削除します。</p>
+          <p>確認が終わったら、エミュレータと Gradle デーモンを止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>テストの実行が <code>BUILD SUCCESSFUL</code> で終わり、UI テスト 63 件と単体テスト 53 件が成功していれば OK です。エミュレータで、機内モードではエラーと「再試行」が出て、解除後の「再試行」で一覧に戻ること、release の APK でも API の一覧が出ることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="not-covered">この項目で扱わなかったこと</h2>
+      <p><code>MockEngine</code> を使った新しいテストは、次の項目（10）で扱います。<code>TodoApi</code> の成功・HTTP エラー・壊れた JSON・タイムアウト、ViewModel の失敗と再試行、失敗表示の UI テストです。<code>expectSuccess</code> を外したときの見え方も、10 でテストを使って確かめます。</p>
+      <p>API への書き込み（POST・PUT・DELETE）、認証、自動のリトライ、接続と読み取りのタイムアウトの調整は扱っていません。キャッシュとオフライン対応、ページング、<code>Logging</code> プラグイン、Hilt などの DI（12）と Room での永続化（11）も扱っていません。CIO エンジンなど、ほかのエンジンとの比較も、ドキュメントの記述までで、実測はしていません。</p>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid09</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>INTERNET</code> を書き忘れたときに何が起き、画面に何が表示されるかを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">API の形の <code>TodoDto</code> とアプリの <code>Todo</code> を分け、<code>toTodo()</code> の 1 か所で変換した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>expectSuccess = true</code> と <code>ignoreUnknownKeys = true</code> が何のための設定かを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>CancellationException</code> を投げ直す理由と、失敗の状態を <code>SavedStateHandle</code> に保存しない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">機内モードでエラーの文言と「再試行」が出ること、解除後の「再試行」で一覧に戻ることを確かめ、機内モードを解除した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">既存のテストを <code>FakeTodoServer</code> につなぎ替え、本物の Activity を起動するテストでは <code>FakeTodoApiRule</code> を <code>RuleChain</code> の外側に置いた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>./gradlew assembleDebug lint test connectedDebugAndroidTest</code> で UI テスト 63 件・単体テスト 53 件を通し、release の APK でも一覧が出ることを確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">一覧が出ずに「予期しないエラーが発生しました」と表示される</p>
+              <p>マージ後のマニフェストに <code>INTERNET</code> 権限が無いと、<code>SecurityException</code> になり、この文言が出ます。<code>AndroidManifest.xml</code> に <code>&lt;uses-permission android:name="android.permission.INTERNET" /&gt;</code> があるか確かめます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Serializer for type argument 'TodoDto' is not found</code> で取得に失敗する</p>
+              <p><code>TodoDto</code> に <code>@Serializable</code> が付いていません。コンパイルでは気づけないので、DTO を足したら必ず付けます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Encountered an unknown key</code> で取得に失敗する</p>
+              <p>JSON に、DTO に無い項目があります。<code>Json { ignoreUnknownKeys = true }</code> にします。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Cleartext HTTP traffic to ... not permitted</code> で取得に失敗する</p>
+              <p>URL が <code>http://</code> になっています。<code>https://</code> に直します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Activity を起動する UI テストに、API の実データ（<code>Delectus Aut Autem</code>）が出て失敗する</p>
+              <p><code>FakeTodoApiRule</code> が無いか、<code>RuleChain</code> の内側に置いています。<code>RuleChain.outerRule(FakeTodoApiRule()).around(composeTestRule)</code> のように、Activity を起動するルールより外側に置きます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ViewModel の単体テストで、応答が届く前にアサートしてしまう</p>
+              <p><code>FakeTodoServer</code> に <code>dispatcher</code> を渡していません。渡さないと、<code>MockEngine</code> は別のスレッドで動き、待ち時間も実時間になります。<code>setMain</code> したものと同じテスト用ディスパッチャーを渡します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">アプリが「ネットワークに接続できません」になる</p>
+              <p>機内モードのままになっていないか確かめます。解除するコマンドは次のとおりです。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span></pre>
+</div>
+
+            </div>
+          </div>
+
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        Ktor Client（Android エンジン）と <code>ContentNegotiation</code> で、Web API から JSON を取得しました。JSON は <code>@Serializable</code> な <code>TodoDto</code> にデコードしてから、アプリの <code>Todo</code> に変換しました。
+        ViewModel では、例外の種類から画面の文言を作りました。<code>CancellationException</code> は投げ直し、失敗の状態は <code>SavedStateHandle</code> に保存しません。失敗中はエラーの文言と「再試行」を出します。
+        <code>HttpClient</code> は外から渡す形なので、<code>MockEngine</code> 入りのものと差し替えられます。この仕組みで、既存のテストを偽のサーバーへつなぎ替え、ネットワークへ出ない形にしました。機内モードで失敗表示と再試行を確かめ、release の APK でも、keep ルールを足さずに動くことを確かめました。</p>
+      <p>次の項目（10: MockEngine でネットワークのテスト）では、この偽のサーバーを使って、API・ViewModel の失敗と再試行・失敗表示のテストを、ネットワークに出ない形で書きます。</p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>android/09-ktor-serialization</code> の <code>android/09-ktor-serialization/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../08-navigation3/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">08: Navigation 3</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">10: MockEngine でネットワークのテスト</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
