@@ -1,0 +1,1248 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01: 環境構築（Android Studio・Version Catalog） | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">01</li>
+        </ol>
+        <h1 class="lesson-title">環境構築（Android Studio・Version Catalog）</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 何らかの言語でプログラミングの経験がある人。Kotlin と Android 開発は未経験でも構いません（この項目では Kotlin の文法は扱いません）</li>
+          <li class="lesson-meta__item">📋 前提: macOS、Android Studio がインストール済み（未インストールの場合はステップ 1 の手順で入れます）</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: なし（トラック最初の項目）</li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>Android アプリがビルドされる流れ（Gradle → AGP → Kotlin コンパイル → APK）を把握する</li>
+          <li>Android Studio の New Project ウィザード（Empty Activity）でプロジェクトを作り、生成されるファイルの役割を説明できる</li>
+          <li>Version Catalog（<code>gradle/libs.versions.toml</code>）にライブラリを追加し、<code>libs.xxx</code> で参照できる</li>
+          <li>Compose BOM で Compose ライブラリのバージョンをそろえる仕組みを理解する</li>
+          <li>Composable 関数を書き換え、エミュレータで表示を確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        Android トラックの最初の項目です。Android Studio でプロジェクトを作り、ビルドしてエミュレータで動かすところまでをひと通り体験します。
+        以降の項目は、ここで作るプロジェクト（Kotlin + Jetpack Compose、Version Catalog で依存を管理）を出発点に進めます。
+      </p>
+
+      <h3 id="build-flow">Android アプリがビルドされる流れ</h3>
+      <p>
+        Android アプリのビルドは、ビルドツールの Gradle が担当します。Gradle そのものは Android 専用ではありません。Android のビルド手順は、Gradle のプラグインである AGP（Android Gradle Plugin）が提供します。
+        Android Studio のビルドボタンも、内部では Gradle を呼び出しています。そのため、ターミナルから <code>./gradlew</code> を実行しても同じビルドができます。
+      </p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">./gradlew assembleDebug の流れ</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">./gradlew assembleDebug
+  ├─ Gradle Wrapper   … gradle-wrapper.properties の版の Gradle を用意して起動
+  ├─ AGP              … app/build.gradle.kts の android { } を読み、ビルド手順を組み立てる
+  ├─ Kotlin コンパイル … src/main/java/ の .kt をコンパイル（Compose コンパイラプラグイン付き）
+  ├─ リソース処理・dex 変換
+  └─ APK の作成と署名  → app/build/outputs/apk/debug/app-debug.apk</code></pre>
+</div>
+
+      <table>
+        <thead>
+        <tr><th>要素</th><th>役割</th><th>この項目での設定場所</th></tr>
+        </thead>
+        <tbody>
+        <tr><td>Gradle（Wrapper）</td><td>ビルドツール本体。<code>gradlew</code> が決まった版の Gradle を取得して実行する</td><td><code>gradle/wrapper/gradle-wrapper.properties</code></td></tr>
+        <tr><td>AGP</td><td>Android 向けのビルド手順（リソース処理、dex 変換、APK 作成など）を Gradle に追加する</td><td><code>gradle/libs.versions.toml</code> の <code>[plugins]</code></td></tr>
+        <tr><td>Kotlin / Compose コンパイラ</td><td>Kotlin のソースをコンパイルする。Compose の <code>@Composable</code> 関数は Compose コンパイラプラグインが変換する</td><td>同上（<code>kotlin-compose</code>）</td></tr>
+        <tr><td>Android SDK</td><td>コンパイル対象の Android API（<code>compileSdk</code>）や、エミュレータ、<code>adb</code> などのツール一式</td><td>Android Studio の SDK Manager</td></tr>
+        </tbody>
+      </table>
+
+      <h3 id="version-catalog">Version Catalog と Compose BOM</h3>
+      <p>
+        <strong>Version Catalog</strong> は、プロジェクトで使うライブラリとプラグインのバージョンを 1 つのファイル（<code>gradle/libs.versions.toml</code>）に集める Gradle の仕組みです。
+        ビルドスクリプトにはバージョンを直接書かず、<code>libs.androidx.core.ktx</code> のように、カタログが生成するアクセサで参照します。
+      </p>
+      <table>
+        <thead>
+        <tr><th>セクション</th><th>書く内容</th><th>参照の例</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>[versions]</code></td><td>バージョン番号に名前を付ける</td><td><code>libs.versions.kotlin.get()</code></td></tr>
+        <tr><td><code>[libraries]</code></td><td>ライブラリ（group・name・バージョン参照）</td><td><code>implementation(libs.androidx.core.ktx)</code></td></tr>
+        <tr><td><code>[plugins]</code></td><td>Gradle プラグイン（id・バージョン参照）</td><td><code>alias(libs.plugins.android.application)</code></td></tr>
+        </tbody>
+      </table>
+      <p>
+        <strong>Compose BOM</strong>（Bill of Materials）は、互いに組み合わせて動作する Compose ライブラリのバージョンの一覧です。
+        BOM を <code>platform(...)</code> で依存に加えると、<code>androidx.compose.ui:ui</code> や <code>material3</code> などは BOM が決めたバージョンで解決されます。
+        そのため、カタログの <code>[libraries]</code> では、Compose のライブラリにバージョンを書きません。BOM のバージョン（<code>composeBom</code>）を上げれば、Compose 一式がまとめて更新されます。
+      </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">使用バージョン</p>
+              <p>
+                Android Studio Rabbit 1（2026.2.1）/ AGP 9.4.1 / Gradle 9.6.0 / Kotlin 2.4.20 / Compose BOM 2026.09.00（Material3 1.4.0）/
+                compileSdk 37・targetSdk 36・minSdk 26 で作成しています。ターミナルでの動作確認には JDK 21.0.1 を使いました（Android Studio を使う場合は、同梱の JDK である JBR が使われます）。
+                バージョンは執筆時点（2026年10月）の最新安定版です。
+              </p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Android Studio の画面について</p>
+              <p>
+                Android Studio の画面の名称や配置はバージョンで変わります。本教材は Rabbit 1（2026.2.1）の公式ドキュメントに基づいて画面の操作を書いています。
+                本文のコードとコマンドの出力は、ターミナル（Gradle・<code>sdkmanager</code>・<code>adb</code> など）で実際に動かして確認したものです。
+                画面の表記が本文と違う場合は、同じ意味の項目を選んでください。
+              </p>
+            </div>
+          </div>
+
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">前提ツールを確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最初に、Android Studio と Android SDK がそろっているかを確認します。</p>
+          <p>Android Studio が未インストールの場合は、<a href="https://developer.android.com/studio">Android Studio の公式サイト</a>からダウンロードしてインストールします。初回起動時のセットアップウィザードで、Android SDK・エミュレータ・SDK のツール類が入ります。</p>
+          <p>Android Studio の <strong>SDK Manager</strong>（メニューの Tools &gt; SDK Manager、またはツールバーのアイコン）で、次のパッケージが入っていることを確認してください。</p>
+          <table>
+            <thead>
+            <tr><th>タブ</th><th>パッケージ</th><th>用途</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>SDK Platforms</td><td>Android API 37 と API 36</td><td><code>compileSdk</code>（37）と、エミュレータで動かす Android（36）</td></tr>
+            <tr><td>SDK Tools</td><td>Android SDK Build-Tools、Android SDK Platform-Tools、Android Emulator、Android SDK Command-line Tools</td><td>ビルド、<code>adb</code>、エミュレータ、<code>sdkmanager</code> / <code>avdmanager</code></td></tr>
+            </tbody>
+            </table>
+          <p>
+            ここからは、ターミナルでも確認します。ターミナルから Gradle を実行するには、JDK と、環境変数 <code>ANDROID_HOME</code>（Android SDK の場所）が必要です。
+            Android SDK の場所は、SDK Manager の画面上部の「Android SDK Location」で確認できます。macOS の既定は <code>~/Library/Android/sdk</code> です。
+          </p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> java -version</span><span class="terminal__line">java version &quot;21.0.1&quot; 2023-10-17 LTS</span><span class="terminal__line">Java(TM) SE Runtime Environment (build 21.0.1+12-LTS-29)</span><span class="terminal__line">Java HotSpot(TM) 64-Bit Server VM (build 21.0.1+12-LTS-29, mixed mode, sharing)</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo $ANDROID_HOME</span><span class="terminal__line">/Users/you/Library/Android/sdk</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb --version</span><span class="terminal__line">Android Debug Bridge version 1.0.41</span><span class="terminal__line">Version 37.0.0-14910828</span><span class="terminal__line">（以降の行は省略）</span></pre>
+</div>
+
+          <ul>
+            <li><code>java -version</code>: AGP 9.4 の実行には JDK 17 以上が必要です。執筆環境では JDK 21.0.1 を使いました。</li>
+            <li><code>ANDROID_HOME</code>: 未設定の場合は、<code>~/.zshrc</code> に <code>export ANDROID_HOME="$HOME/Library/Android/sdk"</code> を追加してターミナルを開き直します。<code>ANDROID_SDK_ROOT</code> は設定しなくても動作しました。</li>
+            <li><code>adb</code>: エミュレータや実機を操作するツールです。Platform-Tools に含まれ、場所は <code>$ANDROID_HOME/platform-tools/adb</code> です。<code>PATH</code> に入っていない場合は、<code>export PATH="$ANDROID_HOME/platform-tools:$PATH"</code> を追加します。</li>
+          </ul>
+          <p>SDK のコマンドラインツール <code>sdkmanager</code> は、<code>PATH</code> を設定しなくてもフルパスで呼べます。インストール済みのパッケージを一覧で確認します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager --list_installed | grep -E &quot;build-tools;3[67]|platforms;android-3[67]|platform-tools|emulator&quot;</span><span class="terminal__line">  build-tools;36.0.0                                       | 36.0.0            | Android SDK Build-Tools 36                 | build-tools/36.0.0</span><span class="terminal__line">  build-tools;37.0.0                                       | 37.0.0            | Android SDK Build-Tools 37                 | build-tools/37.0.0</span><span class="terminal__line">  emulator                                                 | 36.4.10           | Android Emulator                           | emulator</span><span class="terminal__line">  platform-tools                                           | 37.0.0            | Android SDK Platform-Tools                 | platform-tools</span><span class="terminal__line">  platforms;android-36                                     | 2                 | Android SDK Platform 36                    | platforms/android-36</span><span class="terminal__line">  platforms;android-37.0                                   | 2                 | Android SDK Platform 37.0                  | platforms/android-37.0</span><span class="terminal__line">  platforms;android-37.2                                   | 1                 | Android SDK Platform 37.2                  | platforms/android-37.2</span></pre>
+</div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">SDK XML version の警告は無視してよい</p>
+              <p><code>sdkmanager</code> を実行すると、<code>Warning: This version only understands SDK XML versions up to 3 but an SDK XML file of version 4 was encountered.</code> と表示されることがあります。Android Studio とコマンドラインツールの公開時期がずれているときの警告です。執筆環境では、この警告が出てもパッケージの一覧表示とインストールは成功しました。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">SDK のライセンス</p>
+              <p>SDK のパッケージを入れるには、ライセンスへの同意が必要です。Android Studio の SDK Manager では、インストール時に同意のダイアログが表示されます。ターミナルでは <code>sdkmanager --licenses</code> で未同意のライセンスにまとめて同意できます。執筆環境では同意済みだったため、次の出力になりました。ステップ 6 では、インストール時の確認に <code>echo y |</code> で答える方法を使います。</p>
+            </div>
+          </div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses</span><span class="terminal__line">（警告と進捗表示は省略）</span><span class="terminal__line">All SDK package licenses accepted.</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>java -version</code> が 17 以上のバージョンを、<code>echo $ANDROID_HOME</code> が SDK のパスを、<code>adb --version</code> がバージョンを表示すれば準備完了です。あわせて <code>sdkmanager --list_installed</code> の一覧に <code>platforms;android-37.0</code>（または <code>android-37</code> 系）と <code>platforms;android-36</code> があることを確認してください。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">Empty Activity でプロジェクトを作る</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Android Studio で新しいプロジェクトを作ります。起動画面の <strong>New Project</strong>（またはメニューの File &gt; New &gt; New Project）を選び、テンプレートの一覧から <strong>Empty Activity</strong> を選んで Next を押します。次の画面で、以下のとおり入力して Finish を押します。</p>
+          <table>
+            <thead>
+            <tr><th>項目</th><th>入力値</th><th>プロジェクト内での反映先</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>Name</td><td><code>HandsonAndroid01</code></td><td><code>settings.gradle.kts</code> の <code>rootProject.name</code>、<code>strings.xml</code> の <code>app_name</code>、テーマ名 <code>HandsonAndroid01Theme</code></td></tr>
+            <tr><td>Package name</td><td><code>com.handson.android01</code></td><td><code>app/build.gradle.kts</code> の <code>namespace</code> と <code>applicationId</code>、Kotlin のパッケージ</td></tr>
+            <tr><td>Save location</td><td>任意の作業ディレクトリ</td><td>—</td></tr>
+            <tr><td>Minimum API level</td><td>API 26</td><td><code>app/build.gradle.kts</code> の <code>minSdk = 26</code></td></tr>
+            <tr><td>Language</td><td>Kotlin</td><td>アプリのソースコードを Kotlin で書く（<code>*.kt</code>）</td></tr>
+            <tr><td>Build configuration language</td><td>Kotlin DSL（<code>build.gradle.kts</code>）</td><td>ビルドスクリプトが <code>*.gradle.kts</code> になる</td></tr>
+            </tbody>
+          </table>
+          <p>Finish を押すと、Android Studio がプロジェクトを作り、Gradle の同期（Sync）を始めます。初回は Gradle 本体と依存ライブラリをダウンロードするので、完了まで待ちます。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ウィザードの生成内容は、Studio のバージョンで変わりうる</p>
+              <p>本教材の全文は現行テンプレート（Rabbit 1）のソースに合わせて作成しました。ただし、Studio のバージョンでウィザードの出力は変わりうるため、ウィザードの出力と一致するかは未確認です。全文を載せたファイルは、自分の生成物と差分があれば教材側の内容に置き換えてください。</p>
+            </div>
+          </div>
+
+          <p>生成される主なファイルと役割は次のとおりです。</p>
+
+          <table>
+            <thead>
+            <tr><th>ファイル</th><th>役割</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>settings.gradle.kts</code></td><td>プロジェクト全体の設定。プラグインと依存ライブラリの取得元（リポジトリ）、プロジェクト名、含めるモジュール（<code>:app</code>）</td></tr>
+            <tr><td><code>build.gradle.kts</code>（ルート）</td><td>プロジェクトで使うプラグインを宣言する（適用は各モジュールで行うため <code>apply false</code>）</td></tr>
+            <tr><td><code>gradle/libs.versions.toml</code></td><td>Version Catalog。ライブラリ・プラグインとそのバージョン</td></tr>
+            <tr><td><code>gradle/wrapper/gradle-wrapper.properties</code></td><td>Gradle Wrapper が使う Gradle の版（<code>gradle-9.6.0-bin.zip</code>）</td></tr>
+            <tr><td><code>gradlew</code> / <code>gradlew.bat</code> / <code>gradle/wrapper/gradle-wrapper.jar</code></td><td>Gradle Wrapper 本体。<code>./gradlew</code> で実行する</td></tr>
+            <tr><td><code>gradle.properties</code></td><td>Gradle の動作設定（JVM のメモリ、configuration cache、Kotlin のコードスタイルなど）</td></tr>
+            <tr><td><code>local.properties</code></td><td>Android SDK の場所（<code>sdk.dir</code>）。Android Studio が作る、マシン固有のファイル</td></tr>
+            <tr><td><code>app/build.gradle.kts</code></td><td>アプリモジュールの設定。SDK のバージョン、アプリ ID、依存ライブラリ</td></tr>
+            <tr><td><code>app/src/main/AndroidManifest.xml</code></td><td>アプリの構成（アイコン、テーマ、起動する Activity）</td></tr>
+            <tr><td><code>app/src/main/java/com/handson/android01/MainActivity.kt</code></td><td>起動時に表示される画面。Compose で UI を組み立てる</td></tr>
+            <tr><td><code>app/src/main/java/com/handson/android01/ui/theme/</code></td><td><code>Color.kt</code>（色）、<code>Type.kt</code>（文字のスタイル）、<code>Theme.kt</code>（アプリのテーマ）</td></tr>
+            <tr><td><code>app/src/main/res/</code></td><td>リソース。<code>values/strings.xml</code>（アプリ名）、<code>values/themes.xml</code>、ランチャーアイコン、バックアップ設定（<code>xml/</code>）</td></tr>
+            <tr><td><code>app/src/test/.../ExampleUnitTest.kt</code></td><td>PC の JVM で動く単体テスト</td></tr>
+            <tr><td><code>app/src/androidTest/.../ExampleInstrumentedTest.kt</code></td><td>エミュレータや実機の上で動く計装テスト</td></tr>
+            <tr><td><code>.gitignore</code> / <code>app/.gitignore</code></td><td>ビルド成果物（<code>build/</code>）や <code>local.properties</code> などを Git の対象外にする</td></tr>
+            </tbody>
+          </table>
+
+          <p>ここからは、中心になるファイルを全文で見ていきます。まず <code>settings.gradle.kts</code> です。プラグイン（<code>pluginManagement</code>）と依存ライブラリ（<code>dependencyResolutionManagement</code>）を、どのリポジトリから取得するかを決めています。Google の Maven リポジトリからは、<code>com.android</code>・<code>com.google</code>・<code>androidx</code> で始まるグループだけを取得するよう絞り込んでいます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">pluginManagement {
+    repositories {
+        google {
+            content {
+                includeGroupByRegex(&quot;com\\.android.*&quot;)
+                includeGroupByRegex(&quot;com\\.google.*&quot;)
+                includeGroupByRegex(&quot;androidx.*&quot;)
+            }
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google {
+            content {
+                includeGroupByRegex(&quot;com\\.android.*&quot;)
+                includeGroupByRegex(&quot;com\\.google.*&quot;)
+                includeGroupByRegex(&quot;androidx.*&quot;)
+            }
+        }
+        mavenCentral()
+    }
+}
+
+rootProject.name = &quot;HandsonAndroid01&quot;
+include(&quot;:app&quot;)</code></pre>
+</div>
+
+          <p>ルートの <code>build.gradle.kts</code> です。ここではプラグインを <code>apply false</code> 付きで宣言するだけです。実際の適用は <code>app/build.gradle.kts</code> が行います。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">// Top-level build file where you can add configuration options common to all subprojects/modules.
+plugins {
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.kotlin.compose) apply false
+}</code></pre>
+</div>
+
+          <p>Version Catalog の <code>gradle/libs.versions.toml</code> です（作成直後の状態。ステップ 4 で 1 行ずつ追加します）。Compose のライブラリ（<code>androidx-ui</code> や <code>androidx-material3</code>）には <code>version.ref</code> がありません。バージョンは Compose BOM（<code>androidx-compose-bom</code>）が決めます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TOML</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-toml">[versions]
+agp = &quot;9.4.1&quot;
+kotlin = &quot;2.4.20&quot;
+coreKtx = &quot;1.19.1&quot;
+junit = &quot;4.13.2&quot;
+junitVersion = &quot;1.3.0&quot;
+espressoCore = &quot;3.7.0&quot;
+lifecycleRuntimeKtx = &quot;2.11.0&quot;
+activityCompose = &quot;1.13.0&quot;
+composeBom = &quot;2026.09.00&quot;
+
+[libraries]
+androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }
+junit = { group = &quot;junit&quot;, name = &quot;junit&quot;, version.ref = &quot;junit&quot; }
+androidx-junit = { group = &quot;androidx.test.ext&quot;, name = &quot;junit&quot;, version.ref = &quot;junitVersion&quot; }
+androidx-espresso-core = { group = &quot;androidx.test.espresso&quot;, name = &quot;espresso-core&quot;, version.ref = &quot;espressoCore&quot; }
+androidx-lifecycle-runtime-ktx = { group = &quot;androidx.lifecycle&quot;, name = &quot;lifecycle-runtime-ktx&quot;, version.ref = &quot;lifecycleRuntimeKtx&quot; }
+androidx-activity-compose = { group = &quot;androidx.activity&quot;, name = &quot;activity-compose&quot;, version.ref = &quot;activityCompose&quot; }
+androidx-compose-bom = { group = &quot;androidx.compose&quot;, name = &quot;compose-bom&quot;, version.ref = &quot;composeBom&quot; }
+androidx-ui = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui&quot; }
+androidx-ui-graphics = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-graphics&quot; }
+androidx-ui-tooling = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-tooling&quot; }
+androidx-ui-tooling-preview = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-tooling-preview&quot; }
+androidx-ui-test-junit4 = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-junit4&quot; }
+androidx-ui-test-manifest = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-manifest&quot; }
+androidx-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }
+
+[plugins]
+android-application = { id = &quot;com.android.application&quot;, version.ref = &quot;agp&quot; }
+kotlin-compose = { id = &quot;org.jetbrains.kotlin.plugin.compose&quot;, version.ref = &quot;kotlin&quot; }</code></pre>
+</div>
+
+          <p>アプリモジュールの <code>app/build.gradle.kts</code> です（作成直後の状態）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+}
+
+android {
+    namespace = &quot;com.handson.android01&quot;
+    compileSdk {
+        version = release(37)
+    }
+
+    defaultConfig {
+        applicationId = &quot;com.handson.android01&quot;
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 1
+        versionName = &quot;1.0&quot;
+
+        testInstrumentationRunner = &quot;androidx.test.runner.AndroidJUnitRunner&quot;
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            proguardFiles(
+                getDefaultProguardFile(&quot;proguard-android-optimize.txt&quot;),
+                &quot;proguard-rules.pro&quot;,
+            )
+        }
+    }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    buildFeatures {
+        compose = true
+    }
+}
+
+dependencies {
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.activity.compose)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.ui)
+    implementation(libs.androidx.ui.graphics)
+    implementation(libs.androidx.ui.tooling.preview)
+    implementation(libs.androidx.material3)
+    testImplementation(libs.junit)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.tooling)
+    debugImplementation(libs.androidx.ui.test.manifest)
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>compileSdk { version = release(37) }</code>: コンパイルに使う Android API のバージョンです。新しい API を使えるかどうかは、この値で決まります。</li>
+            <li><code>minSdk = 26</code>: インストールできる最も古い Android のバージョン（Android 8.0）です。</li>
+            <li><code>targetSdk = 36</code>: アプリが動作確認済みとして宣言する Android のバージョンです。OS はこの値を見て、互換動作を切り替えます。</li>
+            <li><code>buildFeatures { compose = true }</code>: Jetpack Compose を有効にします。</li>
+            <li><code>implementation(platform(libs.androidx.compose.bom))</code>: Compose BOM を依存に加えます。続く <code>libs.androidx.ui</code> などのバージョンは BOM から決まります。</li>
+            <li><code>testImplementation</code> / <code>androidTestImplementation</code> / <code>debugImplementation</code>: それぞれ、単体テスト用・計装テスト用・デバッグビルド用だけに加える依存です。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">AGP 9 では Kotlin のプラグインを適用しない</p>
+              <p>AGP 9.0 から、Kotlin のコンパイル機能が AGP に組み込まれ（built-in Kotlin）、既定で有効になりました。そのため <code>plugins { }</code> に <code>org.jetbrains.kotlin.android</code>（<code>kotlin-android</code>）は書きません。Compose を使うために必要な Compose コンパイラプラグイン（<code>org.jetbrains.kotlin.plugin.compose</code>、カタログの <code>kotlin-compose</code>）だけを適用します。AGP 8 以前の解説記事にある <code>alias(libs.plugins.kotlin.android)</code> は、このプロジェクトでは使いません。</p>
+            </div>
+          </div>
+
+          <p>起動時に表示される画面 <code>MainActivity.kt</code> です（作成直後の状態。ステップ 5 で書き換えます）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            HandsonAndroid01Theme {
+                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding -&gt;
+                    Greeting(
+                        name = &quot;Android&quot;,
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun Greeting(name: String, modifier: Modifier = Modifier) {
+    Text(
+        text = &quot;Hello $name!&quot;,
+        modifier = modifier
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+fun GreetingPreview() {
+    HandsonAndroid01Theme {
+        Greeting(&quot;Android&quot;)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>ComponentActivity</code>: 画面の土台となる Activity です。<code>AndroidManifest.xml</code> で起動時の Activity として登録されています。</li>
+            <li><code>enableEdgeToEdge()</code>: ステータスバーやナビゲーションバーの裏側まで画面を広げて描画します。</li>
+            <li><code>setContent { ... }</code>: この中に Compose で UI を書きます。</li>
+            <li><code>Scaffold</code>: 画面の基本レイアウトです。<code>innerPadding</code> はシステムバーと重ならないための余白で、<code>Modifier.padding(innerPadding)</code> で中身に渡しています。</li>
+            <li><code>@Composable</code>: UI を組み立てる関数（Composable 関数）であることを示します。<code>@Preview</code> は、Android Studio のプレビューに表示する関数に付けます。</li>
+          </ul>
+          <p>テーマを決める <code>Theme.kt</code> です。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/theme/Theme.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.theme
+
+import android.os.Build
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
+
+private val DarkColorScheme = darkColorScheme(
+    primary = Purple80,
+    secondary = PurpleGrey80,
+    tertiary = Pink80
+)
+
+private val LightColorScheme = lightColorScheme(
+    primary = Purple40,
+    secondary = PurpleGrey40,
+    tertiary = Pink40
+)
+
+@Composable
+fun HandsonAndroid01Theme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    // Dynamic color is available on Android 12+
+    dynamicColor: Boolean = true,
+    content: @Composable () -&gt; Unit
+) {
+    val colorScheme = when {
+        dynamicColor &amp;&amp; Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.S -&gt; {
+            val context = LocalContext.current
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+
+        darkTheme -&gt; DarkColorScheme
+        else -&gt; LightColorScheme
+    }
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = Typography,
+        content = content
+    )
+}</code></pre>
+</div>
+
+          <p><code>dynamicColor</code> が <code>true</code> で、かつ Android 12（<code>Build.VERSION_CODES.S</code>）以上の端末では、壁紙から作られる配色（ダイナミックカラー）を使います。それより古い端末では、<code>Color.kt</code> の色で作った <code>LightColorScheme</code> / <code>DarkColorScheme</code> を使います。</p>
+          <p>そのほかのファイル（<code>gradle.properties</code>、<code>AndroidManifest.xml</code>、<code>.gitignore</code>）も全文を載せます。<code>org.gradle.configuration-cache=true</code> は、2 回目以降のビルドを速くする設定です。AndroidX（<code>android.useAndroidX</code>）と R クラスの分離（<code>android.nonTransitiveRClass</code>）は、AGP 9 では既定で有効なので書いていません。<code>AndroidManifest.xml</code> の <code>adjustResize</code> は、キーボードが表示されたときに入力欄が隠れないよう画面を縮める設定です。</p>
+<details class="disclosure">
+  <summary class="disclosure__summary">gradle.properties / AndroidManifest.xml / .gitignore / gradle-wrapper.properties の全文を見る</summary>
+  <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Properties</span>
+    <span class="code-block__filename">gradle.properties</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-properties"># Project-wide Gradle settings.
+# IDE (e.g. Android Studio) users:
+# Gradle settings configured through the IDE *will override*
+# any settings specified in this file.
+# For more details on how to configure your build environment visit
+# http://www.gradle.org/docs/current/userguide/build_environment.html
+# Specifies the JVM arguments used for the daemon process.
+# The setting is particularly useful for tweaking memory settings.
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+# When configured, Gradle will run in incubating parallel mode.
+# This option should only be used with decoupled projects. For more details, visit
+# https://developer.android.com/r/tools/gradle-multi-project-decoupling
+# org.gradle.parallel=true
+# Reuses the task graph across builds to speed up repeated builds
+org.gradle.configuration-cache=true
+# Kotlin code style for this project: &quot;official&quot; or &quot;obsolete&quot;:
+kotlin.code.style=official</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">XML</span>
+    <span class="code-block__filename">app/src/main/AndroidManifest.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-xml">&lt;?xml version=&quot;1.0&quot; encoding=&quot;utf-8&quot;?&gt;
+&lt;manifest xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;
+    xmlns:tools=&quot;http://schemas.android.com/tools&quot;&gt;
+
+    &lt;application
+        android:allowBackup=&quot;true&quot;
+        android:dataExtractionRules=&quot;@xml/data_extraction_rules&quot;
+        android:fullBackupContent=&quot;@xml/backup_rules&quot;
+        android:icon=&quot;@mipmap/ic_launcher&quot;
+        android:label=&quot;@string/app_name&quot;
+        android:roundIcon=&quot;@mipmap/ic_launcher_round&quot;
+        android:supportsRtl=&quot;true&quot;
+        android:theme=&quot;@style/Theme.HandsonAndroid01&quot;
+        tools:targetApi=&quot;31&quot;&gt;
+        &lt;activity
+            android:name=&quot;.MainActivity&quot;
+            android:exported=&quot;true&quot;
+            android:label=&quot;@string/app_name&quot;
+            android:theme=&quot;@style/Theme.HandsonAndroid01&quot;
+            android:windowSoftInputMode=&quot;adjustResize&quot;&gt;
+            &lt;intent-filter&gt;
+                &lt;action android:name=&quot;android.intent.action.MAIN&quot; /&gt;
+
+                &lt;category android:name=&quot;android.intent.category.LAUNCHER&quot; /&gt;
+            &lt;/intent-filter&gt;
+        &lt;/activity&gt;
+    &lt;/application&gt;
+
+&lt;/manifest&gt;</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">.gitignore</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+.kotlin/</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Properties</span>
+    <span class="code-block__filename">gradle/wrapper/gradle-wrapper.properties</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-properties">distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-9.6.0-bin.zip
+networkTimeout=10000
+retries=0
+retryBackOffMs=500
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists</code></pre>
+</div>
+
+  </div>
+</details>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>local.properties</code> はコミットしない</p>
+              <p>Android Studio は、Android SDK の場所を <code>local.properties</code> の <code>sdk.dir</code> に書き込みます。パスはマシンごとに違うので、Git にコミットしません（ルートの <code>.gitignore</code> に <code>/local.properties</code> が入っています）。ターミナルから Gradle を実行する場合は、<code>local.properties</code> が無くても、環境変数 <code>ANDROID_HOME</code> から SDK を見つけられます。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>プロジェクトのルートに <code>settings.gradle.kts</code>・<code>build.gradle.kts</code>・<code>gradle/libs.versions.toml</code>・<code>gradlew</code> があり、<code>app/build.gradle.kts</code> の <code>minSdk</code> が <code>26</code>、<code>namespace</code> が <code>com.handson.android01</code> になっていれば OK です。ターミナルでは、プロジェクトのルートで以降の <code>./gradlew</code> を実行します。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">ビルド・lint・テストを実行する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>プロジェクトをビルドします。Android Studio では Build &gt; Make Project でビルドできます。ここでは結果を確かめやすいように、ターミナルで同じビルドを実行します。<code>assembleDebug</code> は、デバッグ版の APK を作るタスクです。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">Reusing configuration cache.</span><span class="terminal__line">&gt; Task :app:preBuild UP-TO-DATE</span><span class="terminal__line">&gt; Task :app:generateDebugAssets UP-TO-DATE</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:compileDebugKotlin</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:stripDebugDebugSymbols</span><span class="terminal__line">Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so. Run with --info option to learn more.</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:packageDebug</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 8s</span><span class="terminal__line">36 actionable tasks: 36 executed</span><span class="terminal__line">Configuration cache entry reused.</span></pre>
+</div>
+
+          <p>出力は一部を省略しています。<code>&gt; Task :app:compileDebugKotlin</code> が Kotlin のコンパイル、<code>packageDebug</code> が APK の作成です。<code>BUILD SUCCESSFUL in 8s</code> がビルドの成功と所要時間を表します。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">初回のビルドは時間がかかる</p>
+              <p>初回は Gradle デーモンの起動と、AGP・Kotlin・AndroidX などの依存ライブラリのダウンロードが入るため、時間がかかります。ダウンロードにかかる時間は回線の速さによって変わり、数分かかることもあります。執筆環境では依存ライブラリを取得済みだったため 8 秒でした。2 回目以降はダウンロード済みのものを使い、変更のあったタスクだけを実行するので短くなります。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Unable to strip</code> の警告は失敗ではない</p>
+              <p><code>Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so.</code> は、依存ライブラリに含まれるネイティブライブラリからデバッグ情報を取り除けなかった、という警告です。ライブラリはそのまま APK に入り、ビルドは成功します。無視して構いません。</p>
+            </div>
+          </div>
+
+          <p>できあがった APK を確認します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -l app/build/outputs/apk/debug/app-debug.apk</span><span class="terminal__line">-rw-r--r--  1 you  staff  11682451 10月  3 15:31 app/build/outputs/apk/debug/app-debug.apk</span></pre>
+</div>
+
+          <p>デバッグ版の APK は約 11.7 MB（11,682,451 バイト）でした。デバッグ版は最適化や縮小をしていないため、リリース版より大きくなります。</p>
+          <p>続いて、静的解析の lint と単体テストを実行します。Android Studio の Code &gt; Inspect Code に相当するのが <code>lint</code> です。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew lint</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:lintReportDebug</span><span class="terminal__line">Wrote HTML report to file:///path/to/01-setup/app/build/reports/lint-results-debug.html</span><span class="terminal__line">Wrote SARIF report to file:///path/to/01-setup/app/build/reports/lint-results-debug.sarif</span><span class="terminal__line"></span><span class="terminal__line">&gt; Task :app:lintDebug</span><span class="terminal__line">&gt; Task :app:lint</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 14s</span><span class="terminal__line">27 actionable tasks: 10 executed, 17 up-to-date</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew test</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:testDebugUnitTest</span><span class="terminal__line">&gt; Task :app:test</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 3s</span><span class="terminal__line">24 actionable tasks: 5 executed, 19 up-to-date</span></pre>
+</div>
+
+          <p><code>lint</code> は成功しますが、HTML のレポートには警告が 6 件出ます（<code>OldTargetApi</code>、<code>RedundantLabel</code>、<code>ObsoleteSdkInt</code>、<code>MonochromeLauncherIcon</code> の 2 件、<code>AndroidGradlePluginVersion</code>）。今は無視してよく、02 以降で扱います。<code>lint</code> の結果は HTML のレポートとして <code>app/build/reports/lint-results-debug.html</code> に書き出されます。<code>test</code> は <code>app/src/test/</code> の <code>ExampleUnitTest</code>（<code>2 + 2</code> が <code>4</code> であることを確かめるだけのテスト）を PC の JVM で実行します。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Gradle と AGP のバージョンの対応</p>
+              <p>AGP には、動作に必要な Gradle の最低バージョンがあります。AGP 9.4 の最低バージョンは Gradle 9.6.0 です。Wrapper の <code>distributionUrl</code>（<code>gradle-9.6.0-bin.zip</code>）がこれより古いと、ビルドが始まりません。AGP を上げるときは、<code>gradle-wrapper.properties</code> の Gradle も合わせて確認してください。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>./gradlew assembleDebug</code>・<code>./gradlew lint</code>・<code>./gradlew test</code> がすべて <code>BUILD SUCCESSFUL</code> で終わり、<code>app/build/outputs/apk/debug/app-debug.apk</code> ができていれば成功です。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">Version Catalog にライブラリを追加する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Version Catalog にライブラリを 1 つ追加して、カタログの使い方を確かめます。追加するのは、Kotlin の非同期処理ライブラリ <code>kotlinx-coroutines-android</code>（1.11.0）です。06 以降の項目で使います。</p>
+          <p>まず <code>gradle/libs.versions.toml</code> の <code>[versions]</code> にバージョンを、<code>[libraries]</code> にライブラリを追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  lifecycleRuntimeKtx = &quot;2.11.0&quot;</span><span class="diff-line">  activityCompose = &quot;1.13.0&quot;</span><span class="diff-line">  composeBom = &quot;2026.09.00&quot;</span><span class="diff-line diff-line--add">+ kotlinxCoroutines = &quot;1.11.0&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  androidx-ui-test-junit4 = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-junit4&quot; }</span><span class="diff-line">  androidx-ui-test-manifest = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui-test-manifest&quot; }</span><span class="diff-line">  androidx-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }</span><span class="diff-line diff-line--add">+ kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  </span><span class="diff-line">  [plugins]</span><span class="diff-line">  android-application = { id = &quot;com.android.application&quot;, version.ref = &quot;agp&quot; }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>次に、<code>app/build.gradle.kts</code> の <code>dependencies</code> で参照します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.ui.graphics)</span><span class="diff-line">      implementation(libs.androidx.ui.tooling.preview)</span><span class="diff-line">      implementation(libs.androidx.material3)</span><span class="diff-line diff-line--add">+     implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">      androidTestImplementation(platform(libs.androidx.compose.bom))</span><span class="diff-line">      androidTestImplementation(libs.androidx.junit)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>Android Studio では、カタログやビルドスクリプトを変更すると、同期を促す表示がエディタの上部に出ます。Sync Now を押して同期してください。同期が終わると、<code>libs.kotlinx.coroutines.android</code> を補完できるようになります。</p>
+          <p>カタログのキーは、次の規則でアクセサに変換されます。</p>
+          <table>
+            <thead>
+            <tr><th>カタログでの書き方</th><th>ビルドスクリプトでの参照</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>[libraries]</code> の <code>kotlinx-coroutines-android</code></td><td><code>libs.kotlinx.coroutines.android</code></td></tr>
+            <tr><td><code>[libraries]</code> の <code>androidx-compose-bom</code></td><td><code>libs.androidx.compose.bom</code></td></tr>
+            <tr><td><code>[plugins]</code> の <code>android-application</code></td><td><code>libs.plugins.android.application</code></td></tr>
+            <tr><td><code>[versions]</code> の <code>kotlinxCoroutines</code></td><td><code>libs.versions.kotlinxCoroutines.get()</code>（値の文字列を取り出す）</td></tr>
+            </tbody>
+          </table>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">キーはハイフン区切り、参照はドット区切り</p>
+              <p><code>[libraries]</code> と <code>[plugins]</code> のキーは <code>-</code>（ハイフン）で区切って書き、参照するときは <code>.</code>（ドット）で区切ります。<code>[versions]</code> のキーは、このプロジェクトではキャメルケース（<code>kotlinxCoroutines</code>）で書き、<code>libs.versions.kotlinxCoroutines.get()</code> で値を取り出します。値の取り出しはステップ 5 で使います。</p>
+            </div>
+          </div>
+
+          <p>ビルドして、依存が解決されることを確かめます。<code>dependencies</code> タスクに、Android の構成名（<code>debugRuntimeClasspath</code> = デバッグ版の実行時に使う依存）を指定すると、依存の一覧をツリーで表示できます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:dependencies --configuration debugRuntimeClasspath</span><span class="terminal__line"></span><span class="terminal__line">&gt; Task :app:dependencies</span><span class="terminal__line"></span><span class="terminal__line">------------------------------------------------------------</span><span class="terminal__line">Project &#x27;:app&#x27;</span><span class="terminal__line">------------------------------------------------------------</span><span class="terminal__line"></span><span class="terminal__line">debugRuntimeClasspath - Runtime classpath of &#x27;/debug&#x27;.</span><span class="terminal__line">（中略）</span><span class="terminal__line">+--- androidx.core:core-ktx:1.19.1 (*)</span><span class="terminal__line">+--- androidx.lifecycle:lifecycle-runtime-ktx:2.11.0 (*)</span><span class="terminal__line">+--- androidx.activity:activity-compose:1.13.0 (*)</span><span class="terminal__line">+--- androidx.compose:compose-bom:2026.09.00</span><span class="terminal__line">（中略）</span><span class="terminal__line">+--- androidx.compose.ui:ui -&gt; 1.12.1 (*)</span><span class="terminal__line">+--- androidx.compose.ui:ui-graphics -&gt; 1.12.1 (*)</span><span class="terminal__line">+--- androidx.compose.ui:ui-tooling-preview -&gt; 1.12.1 (*)</span><span class="terminal__line">+--- androidx.compose.material3:material3 -&gt; 1.4.0 (*)</span><span class="terminal__line">\--- org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0 (*)</span></pre>
+</div>
+
+          <p>最後の行に <code>kotlinx-coroutines-android:1.11.0</code> が出ていれば、カタログの追加が反映されています。<code>androidx.compose.ui:ui -&gt; 1.12.1</code> や <code>material3 -&gt; 1.4.0</code> の <code>-&gt;</code> の右側は、Compose BOM 2026.09.00 によって決まったバージョンです。カタログにはバージョンを書いていないのに、BOM の値で解決されていることが分かります。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>dependencies</code> はモジュールを指定して実行する</p>
+              <p><code>./gradlew dependencies --configuration debugRuntimeClasspath</code> のようにモジュール名（<code>:app</code>）を付けずに実行すると、ルートプロジェクトが対象になります。その結果、<code>configuration 'debugRuntimeClasspath' not found</code> で失敗します。<code>debugRuntimeClasspath</code> はアプリモジュールにある構成なので、<code>:app:dependencies</code> と指定します。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>./gradlew assembleDebug</code> が成功し、<code>./gradlew :app:dependencies --configuration debugRuntimeClasspath</code> の出力に <code>org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0</code> が含まれていれば OK です。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">画面を変更して Preview で確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>画面に表示する内容を変えます。「Hello, Compose!」と、使っている Kotlin と Compose BOM のバージョンを 2 行で表示します。</p>
+          <p>バージョンは、Version Catalog の値をアプリへ埋め込んで表示します。カタログの値を使うので、バージョンをコードとカタログで二重管理しなくて済みます。値の埋め込みでは、ビルドのたびに生成されるクラス <code>BuildConfig</code> を使います。</p>
+          <p><code>app/build.gradle.kts</code> を次のように変更します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          versionName = &quot;1.0&quot;</span><span class="diff-line">  </span><span class="diff-line">          testInstrumentationRunner = &quot;androidx.test.runner.AndroidJUnitRunner&quot;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         // AGP 8.0 以降は BuildConfig の生成が既定で無効（AGP 9 も同じ）。カタログの値を埋め込む</span><span class="diff-line diff-line--add">+         buildConfigField(&quot;String&quot;, &quot;KOTLIN_VERSION&quot;, &quot;\&quot;${libs.versions.kotlin.get()}\&quot;&quot;)</span><span class="diff-line diff-line--add">+         buildConfigField(&quot;String&quot;, &quot;COMPOSE_BOM_VERSION&quot;, &quot;\&quot;${libs.versions.composeBom.get()}\&quot;&quot;)</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      buildTypes {</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">      buildFeatures {</span><span class="diff-line">          compose = true</span><span class="diff-line diff-line--add">+         buildConfig = true</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>buildConfigField("String", "KOTLIN_VERSION", ...)</code>: <code>BuildConfig</code> クラスに <code>String</code> 型の定数 <code>KOTLIN_VERSION</code> を追加します。3 つ目の引数は Kotlin のコードとしてそのまま埋め込まれるので、文字列にするために <code>\"</code> で引用符を付けています。</li>
+            <li><code>libs.versions.kotlin.get()</code> / <code>libs.versions.composeBom.get()</code>: カタログの <code>[versions]</code> から値（<code>2.4.20</code>、<code>2026.09.00</code>）を取り出します。</li>
+            <li><code>buildConfig = true</code>: <code>BuildConfig</code> クラスの生成を有効にします。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">AGP 8.0 以降は <code>BuildConfig</code> の生成が既定で無効</p>
+              <p>AGP 8.0 以降は <code>buildFeatures.buildConfig</code> の既定値が <code>false</code> です（AGP 9 も同じ）。<code>buildConfigField</code> を書いても、<code>buildConfig = true</code> を書かなければ <code>BuildConfig</code> クラスは生成されません。</p>
+            </div>
+          </div>
+
+          <p>続いて <code>MainActivity.kt</code> の <code>Greeting</code> を書き換えます。<code>name</code> 引数をなくし、<code>Column</code> で 2 つの <code>Text</code> を縦に並べます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.activity.ComponentActivity</span><span class="diff-line">  import androidx.activity.compose.setContent</span><span class="diff-line">  import androidx.activity.enableEdgeToEdge</span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.layout.Arrangement</span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.layout.Column</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxSize</span><span class="diff-line">  import androidx.compose.foundation.layout.padding</span><span class="diff-line">  import androidx.compose.material3.Scaffold</span><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line">  import androidx.compose.ui.tooling.preview.Preview</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.unit.dp</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  </span><span class="diff-line">  class MainActivity : ComponentActivity() {</span><span class="diff-line">  ...</span><span class="diff-line">          setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line">                  Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding -&gt;</span><span class="diff-line diff-line--remove">-                     Greeting(</span><span class="diff-line diff-line--remove">-                         name = &quot;Android&quot;,</span><span class="diff-line diff-line--remove">-                         modifier = Modifier.padding(innerPadding)</span><span class="diff-line diff-line--remove">-                     )</span><span class="diff-line diff-line--add">+                     Greeting(modifier = Modifier.padding(innerPadding))</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  ...</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line">  @Composable</span><span class="diff-line diff-line--remove">- fun Greeting(name: String, modifier: Modifier = Modifier) {</span><span class="diff-line diff-line--remove">-     Text(</span><span class="diff-line diff-line--remove">-         text = &quot;Hello $name!&quot;,</span><span class="diff-line diff-line--remove">-         modifier = modifier</span><span class="diff-line diff-line--remove">-     )</span><span class="diff-line diff-line--add">+ fun Greeting(modifier: Modifier = Modifier) {</span><span class="diff-line diff-line--add">+     Column(</span><span class="diff-line diff-line--add">+         modifier = modifier,</span><span class="diff-line diff-line--add">+         verticalArrangement = Arrangement.spacedBy(8.dp)</span><span class="diff-line diff-line--add">+     ) {</span><span class="diff-line diff-line--add">+         Text(text = &quot;Hello, Compose!&quot;)</span><span class="diff-line diff-line--add">+         Text(text = &quot;Kotlin ${BuildConfig.KOTLIN_VERSION} / Compose BOM ${BuildConfig.COMPOSE_BOM_VERSION}&quot;)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line">  @Preview(showBackground = true)</span><span class="diff-line">  @Composable</span><span class="diff-line">  fun GreetingPreview() {</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         Greeting(&quot;Android&quot;)</span><span class="diff-line diff-line--add">+         Greeting()</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>Column</code>: 子要素を縦に並べるレイアウトです。<code>verticalArrangement = Arrangement.spacedBy(8.dp)</code> で、要素の間を 8dp 空けます。</li>
+            <li><code>BuildConfig.KOTLIN_VERSION</code>: 上で追加した定数です。<code>BuildConfig</code> は <code>namespace</code> と同じパッケージ（<code>com.handson.android01</code>）に生成されるので、import は不要です。</li>
+            <li><code>GreetingPreview</code>: <code>Greeting</code> の引数が変わったので、<code>Greeting()</code> を呼ぶ形に合わせます。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">import は Optimize Imports で整える</p>
+              <p>コードを書き換えると、不要な import が残ったり、同じ import を二重に書いたりしやすくなります。Android Studio では Code &gt; Optimize Imports（macOS では <kbd>Ctrl</kbd> + <kbd>Option</kbd> + <kbd>O</kbd>）で、使っていない import の削除と並べ替えができます。最終的に <code>Arrangement</code>・<code>Column</code>・<code>dp</code> の import が 1 つずつあれば正しい状態です。</p>
+            </div>
+          </div>
+
+          <p>Android Studio のエディタを <strong>Split</strong> または <strong>Design</strong> 表示に切り替えると、<code>@Preview</code> を付けた <code>GreetingPreview</code> の表示をエミュレータなしで確認できます。<code>@Preview(showBackground = true)</code> の <code>showBackground</code> は、プレビューに背景を描くための指定です。<code>BuildConfig</code> を使っているため、プレビューを表示する前に一度ビルドが必要になる場合があります。</p>
+          <p>ターミナルでもビルドが通ることを確認します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>./gradlew assembleDebug</code> が成功すれば OK です。Android Studio のプレビューに「Hello, Compose!」と「Kotlin 2.4.20 / Compose BOM 2026.09.00」の 2 行が表示されることも確認してください。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">エミュレータで実行する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、エミュレータでアプリを動かします。エミュレータで動かす仮想端末を AVD（Android Virtual Device）と呼びます。</p>
+          <p>Android Studio では、メニューの <strong>View &gt; Tool Windows &gt; Device Manager</strong> を開き、「+」→ <strong>Create Virtual Device</strong> から、端末に Pixel 7、システムイメージに API 36 の Google APIs（Apple シリコンの Mac では arm64-v8a）を選んで AVD を作ります。システムイメージが未ダウンロードの場合は、その画面からダウンロードできます。AVD ができたら、ツールバーの target device メニューで AVD を選び、Run ▶ を押すと、エミュレータが起動してアプリがインストール・起動されます。</p>
+          <p>ターミナルでも同じことができます。まずシステムイメージを入れ、AVD を作ります。<code>sdkmanager</code> と <code>avdmanager</code> は <code>$ANDROID_HOME/cmdline-tools/latest/bin/</code> にあります（下では <code>PATH</code> に入れた前提で書いています）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> echo y | sdkmanager &quot;system-images;android-36;google_apis;arm64-v8a&quot;</span><span class="terminal__line">（進捗表示は省略）</span><span class="terminal__line">Downloading arm64-v8a-36_r07.zip ...</span><span class="terminal__line">Unzipping... arm64-v8a/system.img</span><span class="terminal__line">Unzipping... arm64-v8a/vendor.img</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo no | avdmanager create avd -n Handson_Android36 -k &quot;system-images;android-36;google_apis;arm64-v8a&quot; -d pixel_7</span><span class="terminal__line">Auto-selecting single ABI arm64-v8a</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -list-avds</span><span class="terminal__line">Handson_Android36</span></pre>
+</div>
+
+          <ul>
+            <li>システムイメージのダウンロードと展開には、執筆環境で約 2 分 33 秒かかりました。<code>echo y |</code> は、インストール時の確認に「y」で答えるためのものです。</li>
+            <li><code>avdmanager create avd</code> の <code>-n</code> は AVD の名前、<code>-k</code> はシステムイメージ、<code>-d pixel_7</code> は端末の定義です。<code>echo no |</code> は、ハードウェアのカスタム設定を作るかどうかの質問に「no」で答えるためのものです。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Mac の CPU に合ったシステムイメージを選ぶ</p>
+              <p>Apple シリコンの Mac では <code>arm64-v8a</code>、Intel の Mac では <code>x86_64</code> のシステムイメージを選びます。エミュレータは CPU の仮想化機能（macOS では Hypervisor.framework）を使います。執筆環境では <code>sysctl kern.hv_support</code> が <code>1</code>（利用可）で、問題なく起動しました。仮想化が使えない環境では、エミュレータの起動に失敗することがあります。</p>
+            </div>
+          </div>
+
+          <p>エミュレータを起動し、起動完了を待ちます。ここではウィンドウなし（<code>-no-window</code>）で起動しています。画面を見ながら操作したい場合は <code>-no-window</code> を外してください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb wait-for-device</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell getprop sys.boot_completed</span><span class="terminal__line">1</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell getprop ro.build.version.sdk</span><span class="terminal__line">36</span></pre>
+</div>
+
+          <p><code>sys.boot_completed</code> が <code>1</code> になれば起動完了です（執筆環境では約 27 秒）。<code>ro.build.version.sdk</code> の <code>36</code> は、エミュレータの Android が API 36 であることを表します。<code>-no-snapshot-save</code> は、終了時にエミュレータの状態（スナップショット）を保存しない指定です。</p>
+          <p>アプリをインストールして起動します。Android Studio の Run ▶ が行うのも、このインストールと起動です。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">Installed on 1 device.</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 3s</span><span class="terminal__line">39 actionable tasks: 1 executed, 38 up-to-date</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell dumpsys window | grep -E &quot;mCurrentFocus|mFocusedApp&quot;</span><span class="terminal__line">  mCurrentFocus=Window{26fde25 u0 com.handson.android01/com.handson.android01.MainActivity}</span><span class="terminal__line">  mFocusedApp=ActivityRecord{108038366 u0 com.handson.android01/.MainActivity t8}</span></pre>
+</div>
+
+          <p><code>mCurrentFocus</code> に <code>com.handson.android01/...MainActivity</code> が出ていれば、アプリが前面に表示されています。画面に表示されている文字は、<code>uiautomator</code> で画面の構造を書き出して確認できます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell uiautomator dump /sdcard/window.xml</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cat /sdcard/window.xml | grep -oE &#x27;text=&quot;[^&quot;]*&quot;&#x27;</span><span class="terminal__line">text=&quot;Hello, Compose!&quot;</span><span class="terminal__line">text=&quot;Kotlin 2.4.20 / Compose BOM 2026.09.00&quot;</span></pre>
+</div>
+
+          <p>エミュレータの画面では、ステータスバーのすぐ下の左上に「Hello, Compose!」と「Kotlin 2.4.20 / Compose BOM 2026.09.00」の 2 行が表示されます。<code>Scaffold</code> の <code>innerPadding</code> を渡しているので、文字はステータスバーと重なりません。</p>
+          <p>続いて、計装テストを実行します。<code>app/src/androidTest/</code> の <code>ExampleInstrumentedTest</code> が、エミュレータの上でアプリのパッケージ名が <code>com.handson.android01</code> であることを確かめます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ExampleInstrumentedTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01
+
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/**
+ * Instrumented test, which will execute on an Android device.
+ *
+ * See [testing documentation](http://d.android.com/tools/testing).
+ */
+@RunWith(AndroidJUnit4::class)
+class ExampleInstrumentedTest {
+    @Test
+    fun useAppContext() {
+        // Context of the app under test.
+        val appContext = InstrumentationRegistry.getInstrumentation().targetContext
+        assertEquals(&quot;com.handson.android01&quot;, appContext.packageName)
+    }
+}</code></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest</span><span class="terminal__line">Running tests on devices: Handson_Android36(AVD) - 16</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 10s</span><span class="terminal__line">72 actionable tasks: 34 executed, 38 up-to-date</span></pre>
+</div>
+
+          <p>結果は <code>app/build/outputs/androidTest-results/connected/debug/</code> 配下の XML に書き出されます。執筆環境では <code>tests="1" failures="0" errors="0"</code> で、1 件のテストが成功しました。</p>
+          <p>確認できたら、エミュレータと Gradle デーモンを止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">List of devices attached</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <p><code>adb devices</code> の一覧が空になれば、エミュレータは終了しています。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>uiautomator</code> の出力に <code>text="Hello, Compose!"</code> と <code>text="Kotlin 2.4.20 / Compose BOM 2026.09.00"</code> が出て、<code>./gradlew connectedDebugAndroidTest</code> が <code>BUILD SUCCESSFUL</code> で終われば成功です。Run ▶ で起動した場合は、エミュレータの画面に同じ 2 行が表示されることを確認してください。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">SDK Manager で API 37 / 36 の SDK Platform を確認し、<code>java -version</code>・<code>ANDROID_HOME</code>・<code>adb --version</code> を確認した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">Empty Activity から <code>HandsonAndroid01</code>（<code>com.handson.android01</code>、Minimum SDK 26、Kotlin DSL）を作った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>settings.gradle.kts</code>・<code>libs.versions.toml</code>・<code>app/build.gradle.kts</code> の役割を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>./gradlew assembleDebug</code>・<code>lint</code>・<code>test</code> が成功した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">カタログに <code>kotlinx-coroutines-android</code> を追加し、<code>:app:dependencies</code> で解決を確認した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">Compose BOM によって Compose ライブラリのバージョンが決まる仕組みを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>BuildConfig</code> を有効にし、カタログのバージョンを画面に表示した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">エミュレータでアプリを起動して表示を確認し、計装テストを実行した後にエミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Gradle の実行に使う JDK のバージョン</p>
+              <p>AGP 9.4 の実行には JDK 17 以上が必要です。Android Studio からビルドする場合は、同梱の JDK（JBR）が使われます。ターミナルから <code>./gradlew</code> を実行する場合は、<code>java -version</code>（または <code>JAVA_HOME</code>）が指す JDK で動きます。この JDK が 17 以上であることを確認してください。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>BuildConfig</code> が見つからない（<code>Unresolved reference</code>）</p>
+              <p>AGP 8.0 以降は <code>BuildConfig</code> の生成が既定で無効です（AGP 9 も同じ）。<code>app/build.gradle.kts</code> の <code>buildFeatures</code> に <code>buildConfig = true</code> があるか確認してください（ステップ 5）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">AGP 8 以前の手順をそのまま使わない</p>
+              <p>AGP 9 では Kotlin のコンパイルが AGP に組み込まれたため、<code>org.jetbrains.kotlin.android</code> プラグインは適用しません。古い記事の <code>alias(libs.plugins.kotlin.android)</code> や <code>kotlinOptions { }</code> をそのまま写さないでください。Compose を使うために必要なのは <code>org.jetbrains.kotlin.plugin.compose</code> だけです。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">Compose ライブラリにバージョンを書かない</p>
+              <p><code>androidx.compose.*</code> のライブラリは Compose BOM がバージョンを決めます。カタログに個別のバージョンを書くと、BOM の組み合わせから外れることがあります。Compose を更新するときは、<code>[versions]</code> の <code>composeBom</code> だけを変えます。Material3 のバージョン（この項目では 1.4.0）も BOM が決めています。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">カタログを編集した後は同期する</p>
+              <p><code>libs.versions.toml</code> を変更した直後は、Android Studio のエディタが新しいアクセサ（<code>libs.kotlinx.coroutines.android</code> など）を認識しません。Sync Now で同期してください。ターミナルの <code>./gradlew</code> は、実行のたびにカタログを読み込みます。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        Android Studio の Empty Activity でプロジェクトを作り、Gradle でビルド・lint・テストを実行し、エミュレータで動かすところまでを体験しました。
+        ライブラリとプラグインのバージョンは Version Catalog（<code>gradle/libs.versions.toml</code>）に集め、Compose のライブラリは Compose BOM でまとめてそろえます。これが、以降の項目でも使う依存管理の形です。
+        次の項目では、Android 開発に必要な Kotlin の文法を学びます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>android/01-setup</code> の <code>android/01-setup/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../../index.html">
+          <span class="lesson-nav__direction">← カタログ</span>
+          <span class="lesson-nav__title">ハンズオン教材カタログ</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">02: Kotlin 基礎</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
