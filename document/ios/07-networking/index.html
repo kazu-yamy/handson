@@ -1,0 +1,1437 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07: URLSession と Codable | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">07</li>
+        </ol>
+        <h1 class="lesson-title">URLSession と Codable</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: <code>async</code> / <code>await</code> でデータを読み込むアプリを作れ、次に本物の Web API と通信したい人</li>
+          <li class="lesson-meta__item">📋 前提: 06 で <code>TodoRepository</code> から読み込む <code>HandsonApp</code> プロジェクトが手元にあること。<code>@concurrent</code>・<code>nonisolated</code>・<code>async let</code> の意味と、HTTP（メソッド・ステータスコード）と JSON の基本を知っていること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../06-concurrency/index.html">06 async/await と @MainActor</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>Codable</code> と <code>JSONDecoder</code> で JSON を型に変換する。キー名が違うときは <code>CodingKeys</code> や <code>keyDecodingStrategy</code> を使い、失敗は <code>DecodingError</code> で受ける</li>
+          <li><code>URLSession</code> の <code>data(from:)</code> で GET し、<code>HTTPURLResponse</code> のステータスコードを自分で確かめる</li>
+          <li><code>URLProtocol</code> のスタブで、ネットワークに出ないテストを書く</li>
+          <li>固定データを返していた <code>TodoRepository</code> を、本物の通信に差し替える</li>
+          <li><code>URLRequest</code> と <code>JSONEncoder</code> で POST する</li>
+          <li>404・App Transport Security・ホスト不明のエラーを起こし、画面のエラー表示で受ける</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        06 の ToDo アプリは、<code>Task.sleep</code> で 1 秒待ってから固定のデータを返す <code>TodoRepository</code> から読み込んでいました。この項目では、そこを本物の Web API との通信に置き換えます。
+        完成すると、起動時にインターネット上の API から 5 件の ToDo を取得して一覧に表示します。「追加」でタスクを足すと、API に POST して返ってきた 1 件を一覧の末尾に加えます。
+      </p>
+      <p>
+        <code>Codable</code> で JSON を型にする → <code>URLSession</code> で GET → <code>URLProtocol</code> のスタブでテスト → <code>TodoRepository</code> の差し替え → POST → エラー処理、の順に進めます。1 ステップで扱う概念は 1 つです。
+        Swift 6 の言語モードでつまずく箇所は、実際のエラーの文言とともに対処を示します。06 と同じく、Xcode の画面での操作と、同じ結果をターミナルで確かめるコマンドの両方を載せています。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョンと並行処理の設定</p>
+          <p>
+            macOS 26.6.2 / Xcode 27.0 / Swift 6.4 / iPhone 17（iOS 27.0）のシミュレータは 06 と同じです。バージョンは執筆時点（2026年10月）のものです。
+          </p>
+          <p>
+            アプリターゲットの <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> と <code>SWIFT_APPROACHABLE_CONCURRENCY = YES</code> も 06 のままです。アプリの型は、何も書かなければメインアクターに分離されます。この前提は、この項目でも何度も出てきます。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">インターネット接続と、使用する API</p>
+          <p>
+            この項目のアプリと <code>curl</code> の実行には、インターネット接続が必要です。API には、公開されている学習用の模擬 API <a href="https://jsonplaceholder.typicode.com/">JSONPlaceholder</a> を使います。登録や API キーは不要です。
+          </p>
+          <p>
+            JSONPlaceholder は、POST などの書き込みを受け付けて結果を返しますが、<strong>サーバーには保存しません</strong>。この点はステップ 6 で確かめます。なお、ユニットテストはスタブを使うので、ネットワークに出ません（ステップ 4）。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">06 のプロジェクトをコピーし、API の応答を確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            06 の完成コードをそのまま出発点にします。<code>06-concurrency</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>07-networking</code> にコピーします。
+            プロジェクト名・ターゲット名・Bundle Identifier（<code>com.example.HandsonApp</code>）は変えません。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 06-concurrency 07-networking</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 07-networking/HandsonApp</span></pre>
+</div>
+
+          <p>以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。コピーしたプロジェクトがそのままビルドでき、06 までの 34 テストが通ることを確かめます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 34 tests in 9 suites passed after 5.971 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <p>Xcode の場合は、<code>07-networking/HandsonApp/HandsonApp.xcodeproj</code> を開き、<kbd>⌘</kbd> + <kbd>U</kbd>（<code>Product</code> &gt; <code>Test</code>）でテストを実行します。</p>
+
+          <p>
+            次に、この項目で使う API の応答を <code>curl</code> で見ておきます。<code>/todos</code> は ToDo の一覧を返すエンドポイントで、<code>_limit</code> で件数を絞れます。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s 'https://jsonplaceholder.typicode.com/todos?_limit=3'</span><span class="terminal__line">[</span><span class="terminal__line">  {</span><span class="terminal__line">    "userId": 1,</span><span class="terminal__line">    "id": 1,</span><span class="terminal__line">    "title": "delectus aut autem",</span><span class="terminal__line">    "completed": false</span><span class="terminal__line">  },</span><span class="terminal__line">  {</span><span class="terminal__line">    "userId": 1,</span><span class="terminal__line">    "id": 2,</span><span class="terminal__line">    "title": "quis ut nam facilis et officia qui",</span><span class="terminal__line">    "completed": false</span><span class="terminal__line">  },</span><span class="terminal__line">  {</span><span class="terminal__line">    "userId": 1,</span><span class="terminal__line">    "id": 3,</span><span class="terminal__line">    "title": "fugiat veniam minus",</span><span class="terminal__line">    "completed": false</span><span class="terminal__line">  }</span><span class="terminal__line">]</span></pre>
+</div>
+
+          <ul>
+            <li>1 件は <code>userId</code>（整数）・<code>id</code>（整数）・<code>title</code>（文字列）・<code>completed</code>（真偽値）の 4 つのキーを持つオブジェクトで、それが配列で返ります。</li>
+            <li><code>title</code> は英語のダミー文です。アプリの一覧にもこの文がそのまま表示されます。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> と <code>Test run with 34 tests in 9 suites passed</code> が表示され、<code>curl</code> で 3 件の JSON が返れば準備完了です。この項目では、テストを 19 個追加して 53 テストにします。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">Codable と JSONDecoder で JSON を型にする</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            まず、API の 1 件分の JSON に対応する型を作ります。<code>Models</code> フォルダに Swift ファイル <code>TodoDTO.swift</code> を追加します（Xcode では <code>Models</code> を右クリックし、<code>New File from Template…</code> で <code>iOS</code> &gt; <code>Swift File</code>、<code>Targets</code> は <code>HandsonApp</code>）。
+            中身を次の内容にします。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoDTO.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+
+// JSONPlaceholder の /todos が返す 1 件分の JSON に対応する型
+nonisolated struct TodoDTO: Codable {
+    let userId: Int
+    let id: Int
+    let title: String
+    let completed: Bool
+}
+
+nonisolated extension TodoItem {
+    // API の 1 件から画面用のモデルを作る。優先度は API に無いので既定値（中）
+    init(dto: TodoDTO) {
+        self.init(title: dto.title, status: dto.completed ? .done(Date()) : .todo)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li>DTO（Data Transfer Object）は、通信でやり取りする形をそのまま写した型です。画面で使う <code>TodoItem</code> とは分けます。<code>id</code> が <code>Int</code> か <code>UUID</code> か、優先度があるかどうかが違うからです。</li>
+            <li><code>Codable</code> は <code>Encodable &amp; Decodable</code> の別名です。プロパティ名と JSON のキー名が一致していれば、準拠を書くだけで、JSON との変換（<code>init(from:)</code> と <code>encode(to:)</code>）が自動で作られます。</li>
+            <li><code>nonisolated struct TodoDTO</code>: 06 で <code>TodoItem</code> に付けたのと同じ指定です。理由は下の警告で確かめます。</li>
+            <li><code>init(dto:)</code>: API の 1 件を画面用の <code>TodoItem</code> に変換します。API には優先度が無いので既定値（中）になります。完了日時も無いので、<code>completed</code> が <code>true</code> なら変換した時刻で <code>.done(Date())</code> にします。</li>
+          </ul>
+
+          <p>
+            デコードとエンコードを確かめるテストを書きます。<code>HandsonAppTests</code> フォルダに <code>TodoDTOTests.swift</code> を追加します（<code>Targets</code> は <code>HandsonAppTests</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/TodoDTOTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import Testing
+@testable import HandsonApp
+
+struct TodoDTOTests {
+
+    // 実際の API のレスポンス（先頭 2 件。2 件目の completed だけ true に変えてある）
+    static let json = """
+    [
+      { "userId": 1, "id": 1, "title": "delectus aut autem", "completed": false },
+      { "userId": 1, "id": 2, "title": "quis ut nam facilis et officia qui", "completed": true }
+    ]
+    """
+
+    @Test func decodesArray() throws {
+        let todos = try JSONDecoder().decode([TodoDTO].self, from: Data(Self.json.utf8))
+        #expect(todos.count == 2)
+        #expect(todos[0].title == "delectus aut autem")
+        #expect(todos[1].completed)
+    }
+
+    @Test func encodesToJSON() throws {
+        let dto = TodoDTO(userId: 1, id: 0, title: "牛乳を買う", completed: false)
+        let data = try JSONEncoder().encode(dto)
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["title"] as? String == "牛乳を買う")
+        #expect(object["completed"] as? Bool == false)
+        #expect(object.count == 4)
+    }
+
+    @Test func convertsToTodoItem() {
+        let done = TodoItem(dto: TodoDTO(userId: 1, id: 2, title: "A", completed: true))
+        #expect(done.title == "A")
+        #expect(done.isDone)
+        #expect(done.priority == .medium)
+
+        let open = TodoItem(dto: TodoDTO(userId: 1, id: 3, title: "B", completed: false))
+        #expect(!open.isDone)
+    }
+
+    // キー名が違う場合 1: CodingKeys で対応づける
+    struct Renamed: Codable {
+        let title: String
+        let isCompleted: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case title
+            case isCompleted = "completed"
+        }
+    }
+
+    @Test func codingKeysMapsDifferentKeyNames() throws {
+        let json = #"{ "title": "A", "completed": true }"#
+        let value = try JSONDecoder().decode(Renamed.self, from: Data(json.utf8))
+        #expect(value.isCompleted)
+    }
+
+    // キー名が違う場合 2: snake_case を camelCase に自動変換する
+    struct SnakeCase: Decodable {
+        let userId: Int
+        let dueDate: String
+    }
+
+    @Test func convertFromSnakeCase() throws {
+        let json = #"{ "user_id": 7, "due_date": "2026-10-03" }"#
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let value = try decoder.decode(SnakeCase.self, from: Data(json.utf8))
+        #expect(value.userId == 7)
+        #expect(value.dueDate == "2026-10-03")
+    }
+
+    @Test func typeMismatchThrowsDecodingError() {
+        let json = #"{ "userId": 1, "id": 1, "title": "A", "completed": "yes" }"#
+        do {
+            _ = try JSONDecoder().decode(TodoDTO.self, from: Data(json.utf8))
+            Issue.record("デコードが成功してしまった")
+        } catch DecodingError.typeMismatch(let type, let context) {
+            print("DEBUG typeMismatch:", type, context.codingPath.map(\.stringValue), context.debugDescription)
+            #expect("\(type)" == "Bool")
+        } catch {
+            Issue.record("想定外のエラー: \(error)")
+        }
+    }
+
+    @Test func missingKeyThrowsDecodingError() {
+        let json = #"{ "userId": 1, "id": 1, "title": "A" }"#
+        do {
+            _ = try JSONDecoder().decode(TodoDTO.self, from: Data(json.utf8))
+            Issue.record("デコードが成功してしまった")
+        } catch DecodingError.keyNotFound(let key, let context) {
+            print("DEBUG keyNotFound:", key.stringValue, context.debugDescription)
+            #expect(key.stringValue == "completed")
+        } catch {
+            Issue.record("想定外のエラー: \(error)")
+        }
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>JSONDecoder().decode([TodoDTO].self, from:)</code>: JSON の <code>Data</code> を、指定した型に変換します。配列なら <code>[TodoDTO].self</code> を渡します。逆向きは <code>JSONEncoder().encode(_:)</code> です。</li>
+            <li><code>CodingKeys</code>: JSON のキー名とプロパティ名が違うときに、対応表を書きます。<code>Renamed</code> では JSON の <code>completed</code> を <code>isCompleted</code> として読みます。</li>
+            <li><code>keyDecodingStrategy = .convertFromSnakeCase</code>: <code>user_id</code> のような snake_case のキーを、<code>userId</code> のような camelCase のプロパティに自動で対応づけます。JSONPlaceholder のキーは camelCase なので、テスト用の JSON で試しています。</li>
+            <li>デコードに失敗すると <code>DecodingError</code> が投げられます。型が合わなければ <code>.typeMismatch</code>、キーが無ければ <code>.keyNotFound</code> です。中身を見るために <code>print</code> しています。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>nonisolated</code> を付けないと、テストから中身を読めない</p>
+              <p><code>TodoDTO.swift</code> の 1 つ目の <code>nonisolated</code>（<code>struct TodoDTO</code> の前）を一時的に外してテストを実行します。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">macro expansion #expect:1:41: error: main actor-isolated property 'title' can not be referenced from a nonisolated context</span><span class="terminal__line">macro expansion #expect:1:59: error: main actor-isolated property 'completed' can not be referenced from a nonisolated context</span><span class="terminal__line">…/HandsonAppTests/TodoDTOTests.swift:24:38: error: main actor-isolated conformance of 'TodoDTO' to 'Encodable' cannot be used in nonisolated context [#IsolatedConformances]</span><span class="terminal__line">…/HandsonAppTests/TodoDTOTests.swift:76:35: error: main actor-isolated conformance of 'TodoDTO' to 'Decodable' cannot be used in nonisolated context [#IsolatedConformances]</span><span class="terminal__line">…/HandsonAppTests/TodoDTOTests.swift:89:35: error: main actor-isolated conformance of 'TodoDTO' to 'Decodable' cannot be used in nonisolated context [#IsolatedConformances]</span><span class="terminal__line">** TEST FAILED **</span></pre>
+</div>
+              <p>
+                アプリターゲットでは、既定の分離がメインアクターです。そのため <code>TodoDTO</code> も暗黙的に <code>@MainActor</code> となり、プロパティはメインアクターでしか読めません。<code>TodoDTOTests</code> には <code>@MainActor</code> を付けていないので、<code>#expect</code> の中で <code>title</code> や <code>completed</code> を読むところでエラーになります。
+                <code>Codable</code> の準拠もメインアクターに分離されるので、メインアクターの外ではエンコードやデコードにも使えません。次のステップで作る API クライアントはメインアクターの外でデコードするので、通信と JSON 用の型には <code>nonisolated</code> を付けます。
+              </p>
+              <p>2 つ目の <code>nonisolated</code>（<code>extension TodoItem</code> の前）を外すと、次のエラーになります。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">…/TodoDTOTests.swift:32:20: error: call to main actor-isolated initializer 'init(dto:)' in a synchronous nonisolated context [#ActorIsolatedCall]</span><span class="terminal__line">…/TodoDTOTests.swift:37:20: error: call to main actor-isolated initializer 'init(dto:)' in a synchronous nonisolated context [#ActorIsolatedCall]</span></pre>
+</div>
+              <p>
+                <code>TodoItem</code> 自体は 06 で <code>nonisolated</code> にしましたが、<code>extension</code> に書いたメンバーは既定の分離（メインアクター）になります。<code>nonisolated extension</code> と書くと、その中のメンバーがまとめて分離されなくなります。確認したら、2 つとも <code>nonisolated</code> を戻してください。
+              </p>
+            </div>
+          </div>
+
+          <p>テストの <code>print</code> の結果も見られるように、<code>grep</code> のパターンに <code>DEBUG</code> を足して実行します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:|^DEBUG"</span><span class="terminal__line">…</span><span class="terminal__line">DEBUG typeMismatch: Bool ["completed"] Expected to decode Bool but found a string instead.</span><span class="terminal__line">DEBUG keyNotFound: completed No value associated with key CodingKeys(stringValue: "completed", intValue: nil) ("completed").</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 41 tests in 10 suites passed after 5.982 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <p>06 で追加した <code>DEBUG sequential</code> / <code>DEBUG concurrent</code> の行も出力に混ざります（上では <code>…</code> で省略）。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>Test run with 41 tests in 10 suites passed</code> と表示されることを確かめます（34 + <code>TodoDTOTests</code> の 7 テスト）。
+              <code>DEBUG typeMismatch</code> の行では、<code>"completed": "yes"</code> に対して、期待した型（<code>Bool</code>）・場所（<code>["completed"]</code>）・理由（<code>Expected to decode Bool but found a string instead.</code>）が分かります。<code>DEBUG keyNotFound</code> の行では、足りないキーが <code>completed</code> だと分かります。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">URLSession で GET し、ステータスコードを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            API と通信する役の <code>TodoAPIClient</code> を作ります。<code>Models</code> フォルダに <code>TodoAPIClient.swift</code> を追加し、次の内容にします（<code>Targets</code> は <code>HandsonApp</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoAPIClient.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+
+nonisolated enum APIError: Error, Equatable {
+    case invalidResponse
+    case badStatus(Int)
+}
+
+nonisolated struct TodoAPIClient {
+    var session: URLSession = .shared
+    var baseURL = URL(string: "https://jsonplaceholder.typicode.com")!
+
+    @concurrent func fetchTodos(limit: Int) async throws -&gt; [TodoDTO] {
+        // https://jsonplaceholder.typicode.com/todos?_limit=5
+        var components = URLComponents(url: baseURL.appending(path: "todos"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "_limit", value: String(limit))]
+
+        let (data, response) = try await session.data(from: components.url!)
+        guard let http = response as? HTTPURLResponse else {
+            throw APIError.invalidResponse
+        }
+        guard (200..&lt;300).contains(http.statusCode) else {
+            throw APIError.badStatus(http.statusCode)
+        }
+        return try JSONDecoder().decode([TodoDTO].self, from: data)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>URLComponents</code> と <code>URLQueryItem</code>: <code>?_limit=5</code> のようなクエリを組み立てます。文字列の連結で URL を作ると、日本語や <code>&amp;</code> を含む値がエスケープされません。<code>baseURL.appending(path:)</code> は iOS 16 以降で使えます。</li>
+            <li><code>session.data(from:)</code>: <code>async throws</code> の関数で、<code>(Data, URLResponse)</code> の組を返します。</li>
+            <li><code>response as? HTTPURLResponse</code>: <code>URLResponse</code> を HTTP の応答として扱うためにキャストし、<code>statusCode</code> を見ます。</li>
+            <li><code>session</code> と <code>baseURL</code> は <code>var</code> にして既定値を持たせています。アプリは既定値のまま使い、テストでは外から差し替えます（ステップ 4）。</li>
+            <li><code>nonisolated</code>: <code>TodoDTO</code> と同じ理由で、<code>APIError</code> と <code>TodoAPIClient</code> にも付けます。<code>APIError</code> を <code>Equatable</code> にしたのは、テストで <code>.badStatus(404)</code> と比べるためです。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>URLSession</code> は 404 や 500 でもエラーを投げない</p>
+              <p>
+                <code>data(from:)</code> がエラーを投げるのは、通信そのものが失敗したとき（ホストが見つからない、接続できないなど）です。サーバーが 404 や 500 を返した場合は、通信としては成功なので、そのまま <code>Data</code> と応答が返ります。
+                ステータスコードの確認は自分で書きます。ここでは 200 番台以外で <code>APIError.badStatus</code> を投げています。確認を書き忘れると、エラー画面の HTML などを JSON のつもりでデコードしてしまい、分かりにくい <code>DecodingError</code> になります。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            <strong><code>@concurrent</code>: デコードをメインアクターの外で行う</strong><br>
+            <code>fetchTodos</code> には、06 の <code>TodoSummarizer</code> と同じく <code>@concurrent</code> を付けています。
+            執筆時に、<code>@MainActor</code> のテストから実際のネットワークで <code>fetchTodos(limit: 3)</code> を呼び、デコードの直前に <code>runningOnMainThread()</code> を <code>print</code> して比べました（確認後に削除）。
+          </p>
+
+          <table>
+            <thead>
+              <tr><th><code>fetchTodos</code> の宣言</th><th>デコード時にメインスレッドか</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>@concurrent</code> なし（<code>nonisolated</code> な型の <code>async</code> 関数）</td><td><code>true</code></td></tr>
+              <tr><td><code>@concurrent func fetchTodos</code></td><td><code>false</code></td></tr>
+            </tbody>
+          </table>
+
+          <p>
+            どちらの場合も、<code>await session.data(from:)</code> で応答を待っている間はメインスレッドを止めません。違うのは、受け取ったあとの JSON のデコードをどこで行うかです。
+            06 で確かめたとおり、<code>nonisolated</code> な <code>async</code> 関数は呼び出し元のアクター（ここではメインアクター）で動きます。件数の多い JSON をメインアクターでデコードすると画面が引っかかるので、<code>@concurrent</code> でメインアクターの外に出します。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> が表示されれば OK です。<code>TodoAPIClient</code> はまだどこからも使っていないので、画面は変わりません。動作は次のステップのテストで確かめます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">URLProtocol のスタブで、ネットワークに依存しないテストを書く</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            テストから本物の API を呼ぶと、ネットワークの状態や API の都合で結果が変わります。そこで、<code>URLSession</code> の通信を横取りして決めた応答を返す <code>URLProtocol</code> のサブクラス（スタブ）を作ります。
+            まず、素朴に <code>static var</code> で応答を持たせると、Swift 6 の言語モードでは次のエラーになります。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">可変の <code>static var</code> はコンパイルエラーになる</p>
+              <p>次のように、<code>static var</code> でハンドラを持たせた最初の版を考えます。</p>
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/StubURLProtocol.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+
+final class StubURLProtocol: URLProtocol {
+    static var handler: ((URLRequest) throws -&gt; (HTTPURLResponse, Data))?
+}</code></pre>
+</div>
+              <p>この版でテストを実行すると、4 行目（<code>static var handler</code>）の 16 文字目で次のエラーになります。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">…/StubURLProtocol.swift:4:16: error: static property 'handler' is not concurrency-safe because it is nonisolated global shared mutable state [#MutableGlobalVariable]</span><span class="terminal__line">** TEST FAILED **</span></pre>
+</div>
+              <p>
+                テストターゲットの既定の分離は <code>nonisolated</code> です（メインアクターになるのはアプリターゲットだけ）。可変の <code>static var</code> は、どのスレッドからも読み書きできる共有の状態なので、データ競合の恐れがあるとしてエラーになります。
+              </p>
+              <ul>
+                <li><code>nonisolated(unsafe) static var</code> にするとコンパイラの検査を切れます。しかし Swift Testing は既定でテストを並列に実行するので、テスト同士でハンドラを上書きし合う恐れがあり、採りません。</li>
+                <li><code>actor</code> で守る方法は、<code>URLProtocol</code> の <code>startLoading()</code> が同期のメソッドで <code>await</code> できないので向きません。</li>
+                <li>そこで、<code>Synchronization</code> の <code>Mutex</code>（iOS 18 以降）で守ります。<code>withLock</code> の中でだけ値を読み書きできる、ロック付きの入れ物です。</li>
+              </ul>
+            </div>
+          </div>
+
+          <p><code>HandsonAppTests</code> フォルダに <code>StubURLProtocol.swift</code> を追加し、次の内容にします（<code>Targets</code> は <code>HandsonAppTests</code>）。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/StubURLProtocol.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import Synchronization
+@testable import HandsonApp
+
+// 送信されたリクエストの記録。POST のテストで「何を送ったか」を確かめるために使う
+struct RecordedRequest: Sendable {
+    let method: String
+    let url: URL
+    let contentType: String?
+    let body: Data
+}
+
+// ネットワークに出ずに、決めた応答を返す URLProtocol。
+// テストごとに別のホスト名（stub-&lt;UUID&gt;.test）を使い、ホスト名をキーにして
+// 応答と記録を保持するので、テストを並列実行しても互いに干渉しない。
+final class StubURLProtocol: URLProtocol {
+    typealias Handler = @Sendable (URLRequest) throws -&gt; (statusCode: Int, body: Data)
+
+    // 可変な static は Mutex で守る（`static var` のままだと Swift 6 のコンパイルエラー）
+    private static let handlers = Mutex&lt;[String: Handler]&gt;([:])
+    private static let recorded = Mutex&lt;[String: [RecordedRequest]]&gt;([:])
+
+    // このスタブ専用のセッションとクライアントを作る
+    static func makeClient(statusCode: Int = 200, json: String) -&gt; TodoAPIClient {
+        makeClient { _ in (statusCode, Data(json.utf8)) }
+    }
+
+    static func makeClient(handler: @escaping Handler) -&gt; TodoAPIClient {
+        let host = "stub-\(UUID().uuidString.lowercased()).test"
+        handlers.withLock { $0[host] = handler }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        return TodoAPIClient(
+            session: URLSession(configuration: configuration),
+            baseURL: URL(string: "https://\(host)")!
+        )
+    }
+
+    static func requests(for client: TodoAPIClient) -&gt; [RecordedRequest] {
+        recorded.withLock { $0[client.baseURL.host()!] ?? [] }
+    }
+
+    override class func canInit(with request: URLRequest) -&gt; Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -&gt; URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url, let host = url.host(),
+              let handler = Self.handlers.withLock({ $0[host] }) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        let record = RecordedRequest(
+            method: request.httpMethod ?? "GET",
+            url: url,
+            contentType: request.value(forHTTPHeaderField: "Content-Type"),
+            body: Self.bodyData(of: request)
+        )
+        Self.recorded.withLock { $0[host, default: []].append(record) }
+        do {
+            let (statusCode, body) = try handler(request)
+            let response = HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+
+    // URLSession は httpBody を httpBodyStream に変換して URLProtocol に渡すので、ストリームから読む
+    private static func bodyData(of request: URLRequest) -&gt; Data {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return Data() }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&amp;buffer, maxLength: buffer.count)
+            if count &lt;= 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>Mutex&lt;[String: Handler]&gt;</code>: 応答を作るハンドラを、ホスト名をキーにして持ちます。<code>static let</code> なので、それ自体は書き換わりません。</li>
+            <li><code>makeClient</code>: テストごとに <code>stub-&lt;UUID&gt;.test</code> という別のホスト名を割り当てて、ハンドラを登録します。テストが並列に動いても、互いの応答を取り違えません。</li>
+            <li><code>URLSessionConfiguration.ephemeral</code> の <code>protocolClasses</code> にスタブを入れ、そのセッションと <code>baseURL</code> を <code>TodoAPIClient(session:baseURL:)</code> に渡します。<code>TodoAPIClient</code> 側には、テスト用の分岐を一切書かずに済みます。</li>
+            <li><code>canInit(with:)</code> で全てのリクエストを引き受け、<code>startLoading()</code> で <code>client?.urlProtocol(...)</code> を通じて応答・本文・完了を返します。</li>
+            <li><code>RecordedRequest</code> と <code>bodyData(of:)</code>: 送られたリクエストを記録します。POST の本文を確かめるためにステップ 6 で使います。<code>URLSession</code> は <code>httpBody</code> をストリーム（<code>httpBodyStream</code>）に変えて渡すので、ストリームから読み出しています。</li>
+          </ul>
+
+          <p>スタブを使って <code>TodoAPIClient</code> をテストします。<code>HandsonAppTests</code> フォルダに <code>TodoAPIClientTests.swift</code> を追加します。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/TodoAPIClientTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import Testing
+@testable import HandsonApp
+
+struct TodoAPIClientTests {
+
+    @Test func fetchTodosDecodesResponse() async throws {
+        let client = StubURLProtocol.makeClient(json: """
+        [
+          { "userId": 1, "id": 1, "title": "delectus aut autem", "completed": false },
+          { "userId": 1, "id": 2, "title": "quis ut nam facilis et officia qui", "completed": true }
+        ]
+        """)
+        let todos = try await client.fetchTodos(limit: 2)
+        #expect(todos.map(\.title) == ["delectus aut autem", "quis ut nam facilis et officia qui"])
+        #expect(todos[1].completed)
+    }
+
+    @Test func fetchTodosSendsGetWithLimitQuery() async throws {
+        let client = StubURLProtocol.makeClient(json: "[]")
+        _ = try await client.fetchTodos(limit: 5)
+        let request = try #require(StubURLProtocol.requests(for: client).first)
+        #expect(request.method == "GET")
+        #expect(request.url.path() == "/todos")
+        #expect(request.url.query() == "_limit=5")
+    }
+
+    @Test func notFoundThrowsBadStatus() async {
+        let client = StubURLProtocol.makeClient(statusCode: 404, json: "{}")
+        await #expect(throws: APIError.badStatus(404)) {
+            try await client.fetchTodos(limit: 5)
+        }
+    }
+
+    @Test func serverErrorThrowsBadStatus() async {
+        let client = StubURLProtocol.makeClient(statusCode: 500, json: "")
+        await #expect(throws: APIError.badStatus(500)) {
+            try await client.fetchTodos(limit: 5)
+        }
+    }
+
+    @Test func brokenJSONThrowsDecodingError() async {
+        let client = StubURLProtocol.makeClient(json: #"[{ "userId": 1, "id": 1, "title": "A", "completed": "yes" }]"#)
+        do {
+            _ = try await client.fetchTodos(limit: 1)
+            Issue.record("成功してしまった")
+        } catch is DecodingError {
+            // 期待どおり
+        } catch {
+            Issue.record("想定外のエラー: \(error)")
+        }
+    }
+
+    @Test func networkFailureThrowsURLError() async {
+        let client = StubURLProtocol.makeClient { _ in throw URLError(.notConnectedToInternet) }
+        do {
+            _ = try await client.fetchTodos(limit: 1)
+            Issue.record("成功してしまった")
+        } catch let error as URLError {
+            #expect(error.code == .notConnectedToInternet)
+        } catch {
+            Issue.record("想定外のエラー: \(error)")
+        }
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>fetchTodosSendsGetWithLimitQuery</code>: スタブが記録したリクエストから、メソッド・パス・クエリが期待どおりかを確かめます。</li>
+            <li><code>await #expect(throws: APIError.badStatus(404))</code>: 404 を返すと、ステップ 3 で書いたステータスの確認が <code>badStatus(404)</code> を投げます。</li>
+            <li><code>networkFailureThrowsURLError</code>: ハンドラから <code>URLError(.notConnectedToInternet)</code> を投げ、通信の失敗が <code>URLError</code> のまま呼び出し元に届くことを確かめます。</li>
+          </ul>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 47 tests in 11 suites passed after 6.347 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">通信の漏れに気付ける <code>.test</code> のホスト名</p>
+              <p>
+                <code>.test</code> はテスト用に予約されたトップレベルドメインで、実在しません。スタブが効いていなければ名前解決に失敗してテストが落ちるので、気付かないうちに本物のネットワークに出ていた、ということが起きません。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Test run with 47 tests in 11 suites passed</code> と表示されることを確かめます（41 + <code>TodoAPIClientTests</code> の 6 テスト）。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">TodoRepository を本物の通信に差し替える</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            06 の <code>TodoRepository</code> に <code>TodoAPIClient</code> を持たせ、ある場合は API から取得するようにします。<code>Models/TodoRepository.swift</code> を次のように変更します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRepository.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line"> </span><span class="diff-line">  enum RepositoryError: Error {</span><span class="diff-line">      case failed</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  struct TodoRepository {</span><span class="diff-line">      var delay: Duration = .seconds(1)</span><span class="diff-line">      var shouldFail = false</span><span class="diff-line diff-line--add">+     // nil のときは 06 までの固定データ（Preview やテスト用）。アプリ本体は TodoAPIClient を渡す</span><span class="diff-line diff-line--add">+     var client: TodoAPIClient?</span><span class="diff-line">      let cache = TodoCache()</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     // ネットワークの代わりに 1 秒待って固定のデータを返す</span><span class="diff-line">      func fetchAll(useCache: Bool = true) async throws -&gt; [TodoItem] {</span><span class="diff-line">          if useCache, let cached = await cache.value(for: "items") {</span><span class="diff-line">              return cached</span><span class="diff-line">          }</span><span class="diff-line diff-line--remove">-         try await Task.sleep(for: delay)</span><span class="diff-line diff-line--remove">-         if shouldFail { throw RepositoryError.failed }</span><span class="diff-line diff-line--remove">-         let items = [</span><span class="diff-line diff-line--add">+         let items: [TodoItem]</span><span class="diff-line diff-line--add">+         if let client {</span><span class="diff-line diff-line--add">+             // 本物の通信。API の 1 件ずつを画面用の TodoItem に変換する</span><span class="diff-line diff-line--add">+             items = try await client.fetchTodos(limit: 5).map(TodoItem.init(dto:))</span><span class="diff-line diff-line--add">+         } else {</span><span class="diff-line diff-line--add">+             try await Task.sleep(for: delay)</span><span class="diff-line diff-line--add">+             if shouldFail { throw RepositoryError.failed }</span><span class="diff-line diff-line--add">+             items = [</span><span class="diff-line diff-line--remove">-             TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line diff-line--add">+                 TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line diff-line--remove">-             TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line diff-line--add">+                 TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line diff-line--remove">-             TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line diff-line--add">+                 TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line diff-line--remove">-         ]</span><span class="diff-line diff-line--add">+             ]</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">          await cache.store(items, for: "items")</span><span class="diff-line">          return items</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func fetchProfile() async throws -&gt; Profile {</span><span class="diff-line">          try await Task.sleep(for: delay)</span><span class="diff-line">          return Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>var client: TodoAPIClient?</code>: 既定値は <code>nil</code> で、そのときは 06 までと同じ固定データを返します。</li>
+            <li><code>client.fetchTodos(limit: 5).map(TodoItem.init(dto:))</code>: API から 5 件を取得し、1 件ずつ画面用の <code>TodoItem</code> に変換します。</li>
+            <li><code>fetchProfile()</code> は API に対応するものが無いので、06 のまま（1 秒待って固定のプロフィール）です。<code>TodoCache</code> もそのまま使います。</li>
+          </ul>
+
+          <p>アプリ本体だけが <code>TodoAPIClient</code> を渡すようにします。<code>HandsonAppApp.swift</code> を次のように変更します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/HandsonAppApp.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  HandsonAppApp.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @main</span><span class="diff-line">  struct HandsonAppApp: App {</span><span class="diff-line diff-line--remove">-     @State private var store = TodoStore()</span><span class="diff-line diff-line--add">+     @State private var store = TodoStore(repository: TodoRepository(client: TodoAPIClient()))</span><span class="diff-line"> </span><span class="diff-line">      var body: some Scene {</span><span class="diff-line">          WindowGroup {</span><span class="diff-line">              ContentView()</span><span class="diff-line">                  .environment(store)</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            <code>TodoStore</code> と <code>ContentView</code> は変えません。<code>load()</code> の <code>do</code> / <code>catch</code> が、そのまま通信のエラーも受けます。
+          </p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">既定値を「通信しない」にした理由</p>
+              <p>
+                <code>client</code> の既定値を <code>nil</code> にしたので、<code>TodoStore()</code> や <code>TodoRepository()</code> を使う 06 のテストはネットワークを使わず、変更なしで通ります。
+                既定で通信する設計にしていたら、<code>TodoStore()</code> を使う全てのテストにスタブを渡す必要がありました。
+              </p>
+            </div>
+          </div>
+
+          <p>スタブを渡した <code>TodoRepository</code> と <code>TodoStore</code> のテストを、<code>TodoAPIClientTests.swift</code> の末尾に追加します。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/TodoAPIClientTests.swift（末尾に追加）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">@MainActor
+struct TodoRepositoryAPITests {
+
+    @Test func fetchAllConvertsDTOsToItems() async throws {
+        let client = StubURLProtocol.makeClient(json: """
+        [
+          { "userId": 1, "id": 1, "title": "delectus aut autem", "completed": false },
+          { "userId": 1, "id": 2, "title": "fugiat veniam minus", "completed": true }
+        ]
+        """)
+        let repository = TodoRepository(client: client)
+        let items = try await repository.fetchAll(useCache: false)
+        #expect(items.map(\.title) == ["delectus aut autem", "fugiat veniam minus"])
+        #expect(!items[0].isDone)
+        #expect(items[1].isDone)
+    }
+
+    @Test func storeShowsErrorMessageOnBadStatus() async {
+        let client = StubURLProtocol.makeClient(statusCode: 404, json: "{}")
+        let store = TodoStore(repository: TodoRepository(client: client))
+        await store.load(useCache: false)
+        #expect(store.items.isEmpty)
+        #expect(store.errorMessage == "読み込みに失敗しました")
+        #expect(!store.isLoading)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>fetchAll(useCache: false)</code>: 06 の <code>actor</code> のキャッシュを通さずに取得します。</li>
+            <li><code>storeShowsErrorMessageOnBadStatus</code>: 404 を返すと、<code>TodoStore</code> の <code>errorMessage</code> が「読み込みに失敗しました」になり、<code>items</code> は空のままです。</li>
+          </ul>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 49 tests in 12 suites passed after 6.286 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl boot 'iPhone 17'</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <p>シミュレータがすでに起動している場合は <code>boot</code> を飛ばしてください。Xcode の場合は <kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示できます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>Test run with 49 tests in 12 suites passed</code> と表示されることを確かめます（47 + 2 テスト）。
+              シミュレータでは、「Todo」のブロックに API から取得した 5 行が並びます。上から「delectus aut autem」「quis ut nam facilis et officia qui」「fugiat veniam minus」「et porro tempora」「laboriosam mollitia et enim quasi adipisci quia provident illum」です。完了は 4 行目の「et porro tempora」だけで、緑のチェックと取り消し線が付きます。
+            </p>
+            <p>
+              優先度のバッジは全て「中」（既定値）で、ブロックの下には「1 / 5 件完了」と表示されます。プロフィールのカード（Taro / Taro Yamada）は 06 と同じ固定のデータです。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">URLRequest と JSONEncoder で POST する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            「追加」したタスクを、API に POST して作成します。まず <code>curl</code> で、POST に対する応答を見ておきます。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -i -X POST https://jsonplaceholder.typicode.com/todos -H 'Content-Type: application/json' -d '{"title":"牛乳を買う","completed":false,"userId":1}'</span><span class="terminal__line">HTTP/2 201</span><span class="terminal__line">…</span><span class="terminal__line">content-type: application/json; charset=utf-8</span><span class="terminal__line">…</span><span class="terminal__line">location: https://jsonplaceholder.typicode.com/todos/201</span><span class="terminal__line">…</span><span class="terminal__line"></span><span class="terminal__line">{</span><span class="terminal__line">  "title": "牛乳を買う",</span><span class="terminal__line">  "completed": false,</span><span class="terminal__line">  "userId": 1,</span><span class="terminal__line">  "id": 201</span><span class="terminal__line">}</span></pre>
+</div>
+
+          <ul>
+            <li>ステータスは <code>201</code>（Created）で、送った内容に <code>"id": 201</code> を足した JSON が返ります。日本語のタイトルもそのまま往復します。</li>
+            <li>JSONPlaceholder は実際には保存しません。何度 POST しても <code>id</code> は 201 で、そのあとで <code>/todos</code> を GET しても 201 件目は現れません。そこでアプリでは、返ってきた 1 件をローカルの一覧に足して完結させます。</li>
+          </ul>
+
+          <p><code>Models/TodoAPIClient.swift</code> に POST の関数を足し、ステータスの確認を共通の関数に切り出します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoAPIClient.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line"> </span><span class="diff-line">  nonisolated enum APIError: Error, Equatable {</span><span class="diff-line">      case invalidResponse</span><span class="diff-line">      case badStatus(Int)</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ // POST で送る本文。id はサーバーが決めるので持たない</span><span class="diff-line diff-line--add">+ private nonisolated struct NewTodo: Encodable {</span><span class="diff-line diff-line--add">+     let title: String</span><span class="diff-line diff-line--add">+     let completed: Bool</span><span class="diff-line diff-line--add">+     let userId: Int</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  nonisolated struct TodoAPIClient {</span><span class="diff-line">      var session: URLSession = .shared</span><span class="diff-line">      var baseURL = URL(string: "https://jsonplaceholder.typicode.com")!</span><span class="diff-line"> </span><span class="diff-line">      @concurrent func fetchTodos(limit: Int) async throws -&gt; [TodoDTO] {</span><span class="diff-line">          // https://jsonplaceholder.typicode.com/todos?_limit=5</span><span class="diff-line">          var components = URLComponents(url: baseURL.appending(path: "todos"), resolvingAgainstBaseURL: false)!</span><span class="diff-line">          components.queryItems = [URLQueryItem(name: "_limit", value: String(limit))]</span><span class="diff-line"> </span><span class="diff-line">          let (data, response) = try await session.data(from: components.url!)</span><span class="diff-line diff-line--add">+         try checkStatus(response, expected: 200..&lt;300)</span><span class="diff-line diff-line--add">+         return try JSONDecoder().decode([TodoDTO].self, from: data)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     @concurrent func createTodo(title: String) async throws -&gt; TodoDTO {</span><span class="diff-line diff-line--add">+         var request = URLRequest(url: baseURL.appending(path: "todos"))</span><span class="diff-line diff-line--add">+         request.httpMethod = "POST"</span><span class="diff-line diff-line--add">+         request.setValue("application/json", forHTTPHeaderField: "Content-Type")</span><span class="diff-line diff-line--add">+         request.httpBody = try JSONEncoder().encode(NewTodo(title: title, completed: false, userId: 1))</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         let (data, response) = try await session.data(for: request)</span><span class="diff-line diff-line--add">+         try checkStatus(response, expected: 201..&lt;202)   // 作成成功は 201 Created</span><span class="diff-line diff-line--add">+         return try JSONDecoder().decode(TodoDTO.self, from: data)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     private func checkStatus(_ response: URLResponse, expected: Range&lt;Int&gt;) throws {</span><span class="diff-line">          guard let http = response as? HTTPURLResponse else {</span><span class="diff-line">              throw APIError.invalidResponse</span><span class="diff-line">          }</span><span class="diff-line diff-line--remove">-         guard (200..&lt;300).contains(http.statusCode) else {</span><span class="diff-line diff-line--add">+         guard expected.contains(http.statusCode) else {</span><span class="diff-line">              throw APIError.badStatus(http.statusCode)</span><span class="diff-line">          }</span><span class="diff-line diff-line--remove">-         return try JSONDecoder().decode([TodoDTO].self, from: data)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>NewTodo</code>: POST で送る本文の型です。<code>id</code> はサーバーが決めるので持たせず、<code>Encodable</code> だけに準拠します。</li>
+            <li><code>URLRequest</code>: <code>httpMethod</code> に <code>"POST"</code>、ヘッダー <code>Content-Type</code> に <code>application/json</code>、<code>httpBody</code> に <code>JSONEncoder</code> で作った本文を設定します。<code>Content-Type</code> は、本文が JSON であることをサーバーに伝えるヘッダーです。付け忘れると、JSONPlaceholder は本文を JSON として読まず、201 で <code>id</code> だけ（本文全体をキーにした形）を返します。<code>TodoDTO</code> のデコードが <code>keyNotFound</code> で失敗し、画面は「追加に失敗しました」になります。</li>
+            <li><code>session.data(for: request)</code>: <code>URLRequest</code> を送るときは <code>data(for:)</code> を使います。<code>data(from:)</code> は URL を渡して GET するための関数です。</li>
+            <li><code>checkStatus(_:expected:)</code>: GET は 200 番台、POST は作成成功を表す 201 だけを成功とみなします。</li>
+          </ul>
+
+          <p><code>Models/TodoRepository.swift</code> に、作成の関数を追加します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRepository.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line"> </span><span class="diff-line">  enum RepositoryError: Error {</span><span class="diff-line">      case failed</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  struct TodoRepository {</span><span class="diff-line">      var delay: Duration = .seconds(1)</span><span class="diff-line">      var shouldFail = false</span><span class="diff-line">      // nil のときは 06 までの固定データ（Preview やテスト用）。アプリ本体は TodoAPIClient を渡す</span><span class="diff-line">      var client: TodoAPIClient?</span><span class="diff-line">      let cache = TodoCache()</span><span class="diff-line"> </span><span class="diff-line">      func fetchAll(useCache: Bool = true) async throws -&gt; [TodoItem] {</span><span class="diff-line">          if useCache, let cached = await cache.value(for: "items") {</span><span class="diff-line">              return cached</span><span class="diff-line">          }</span><span class="diff-line">          let items: [TodoItem]</span><span class="diff-line">          if let client {</span><span class="diff-line">              // 本物の通信。API の 1 件ずつを画面用の TodoItem に変換する</span><span class="diff-line">              items = try await client.fetchTodos(limit: 5).map(TodoItem.init(dto:))</span><span class="diff-line">          } else {</span><span class="diff-line">              try await Task.sleep(for: delay)</span><span class="diff-line">              if shouldFail { throw RepositoryError.failed }</span><span class="diff-line">              items = [</span><span class="diff-line">                  TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">                  TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">                  TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">              ]</span><span class="diff-line">          }</span><span class="diff-line">          await cache.store(items, for: "items")</span><span class="diff-line">          return items</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+     // サーバーに作成を依頼し、返ってきた 1 件を画面用のモデルにして返す</span><span class="diff-line diff-line--add">+     func create(title: String, priority: Priority = .medium) async throws -&gt; TodoItem {</span><span class="diff-line diff-line--add">+         guard let client else {</span><span class="diff-line diff-line--add">+             return TodoItem(title: title, priority: priority)</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+         var item = TodoItem(dto: try await client.createTodo(title: title))</span><span class="diff-line diff-line--add">+         item.priority = priority</span><span class="diff-line diff-line--add">+         return item</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      func fetchProfile() async throws -&gt; Profile {</span><span class="diff-line">          try await Task.sleep(for: delay)</span><span class="diff-line">          return Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>API には優先度が無いので、画面で選んだ優先度を、返ってきた 1 件に上書きして反映します。<code>client</code> が <code>nil</code> のときは、06 までと同じくその場で <code>TodoItem</code> を作ります。</p>
+
+          <p><code>TodoStore</code> の <code>add</code> を <code>async</code> にし、失敗したらエラーを表示します。<code>Models/TodoStore.swift</code> を次のように変更します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoStore.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Observation</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @Observable</span><span class="diff-line">  final class TodoStore {</span><span class="diff-line">      var items: [TodoItem]</span><span class="diff-line">      var isLoading = false</span><span class="diff-line">      var profile: Profile?</span><span class="diff-line">      var summary: TodoSummary?</span><span class="diff-line">      var errorMessage: String?</span><span class="diff-line"> </span><span class="diff-line">      private let repository: TodoRepository</span><span class="diff-line"> </span><span class="diff-line">      init(items: [TodoItem] = [], repository: TodoRepository = TodoRepository()) {</span><span class="diff-line">          self.items = items</span><span class="diff-line">          self.repository = repository</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func load(useCache: Bool = true) async {</span><span class="diff-line">          isLoading = true</span><span class="diff-line">          errorMessage = nil</span><span class="diff-line">          defer { isLoading = false }</span><span class="diff-line">          do {</span><span class="diff-line">              // 2 つの取得を同時に始める。待つのはここ（await）</span><span class="diff-line">              async let fetchedItems = repository.fetchAll(useCache: useCache)</span><span class="diff-line">              async let fetchedProfile = repository.fetchProfile()</span><span class="diff-line">              items = try await fetchedItems</span><span class="diff-line">              profile = try await fetchedProfile</span><span class="diff-line">              summary = await TodoSummarizer().summarize(items)</span><span class="diff-line">          } catch is CancellationError {</span><span class="diff-line">              // キャンセルはエラーではない。画面は前の状態のままにする</span><span class="diff-line">          } catch {</span><span class="diff-line">              errorMessage = "読み込みに失敗しました"</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     func add(title: String, priority: Priority = .medium) {</span><span class="diff-line diff-line--add">+     func add(title: String, priority: Priority = .medium) async {</span><span class="diff-line diff-line--add">+         errorMessage = nil</span><span class="diff-line diff-line--add">+         do {</span><span class="diff-line diff-line--add">+             // JSONPlaceholder は保存しないので、返ってきた 1 件をローカルの一覧に足す</span><span class="diff-line diff-line--remove">-         items.append(TodoItem(title: title, priority: priority))</span><span class="diff-line diff-line--add">+             items.append(try await repository.create(title: title, priority: priority))</span><span class="diff-line diff-line--add">+         } catch {</span><span class="diff-line diff-line--add">+             errorMessage = "追加に失敗しました"</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func toggle(_ item: TodoItem) {</span><span class="diff-line">          guard let index = items.firstIndex(where: { $0.title == item.title }) else { return }</span><span class="diff-line">          items[index].toggle()</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func remove(at offsets: IndexSet) {</span><span class="diff-line">          items.remove(atOffsets: offsets)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func move(from source: IndexSet, to destination: Int) {</span><span class="diff-line">          items.move(fromOffsets: source, toOffset: destination)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      static let sample = TodoStore(items: [</span><span class="diff-line">          TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">          TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">          TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">      ])</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>add</code> が <code>async</code> になったので、<code>ContentView.swift</code> の「追加」ボタンでは 06 で学んだ <code>Task { }</code> から呼びます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line">                      if let profile = store.profile {</span><span class="diff-line">                          ProfileHeader(profile: profile)</span><span class="diff-line">                      }</span><span class="diff-line"> </span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  if let message = store.errorMessage {</span><span class="diff-line">                      Section {</span><span class="diff-line">                          Text(message)</span><span class="diff-line">                              .foregroundStyle(.red)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section {</span><span class="diff-line">                      if store.isLoading {</span><span class="diff-line">                          ProgressView("読み込み中…")</span><span class="diff-line">                      }</span><span class="diff-line">                      ForEach($store.items) { $item in</span><span class="diff-line">                          if showsDone || !item.isDone {</span><span class="diff-line">                              NavigationLink(value: item) {</span><span class="diff-line">                                  TodoRow(item: $item)</span><span class="diff-line">                              }</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .onDelete { offsets in</span><span class="diff-line">                          store.remove(at: offsets)</span><span class="diff-line">                      }</span><span class="diff-line">                      .onMove { source, destination in</span><span class="diff-line">                          store.move(from: source, to: destination)</span><span class="diff-line">                      }</span><span class="diff-line">                  } header: {</span><span class="diff-line">                      Text("Todo")</span><span class="diff-line">                  } footer: {</span><span class="diff-line">                      if let summary = store.summary {</span><span class="diff-line">                          Text(summary.text)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">                          TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line diff-line--remove">-                             store.add(title: newTitle)</span><span class="diff-line diff-line--add">+                             let title = newTitle</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line diff-line--add">+                             Task {</span><span class="diff-line diff-line--add">+                                 await store.add(title: title)</span><span class="diff-line diff-line--add">+                             }</span><span class="diff-line">                          }</span><span class="diff-line">                          .buttonStyle(.borderless)</span><span class="diff-line">                          .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .navigationDestination(for: TodoItem.self) { item in</span><span class="diff-line">                  TodoDetailView(item: item)</span><span class="diff-line">              }</span><span class="diff-line">              .task {</span><span class="diff-line">                  await store.load()</span><span class="diff-line">              }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line">              .refreshable {</span><span class="diff-line">                  await store.load(useCache: false)</span><span class="diff-line">              }</span><span class="diff-line">              .toolbar {</span><span class="diff-line">                  ToolbarItem(placement: .topBarLeading) {</span><span class="diff-line">                      Button("再読み込み") {</span><span class="diff-line">                          Task {</span><span class="diff-line">                              await store.load(useCache: false)</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .disabled(store.isLoading)</span><span class="diff-line">                  }</span><span class="diff-line">                  ToolbarItem(placement: .topBarTrailing) {</span><span class="diff-line">                      EditButton()</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li>入力中の文字を先に <code>title</code> に退避し、<code>newTitle</code> を空にしてから <code>Task</code> を始めます。<code>Task</code> の中で <code>newTitle</code> を読むと、空にしたあとの値を読んでしまいます。</li>
+          </ul>
+
+          <p>既存のテストのうち <code>add</code> を呼ぶ 1 つも、<code>async</code> にして <code>await</code> を付けます。06 のテストの変更はこの 1 か所だけです。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/TodoStoreTests.swift（抜粋）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  …</span><span class="diff-line">  @MainActor</span><span class="diff-line">  struct TodoStoreTests {</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     @Test func addAppendsItemWithDefaults() {</span><span class="diff-line diff-line--add">+     @Test func addAppendsItemWithDefaults() async {</span><span class="diff-line">          let store = TodoStore()</span><span class="diff-line diff-line--remove">-         store.add(title: "買い物")</span><span class="diff-line diff-line--add">+         await store.add(title: "買い物")</span><span class="diff-line">          #expect(store.items.count == 1)</span><span class="diff-line">          #expect(store.items[0].title == "買い物")</span><span class="diff-line">          #expect(store.items[0].priority == .medium)</span></pre>
+</div>
+
+          <p>POST のテストを、<code>TodoAPIClientTests.swift</code> の末尾に追加します。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/TodoAPIClientTests.swift（末尾に追加）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">struct TodoAPIClientCreateTests {
+
+    @Test func createTodoSendsPostWithJSONBody() async throws {
+        let client = StubURLProtocol.makeClient(statusCode: 201, json: """
+        { "title": "牛乳を買う", "completed": false, "userId": 1, "id": 201 }
+        """)
+        let created = try await client.createTodo(title: "牛乳を買う")
+        #expect(created.id == 201)
+        #expect(created.title == "牛乳を買う")
+
+        let request = try #require(StubURLProtocol.requests(for: client).first)
+        #expect(request.method == "POST")
+        #expect(request.url.path() == "/todos")
+        #expect(request.contentType == "application/json")
+        let body = try #require(try JSONSerialization.jsonObject(with: request.body) as? [String: Any])
+        #expect(body["title"] as? String == "牛乳を買う")
+        #expect(body["completed"] as? Bool == false)
+        #expect(body["userId"] as? Int == 1)
+        #expect(body["id"] == nil)
+    }
+
+    @Test func createTodoThrowsWhenStatusIsNot201() async {
+        // 200 は成功ステータスだが、作成の成功条件（201）には合わない
+        let client = StubURLProtocol.makeClient(statusCode: 200, json: "{}")
+        await #expect(throws: APIError.badStatus(200)) {
+            try await client.createTodo(title: "A")
+        }
+    }
+}
+
+@MainActor
+struct TodoStoreAddTests {
+
+    @Test func addAppendsServerResponse() async {
+        let client = StubURLProtocol.makeClient(statusCode: 201, json: """
+        { "title": "牛乳を買う", "completed": false, "userId": 1, "id": 201 }
+        """)
+        let store = TodoStore(repository: TodoRepository(client: client))
+        await store.add(title: "牛乳を買う", priority: .high)
+        #expect(store.items.map(\.title) == ["牛乳を買う"])
+        #expect(store.items[0].priority == .high)
+        #expect(store.errorMessage == nil)
+    }
+
+    @Test func addShowsErrorOnFailure() async {
+        let client = StubURLProtocol.makeClient(statusCode: 500, json: "")
+        let store = TodoStore(repository: TodoRepository(client: client))
+        await store.add(title: "A")
+        #expect(store.items.isEmpty)
+        #expect(store.errorMessage == "追加に失敗しました")
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>createTodoSendsPostWithJSONBody</code>: スタブが記録したリクエストで、メソッドが <code>POST</code>、<code>Content-Type</code> が <code>application/json</code>、本文の JSON に <code>title</code>・<code>completed</code>・<code>userId</code> があり <code>id</code> が無いことを確かめます。</li>
+            <li><code>createTodoThrowsWhenStatusIsNot201</code>: 200 は成功のステータスですが、作成の成功条件（201）には合わないので <code>badStatus(200)</code> になります。</li>
+            <li><code>TodoStoreAddTests</code>: 選んだ優先度（<code>.high</code>）が反映されることと、500 のときに「追加に失敗しました」になることを確かめます。</li>
+          </ul>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 53 tests in 14 suites passed after 5.983 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>Test run with 53 tests in 14 suites passed</code> と表示されることを確かめます（49 + 4 テスト）。
+              シミュレータで一覧を上にスクロールし、「新しいタスク」に「牛乳を買う」と入力して「追加」をタップします。API の 5 行の末尾に「牛乳を買う」（優先度「中」）が加わります。キーボードは開いたままです。
+            </p>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">追加しても、フッターの件数は「1 / 5 件完了」のまま</p>
+              <p>
+                「Todo」のブロックの下の集計（<code>summary</code>）は、06 から <code>load()</code> の中でだけ計算しています。そのため、追加したあとも「1 / 5 件完了」のままです。この項目では直しません。
+              </p>
+              <p>
+                また、追加した項目はサーバーには保存されていません。再読み込みで API から取得し直すと、一覧は API の 5 件に戻ります。
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">通信のエラーを起こして、画面で受ける</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            通信が失敗する場面を、わざと起こして確かめます。コードは変えず、<code>baseURL</code> を一時的に差し替えます。
+            まず、存在しないパスで 404 を起こします。<code>HandsonAppApp.swift</code> の <code>TodoAPIClient()</code> を、一時的に次のように書き換えます。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/HandsonAppApp.swift（一時的な変更）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">    @State private var store = TodoStore(repository: TodoRepository(client: TodoAPIClient(baseURL: URL(string: "https://jsonplaceholder.typicode.com/x")!)))</code></pre>
+</div>
+
+          <p>リクエスト先は <code>/x/todos</code> になり、存在しないので 404 が返ります。ビルドしてシミュレータで起動します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <p>
+            画面では、「Todo」の一覧が空で、その上に赤い文字で「読み込みに失敗しました」と表示されます。プロフィールのカードも表示されません。
+            <code>load()</code> は <code>async let</code> で一覧とプロフィールを同時に取得し、どちらかが失敗した時点で <code>catch</code> へ進みます。そのため、<code>items</code> と <code>profile</code> はどちらも更新されません。
+          </p>
+
+          <p>
+            同じ書き換え箇所で、ほかの URL も試します。<code>http://jsonplaceholder.typicode.com</code>（HTTPS ではない）と <code>https://no-such-host.invalid</code>（存在しないホスト）です。どちらも、画面は 404 のときと同じになります。赤い文字の「読み込みに失敗しました」が表示され、Todo の一覧は空で、プロフィールのカードも表示されません。
+          </p>
+
+          <p>
+            画面では区別できないので、投げられたエラーの中身を一時的なテストで確かめます。<code>baseURL</code> を差し替えた <code>TodoAPIClient</code> で <code>fetchTodos(limit: 1)</code> を実際のネットワークで呼び、エラーを <code>print</code> します。次のファイルを作ります。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/NetworkErrorProbeTests.swift（一時的なファイル）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import Testing
+@testable import HandsonApp
+
+struct NetworkErrorProbeTests {   // 一時的。確認後に削除
+    @Test(arguments: [
+        ("badpath", "https://jsonplaceholder.typicode.com/x"),
+        ("http", "http://jsonplaceholder.typicode.com"),
+        ("nohost", "https://no-such-host.invalid"),
+    ])
+    func probe(label: String, url: String) async {
+        do {
+            _ = try await TodoAPIClient(baseURL: URL(string: url)!).fetchTodos(limit: 1)
+        } catch let error as URLError {
+            print("DEBUG \(label): URLError code=\(error.code.rawValue) \(error.code) desc=\(error.localizedDescription)")
+        } catch {
+            print("DEBUG \(label): APIError \(error) | \(error.localizedDescription)")
+        }
+    }
+}</code></pre>
+</div>
+
+          <p>このテストだけを実行し、<code>DEBUG</code> で始まる行を取り出します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests/NetworkErrorProbeTests test 2&gt;&amp;1 | grep ^DEBUG</span></pre>
+</div>
+
+          <p>
+            3 つの URL それぞれについて、<code>DEBUG</code> の行が 1 行ずつ出ます。出力を 1 行ずつ見ていきます。確かめたら、<code>NetworkErrorProbeTests.swift</code> は削除してください。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">存在しないパス: <code>APIError.badStatus(404)</code></p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">DEBUG badpath: APIError badStatus(404) | The operation couldn’t be completed. (HandsonApp.APIError error 0.)</span></pre>
+</div>
+              <p>
+                ステップ 3 のステータスの確認が投げた <code>badStatus(404)</code> です。<code>|</code> の後ろは <code>localizedDescription</code> ですが、<code>APIError</code> は利用者向けの文言を持たないので、読んでも意味の分からない文になります。そのため画面には、固定の文言「読み込みに失敗しました」を出しています。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>http://</code> で接続: App Transport Security（-1022）</p>
+              <p><code>baseURL</code> を <code>http://jsonplaceholder.typicode.com</code>（HTTPS ではない）にした結果です。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">DEBUG http: URLError code=-1022 Code(rawValue: -1022) desc=The resource could not be loaded because the App Transport Security policy requires the use of a secure connection.</span></pre>
+</div>
+              <p>
+                <code>URLError</code> のコード -1022（<code>appTransportSecurityRequiresSecureConnection</code>）です。iOS の App Transport Security（ATS）は、暗号化されていない <code>http://</code> の通信を既定で拒否します。リクエストは、サーバーへ届く前に OS が止めます。
+                対処はサーバー側を HTTPS にすることです。ATS の例外の設定は、この項目では扱いません。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">存在しないホスト（-1003）</p>
+              <p><code>baseURL</code> を <code>https://no-such-host.invalid</code> にした結果です。<code>.invalid</code> は予約されたトップレベルドメインで、名前解決は必ず失敗します。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">DEBUG nohost: URLError code=-1003 Code(rawValue: -1003) desc=A server with the specified hostname could not be found.</span></pre>
+</div>
+              <p>
+                <code>URLError</code> のコード -1003（<code>cannotFindHost</code>）です。404 と違い、こちらは通信そのものの失敗なので、<code>data(from:)</code> が <code>URLError</code> を投げます。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            3 つのエラーは、どれも <code>TodoStore.load()</code> の最後の <code>catch</code> 1 か所で受けられ、「読み込みに失敗しました」になります。
+            エラーの種類で文言を出し分けたい場合は、<code>catch let error as URLError</code> や <code>catch APIError.badStatus(let code)</code> を、汎用の <code>catch</code> より前に足します。06 で <code>CancellationError</code> を先に <code>catch</code> したのと同じ考え方です。
+          </p>
+
+          <p>確かめたら、<code>HandsonAppApp.swift</code> を元の <code>TodoAPIClient()</code> に戻してください。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              404 の <code>baseURL</code> で起動すると、赤い文字の「読み込みに失敗しました」が表示され、一覧とプロフィールが空になることを確かめます。<code>HandsonAppApp.swift</code> を元に戻したら、次のステップに進みます。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">完成状態でビルドとテストを実行する</h3>
+        </div>
+        <div class="step__body">
+          <p>完成状態のファイル構成は次のとおりです。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Text</span>
+  <span class="code-block__filename">HandsonApp/</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-plaintext">HandsonApp/
+  HandsonApp/
+    HandsonAppApp.swift          # この項目で更新（TodoAPIClient を渡す）
+    ContentView.swift            # この項目で更新（追加ボタンを Task { } に）
+    Greeting.swift
+    Models/
+      Profile.swift
+      Counter.swift
+      TodoItem.swift
+      TodoStore.swift            # この項目で更新（add を async に）
+      TodoRepository.swift       # この項目で更新（client、create）
+      TodoDTO.swift              # この項目で追加（Codable の DTO と TodoItem への変換）
+      TodoAPIClient.swift        # この項目で追加（GET / POST）
+      TodoSummary.swift
+      TodoCache.swift
+      Describable.swift
+      Validation.swift
+    Views/
+      ProfileHeader.swift
+      TodoRow.swift
+      TodoDetailView.swift
+  HandsonAppTests/
+    TodoDTOTests.swift           # この項目で追加（7 テスト）
+    StubURLProtocol.swift        # この項目で追加（テスト用のスタブ）
+    TodoAPIClientTests.swift     # この項目で追加（12 テスト）
+    TodoStoreTests.swift         # この項目で更新（add の await）
+    …                            # ほかは 06 のまま（合計 53 テスト）</code></pre>
+</div>
+
+          <p>ビルドと全てのユニットテストを実行し、シミュレータで最終的な画面を確かめてから、シミュレータを止めます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 53 tests in 14 suites passed after 6.183 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+</div>
+
+          <p>Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> で全てのテストを実行し、<kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>** BUILD SUCCEEDED **</code> と <code>Test run with 53 tests in 14 suites passed</code> が表示されることを確かめます。追加した 19 テストは全てスタブを使うので、ネットワークに出ません。
+              シミュレータでは、API から取得した 5 行の ToDo と「1 / 5 件完了」が表示され、「追加」で入力したタスクが末尾に加われば完成です。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">06 のプロジェクトをコピーしてビルドと 34 テストが通ることを確かめ、<code>curl</code> で API の応答を見た</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>Codable</code> の DTO を作り、<code>CodingKeys</code>・<code>keyDecodingStrategy</code>・<code>DecodingError</code> をテストで確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">通信と JSON 用の型に <code>nonisolated</code> が要る理由と、<code>nonisolated extension</code> が要る理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>URLSession</code> は 404 でもエラーを投げないので、<code>HTTPURLResponse</code> のステータスコードを自分で確かめることを理解した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>URLProtocol</code> のスタブを <code>Mutex</code> とテストごとのホスト名で作り、ネットワークに出ないテストを書いた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>TodoRepository</code> を本物の通信に差し替え、06 のテストを変えずに通した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>URLRequest</code> と <code>JSONEncoder</code> で POST し、JSONPlaceholder が保存しないことを理解した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">404・ATS（-1022）・ホスト不明（-1003）の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">53 テストが全て通り、<code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>main actor-isolated ... can not be referenced from a nonisolated context</code> が出る</p>
+          <p>アプリターゲットでは、型も <code>extension</code> のメンバーも既定でメインアクターに分離されます。通信や JSON に使う型（<code>TodoDTO</code>・<code>TodoAPIClient</code>・<code>APIError</code>・<code>NewTodo</code>）と、<code>TodoItem</code> の <code>extension</code> に <code>nonisolated</code> が付いているかを確かめてください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>#expect</code> で型どうしを <code>==</code> で比べられない</p>
+          <p><code>DecodingError.typeMismatch</code> の型を <code>#expect(type == Bool.self)</code> で比べると、<code>error: cannot convert value of type 'Bool.Type' to expected argument type '_OptionalNilComparisonType'</code> になりました。<code>TodoDTOTests</code> では <code>"\(type)" == "Bool"</code> と文字列にして比べています。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">一覧の内容が教材と違う</p>
+          <p>一覧の項目は API の応答そのままです（<code>_limit=5</code> で先頭の 5 件）。<code>completed</code> が <code>true</code> の項目は <code>.done(Date())</code> に変換するので、完了日は API から取得して変換した日時になります。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>Codable</code> の DTO と <code>JSONDecoder</code> で JSON を型にし、<code>CodingKeys</code>・<code>keyDecodingStrategy</code>・<code>DecodingError</code> をテストで確かめました。
+        <code>URLSession</code> の <code>data(from:)</code> で GET し、404 でもエラーにならないのでステータスコードを自分で確かめました。デコードは <code>@concurrent</code> でメインアクターの外で行います。
+        <code>URLProtocol</code> のスタブを <code>Mutex</code> で作ってネットワークに出ないテストを書き、<code>TodoRepository</code> を本物の通信に差し替えました。さらに <code>URLRequest</code> で POST し、404・ATS・ホスト不明のエラーを画面で受けました。
+        次の項目では、SwiftData を使ってデータを端末に保存（永続化）します。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li>Foundation のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/foundation/urlsession">URLSession</a> / <a href="https://developer.apple.com/documentation/foundation/urlsession/data(from:delegate:)">data(from:delegate:)</a></li>
+            <li><a href="https://developer.apple.com/documentation/foundation/jsondecoder">JSONDecoder</a></li>
+            <li><a href="https://developer.apple.com/documentation/foundation/urlprotocol">URLProtocol</a></li>
+          </ul>
+        </li>
+        <li>Swift 標準ライブラリのドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/swift/codable">Codable</a></li>
+            <li><a href="https://developer.apple.com/documentation/synchronization/mutex">Mutex</a></li>
+          </ul>
+        </li>
+        <li><a href="https://developer.apple.com/documentation/security/preventing-insecure-network-connections">Preventing Insecure Network Connections</a>（App Transport Security）</li>
+        <li><a href="https://jsonplaceholder.typicode.com/guide/">JSONPlaceholder Guide</a></li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/07-networking</code> の <code>ios/07-networking/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/07-networking/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../06-concurrency/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">06: async/await と @MainActor</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">08: SwiftData</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
