@@ -483,7 +483,7 @@ final class HandsonAppUITests: XCTestCase {
           <p>
             続いて、同じ <code>Build Settings</code> で並行処理（Concurrency）に関する設定を確認します。
             アプリターゲットの <code>Default Actor Isolation</code> が <code>MainActor</code>、<code>Approachable Concurrency</code> が <code>Yes</code> になっていれば変更は不要です。
-            <code>Approachable Concurrency</code> は Swift 5 以下の言語モード向けの設定です。Swift 6 に切り替えると <code>Build Settings</code> に表示されなくなる場合があります。
+            Swift 6 の言語モードでは、<code>Build Settings</code> から <code>Approachable Concurrency</code> の項目が消えることもあります。それでも <code>YES</code> のままなら、Swift 6 モードでも <code>NonisolatedNonsendingByDefault</code> と <code>InferIsolatedConformances</code> の 2 つの機能が有効になります（残りの機能は Swift 6 モードで常に有効です）。
             <code>Default Actor Isolation</code> はアプリターゲットにだけ設定されています。
           </p>
 
