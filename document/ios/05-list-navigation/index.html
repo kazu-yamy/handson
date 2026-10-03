@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05: List と NavigationStack | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">05</li>
+        </ol>
+        <h1 class="lesson-title">List と NavigationStack</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: SwiftUI で状態を持つ 1 画面のアプリを作れ、次に一覧から詳細画面へ遷移するアプリを作りたい人</li>
+          <li class="lesson-meta__item">📋 前提: 04 で <code>TodoStore</code> を <code>@Environment</code> で注入した <code>HandsonApp</code> プロジェクトが手元にあること。<code>@State</code>・<code>@Binding</code>・<code>@Bindable</code> と、プロトコル・関連値付きの enum を知っていること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../04-state-management/index.html">04 @State・@Binding・@Observable</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>Identifiable</code> に準拠したモデルを <code>ForEach</code> に <code>id:</code> 無しで渡す</li>
+          <li><code>List</code> と <code>Section</code> で、見出し付きの一覧画面を組み立てる</li>
+          <li><code>NavigationStack</code> に <code>.navigationTitle</code> と <code>.toolbar</code>（<code>EditButton</code>）を付ける</li>
+          <li><code>NavigationLink(value:)</code> と <code>.navigationDestination(for:)</code> で詳細画面へ遷移する</li>
+          <li><code>.onDelete</code>・<code>.onMove</code> と <code>IndexSet</code> で、行の削除と並べ替えを実装する</li>
+          <li><code>Identifiable</code>・<code>.navigationDestination</code>・<code>NavigationStack</code> の扱いを誤ったときのエラーや症状を確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        04 で作った ToDo の画面を <code>List</code> に置き換え、<code>NavigationStack</code> で画面遷移できるようにします。
+        完成すると、タイトル「ToDo」の付いた一覧から行をタップして詳細画面へ進み、戻るボタンで一覧へ戻れるようになります。右上の「Edit」ボタンで編集モードに入ると、行の削除と並べ替えもできます。
+      </p>
+      <p>
+        <code>Identifiable</code>・<code>List</code> → <code>NavigationStack</code> → <code>NavigationLink</code>・詳細画面 → 削除・並べ替え、の順に 1 ステップずつ進めます。
+        最後に、つまずきやすい 3 つの誤りを意図的に起こして、エラーや症状を確かめます。
+        04 と同じく、Xcode の画面での操作と、同じ結果をターミナルで確かめるコマンドの両方を載せています。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            macOS 26.6.2 / Xcode 27.0 / Swift 6.4 は 04 と同じです。シミュレータは iOS 27.0 のランタイムを追加した iPhone 17 を使います（04 までは iOS 26.5）。
+            バージョンは執筆時点（2026年10月）のものです。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">04 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            04 の完成コードをそのまま出発点にします。<code>04-state-management</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>05-list-navigation</code> にコピーします。
+            プロジェクト名・ターゲット名・Bundle Identifier（<code>com.example.HandsonApp</code>）は変えません。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 04-state-management 05-list-navigation</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 05-list-navigation/HandsonApp</span></pre>
+</div>
+
+          <p>以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。コピーしたプロジェクトがそのままビルドでき、04 までの 22 テストが通ることを確かめます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 22 tests in 7 suites passed after 0.020 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <p>
+            ビルドの途中で表示される <code>appintentsmetadataprocessor</code> の <code>warning: Metadata extraction skipped, no AppIntents.framework dependency found</code> は、04 までと同じく無視してかまいません。
+          </p>
+
+          <p>Xcode の場合は、<code>05-list-navigation/HandsonApp/HandsonApp.xcodeproj</code> を開き、<kbd>⌘</kbd> + <kbd>U</kbd>（<code>Product</code> &gt; <code>Test</code>）でテストを実行します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> と <code>Test run with 22 tests in 7 suites passed</code> が表示されれば準備完了です。この項目では、ステップ 5 でテストを 2 つ追加して 24 テストにします。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">Identifiable と List で一覧を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            04 では <code>ForEach($store.items, id: \.title)</code> のように、行を区別するキーとしてタイトルを指定していました。この方法では、同じタイトルの ToDo を追加すると ID が重複します。
+            そこで、<code>TodoItem</code> に一意な ID を持たせ、<code>Identifiable</code> プロトコルに準拠させます。<code>Models/TodoItem.swift</code> の <code>TodoItem</code> の宣言を次のように変えます。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoItem.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line"> </span><span class="diff-line">  enum Priority: Int, CaseIterable {</span><span class="diff-line">      case low = 1</span><span class="diff-line">      case medium</span><span class="diff-line">      case high</span><span class="diff-line"> </span><span class="diff-line">      var label: String {</span><span class="diff-line">          switch self {</span><span class="diff-line">          case .low: "低"</span><span class="diff-line">          case .medium: "中"</span><span class="diff-line">          case .high: "高"</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  // 関連値付きの enum</span><span class="diff-line">  enum Status {</span><span class="diff-line">      case todo</span><span class="diff-line">      case done(Date)</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- struct TodoItem {</span><span class="diff-line diff-line--add">+ struct TodoItem: Identifiable {</span><span class="diff-line diff-line--add">+     let id = UUID()</span><span class="diff-line">      let title: String</span><span class="diff-line">      var priority: Priority = .medium</span><span class="diff-line">      var status: Status = .todo</span><span class="diff-line"> </span><span class="diff-line">      var isDone: Bool {</span><span class="diff-line">          if case .done = status {</span><span class="diff-line">              return true</span><span class="diff-line">          }</span><span class="diff-line">          return false</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      mutating func toggle() {</span><span class="diff-line">          switch status {</span><span class="diff-line">          case .todo:</span><span class="diff-line">              status = .done(Date())</span><span class="diff-line">          case .done:</span><span class="diff-line">              status = .todo</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var statusText: String {</span><span class="diff-line">          switch status {</span><span class="diff-line">          case .todo:</span><span class="diff-line">              "未完了"</span><span class="diff-line">          case .done(let date):</span><span class="diff-line">              "完了 (\(date.formatted(.iso8601.year().month().day())))"</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>Identifiable</code>: 要件は <code>id</code> プロパティを持つことだけです。<code>id</code> の型は <code>Hashable</code> である必要があり、<code>UUID</code> はこれを満たします。</li>
+            <li><code>let id = UUID()</code>: デフォルト値付きの <code>let</code> は、メンバーワイズイニシャライザーの引数になりません。そのため <code>TodoItem(title:priority:status:)</code> の呼び出しは、アプリもテストも書き換える必要はありません。</li>
+            <li>インスタンスを作るたびに別の <code>id</code> が割り当てられます。タイトルが同じ ToDo を 2 つ作っても、別の行として扱われます。</li>
+          </ul>
+
+          <p>
+            次に、<code>ContentView</code> の <code>VStack</code> を <code>List</code> に置き換えます。<code>List</code> はスクロールできる一覧で、中身を <code>Section</code> で区切れます。
+            04 で <code>VStack</code> に並べていた部品を、プロフィールとボタン・トグル、ToDo の一覧、追加欄の 3 つの <code>Section</code> に分けます。<code>ContentView.swift</code> 全体を次の内容に書き換えます。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">//
+//  ContentView.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    let profile = Profile(name: "Taro Yamada", nickname: "Taro")
+
+    @Environment(TodoStore.self) private var store
+
+    @State private var tapCount = 0
+    @State private var showsDone = true
+    @State private var newTitle = ""
+
+    private var canAdd: Bool {
+        (try? validate(name: newTitle)) != nil
+    }
+
+    var body: some View {
+        @Bindable var store = store
+        List {
+            Section {
+                ProfileHeader(profile: profile)
+
+                Button("タップ回数: \(tapCount)") {
+                    tapCount += 1
+                }
+                .buttonStyle(.borderless)
+
+                Toggle("完了も表示", isOn: $showsDone)
+            }
+
+            Section("Todo") {
+                ForEach($store.items) { $item in
+                    if showsDone || !item.isDone {
+                        TodoRow(item: $item)
+                    }
+                }
+            }
+
+            Section("追加") {
+                HStack {
+                    TextField("新しいタスク", text: $newTitle)
+                    Button("追加") {
+                        store.add(title: newTitle)
+                        newTitle = ""
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!canAdd)
+                }
+            }
+        }
+    }
+}
+
+#Preview {
+    ContentView()
+        .environment(TodoStore.sample)
+}</code></pre>
+</div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">04 の ContentView.swift との差分を見る</summary>
+            <div class="disclosure__body">
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line diff-line--remove">-         VStack(alignment: .leading, spacing: 16) {</span><span class="diff-line diff-line--remove">-             ProfileHeader(profile: profile)</span><span class="diff-line diff-line--add">+         List {</span><span class="diff-line diff-line--add">+             Section {</span><span class="diff-line diff-line--add">+                 ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-             Button("タップ回数: \(tapCount)") {</span><span class="diff-line diff-line--remove">-                 tapCount += 1</span><span class="diff-line diff-line--add">+                 Button("タップ回数: \(tapCount)") {</span><span class="diff-line diff-line--add">+                     tapCount += 1</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line diff-line--add">+                 .buttonStyle(.borderless)</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+                 Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-             Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-             Text("Todo")</span><span class="diff-line diff-line--remove">-                 .font(.headline)</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-             VStack(alignment: .leading, spacing: 12) {</span><span class="diff-line diff-line--remove">-                 ForEach($store.items, id: \.title) { $item in</span><span class="diff-line diff-line--add">+             Section("Todo") {</span><span class="diff-line diff-line--add">+                 ForEach($store.items) { $item in</span><span class="diff-line">                      if showsDone || !item.isDone {</span><span class="diff-line">                          TodoRow(item: $item)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-             HStack {</span><span class="diff-line diff-line--remove">-                 TextField("新しいタスク", text: $newTitle)</span><span class="diff-line diff-line--remove">-                     .textFieldStyle(.roundedBorder)</span><span class="diff-line diff-line--remove">-                 Button("追加") {</span><span class="diff-line diff-line--remove">-                     store.add(title: newTitle)</span><span class="diff-line diff-line--remove">-                     newTitle = ""</span><span class="diff-line diff-line--add">+             Section("追加") {</span><span class="diff-line diff-line--add">+                 HStack {</span><span class="diff-line diff-line--add">+                     TextField("新しいタスク", text: $newTitle)</span><span class="diff-line diff-line--add">+                     Button("追加") {</span><span class="diff-line diff-line--add">+                         store.add(title: newTitle)</span><span class="diff-line diff-line--add">+                         newTitle = ""</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                     .buttonStyle(.borderless)</span><span class="diff-line diff-line--add">+                     .disabled(!canAdd)</span><span class="diff-line">                  }</span><span class="diff-line diff-line--remove">-                 .disabled(!canAdd)</span><span class="diff-line">              }</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-             Spacer()</span><span class="diff-line">          }</span><span class="diff-line diff-line--remove">-         .padding()</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+            </div>
+          </details>
+
+          <ul>
+            <li><code>ForEach($store.items) { $item in … }</code>: <code>TodoItem</code> が <code>Identifiable</code> になったので、<code>id:</code> を省略できます。<code>ForEach</code> は各要素の <code>id</code> で行を区別します。<code>$item</code> が <code>Binding&lt;TodoItem&gt;</code> になる点は 04 と同じで、<code>TodoRow</code> は変更しません。</li>
+            <li><code>Section { … }</code> / <code>Section("Todo") { … }</code>: 引数に文字列を渡すと、その文字列がセクションの見出しになります。見出しが要らないときは引数を省略します。</li>
+            <li><code>.buttonStyle(.borderless)</code>: <code>List</code> の行の中にある <code>Button</code> は、行全体がタップ領域になります。「追加」の行のように、1 行にテキストフィールドとボタンが並ぶ場合は、<code>.borderless</code> を付けてボタンの部分だけがタップに反応するようにします。</li>
+            <li><code>List</code> が余白と行の区切りを持つので、04 の <code>Spacer()</code>・<code>.padding()</code>・<code>Text("Todo")</code> の見出し、<code>TextField</code> の <code>.textFieldStyle(.roundedBorder)</code> は外しました。</li>
+          </ul>
+
+          <p>ビルドとテストを実行し、シミュレータで確かめます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 22 tests in 7 suites passed after 0.023 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl boot 'iPhone 17'</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <p>
+            シミュレータがすでに起動している場合は <code>boot</code> を飛ばしてください。<code>launch</code> の出力の末尾の数字はプロセス ID で、実行するたびに変わります。
+            Xcode の場合は、<kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示できます。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              画面が角丸のカード状のブロックに分かれます。1 つ目のブロックにプロフィールのカード、青い文字の「タップ回数: 0」、オン（緑）のスイッチ「完了も表示」が並びます。
+              その下に見出し「Todo」のブロックがあり、「牛乳を買う（高）」「メールを返す（低・完了で取り消し線）」「SwiftUI を勉強する（中）」の 3 行が表示されます。
+              最後が見出し「追加」のブロックで、プレースホルダー「新しいタスク」の入力欄と、薄い灰色（無効）の「追加」ボタンが表示されます。
+            </p>
+            <p>04 と同じく、ToDo の行をタップすると完了・未完了が切り替わります。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">NavigationStack でタイトルと Edit ボタンを付ける</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            画面遷移の土台として、<code>List</code> を <code>NavigationStack</code> で包みます。<code>NavigationStack</code> は画面を積み重ねて管理するコンテナで、上部にナビゲーションバーを表示します。
+            あわせて、ナビゲーションバーにタイトルと「Edit」ボタンを付けます。<code>ContentView.swift</code> を次のように変更します（<code>List</code> の中身はインデントが 1 段深くなるだけです）。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line diff-line--remove">-         List {</span><span class="diff-line diff-line--remove">-             Section {</span><span class="diff-line diff-line--remove">-                 ProfileHeader(profile: profile)</span><span class="diff-line diff-line--add">+         NavigationStack {</span><span class="diff-line diff-line--add">+             List {</span><span class="diff-line diff-line--add">+                 Section {</span><span class="diff-line diff-line--add">+                     ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-                 Button("タップ回数: \(tapCount)") {</span><span class="diff-line diff-line--remove">-                     tapCount += 1</span><span class="diff-line diff-line--add">+                     Button("タップ回数: \(tapCount)") {</span><span class="diff-line diff-line--add">+                         tapCount += 1</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                     .buttonStyle(.borderless)</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+                     Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line diff-line--remove">-                 .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-                 Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line diff-line--remove">-             }</span><span class="diff-line diff-line--add">+                 Section("Todo") {</span><span class="diff-line diff-line--add">+                     ForEach($store.items) { $item in</span><span class="diff-line diff-line--add">+                         if showsDone || !item.isDone {</span><span class="diff-line diff-line--add">+                             TodoRow(item: $item)</span><span class="diff-line diff-line--add">+                         }</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-             Section("Todo") {</span><span class="diff-line diff-line--remove">-                 ForEach($store.items) { $item in</span><span class="diff-line diff-line--remove">-                     if showsDone || !item.isDone {</span><span class="diff-line diff-line--remove">-                         TodoRow(item: $item)</span><span class="diff-line diff-line--add">+                 Section("追加") {</span><span class="diff-line diff-line--add">+                     HStack {</span><span class="diff-line diff-line--add">+                         TextField("新しいタスク", text: $newTitle)</span><span class="diff-line diff-line--add">+                         Button("追加") {</span><span class="diff-line diff-line--add">+                             store.add(title: newTitle)</span><span class="diff-line diff-line--add">+                             newTitle = ""</span><span class="diff-line diff-line--add">+                         }</span><span class="diff-line diff-line--add">+                         .buttonStyle(.borderless)</span><span class="diff-line diff-line--add">+                         .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-             Section("追加") {</span><span class="diff-line diff-line--remove">-                 HStack {</span><span class="diff-line diff-line--remove">-                     TextField("新しいタスク", text: $newTitle)</span><span class="diff-line diff-line--remove">-                     Button("追加") {</span><span class="diff-line diff-line--remove">-                         store.add(title: newTitle)</span><span class="diff-line diff-line--remove">-                         newTitle = ""</span><span class="diff-line diff-line--remove">-                     }</span><span class="diff-line diff-line--remove">-                     .buttonStyle(.borderless)</span><span class="diff-line diff-line--remove">-                     .disabled(!canAdd)</span><span class="diff-line diff-line--remove">-                 }</span><span class="diff-line diff-line--add">+             .navigationTitle("ToDo")</span><span class="diff-line diff-line--add">+             .toolbar {</span><span class="diff-line diff-line--add">+                 EditButton()</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>.navigationTitle("ToDo")</code>: ナビゲーションバーのタイトルです。一覧の先頭が表示されている間は大きな見出し（large title）で表示されます。</li>
+            <li><code>.toolbar { EditButton() }</code>: ナビゲーションバーにボタンを置きます。<code>EditButton</code> は <code>List</code> の編集モードを切り替えるボタンです。編集モードで何ができるかは、ステップ 5 で設定します。</li>
+            <li><code>.navigationTitle</code> と <code>.toolbar</code> は、<code>NavigationStack</code> そのものではなく、<strong>中に置いた View（ここでは <code>List</code>）に付けます</strong>。外側に付けた場合の症状は、ステップ 6 で確かめます。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">ボタンが「Edit」と英語で表示される</p>
+              <p>
+                <code>EditButton</code> の文字はシステムが用意したものです。このプロジェクトには日本語のローカライズ設定（Localizations）が無く、シミュレータの言語も英語のため、「Edit」「Done」と英語で表示されます。ステップ 5 のスワイプで出る「Delete」も同じ理由で英語です。
+              </p>
+            </div>
+          </div>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              一覧の上の左側に大きなタイトル「ToDo」が、右上に「Edit」ボタンが表示されます。一覧の中身はステップ 2 と同じです。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">NavigationLink で詳細画面へ遷移する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            行をタップしたときに表示する詳細画面を作ります。<code>Views</code> フォルダに SwiftUI の View のファイル <code>TodoDetailView.swift</code> を作ります。Xcode では <code>Views</code> を右クリックし、<code>New File from Template…</code> で <code>iOS</code> &gt; <code>SwiftUI View</code> を選びます（<code>Targets</code> は <code>HandsonApp</code>）。
+            中身を次の内容に書き換えます。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoDetailView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import SwiftUI
+
+struct TodoDetailView: View {
+    let item: TodoItem
+
+    var body: some View {
+        List {
+            LabeledContent("タイトル", value: item.title)
+            LabeledContent("優先度", value: item.priority.label)
+            LabeledContent("状態", value: item.isDone ? "完了" : "未完了")
+            if case .done(let date) = item.status {
+                LabeledContent("完了日時") {
+                    Text(date, format: .dateTime.year().month().day().hour().minute())
+                }
+            }
+        }
+        .navigationTitle(item.title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+#Preview {
+    NavigationStack {
+        TodoDetailView(item: TodoItem(title: "メールを返す", priority: .low, status: .done(Date())))
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>LabeledContent("タイトル", value: item.title)</code>: 左にラベル、右に値を並べた行を作ります。</li>
+            <li><code>if case .done(let date) = item.status</code>: <code>.done</code> の関連値（完了日時）を取り出します。未完了のときは「完了日時」の行ごと表示しません。</li>
+            <li><code>.navigationBarTitleDisplayMode(.inline)</code>: 詳細画面のタイトルを、大きな見出しではなくナビゲーションバーの中央に小さく表示します。</li>
+            <li><code>#Preview</code>: <code>TodoDetailView</code> はナビゲーションバーにタイトルを出すので、プレビューでは <code>NavigationStack</code> で包んでいます。</li>
+          </ul>
+
+          <p>
+            <code>ContentView.swift</code> では、ToDo の行を <code>NavigationLink(value:)</code> で包み、<code>List</code> に <code>.navigationDestination(for:)</code> を付けます。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line">                      ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("Todo") {</span><span class="diff-line">                      ForEach($store.items) { $item in</span><span class="diff-line">                          if showsDone || !item.isDone {</span><span class="diff-line diff-line--remove">-                             TodoRow(item: $item)</span><span class="diff-line diff-line--add">+                             NavigationLink(value: item) {</span><span class="diff-line diff-line--add">+                                 TodoRow(item: $item)</span><span class="diff-line diff-line--add">+                             }</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">                          TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line">                              store.add(title: newTitle)</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line">                          }</span><span class="diff-line">                          .buttonStyle(.borderless)</span><span class="diff-line">                          .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line diff-line--add">+             .navigationDestination(for: TodoItem.self) { item in</span><span class="diff-line diff-line--add">+                 TodoDetailView(item: item)</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line">              .toolbar {</span><span class="diff-line">                  EditButton()</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>NavigationLink(value: item) { … }</code>: タップすると、<code>item</code> の値を <code>NavigationStack</code> に積みます。行の右端に <code>&gt;</code> の印が付きます。</li>
+            <li><code>.navigationDestination(for: TodoItem.self) { item in … }</code>: <code>TodoItem</code> 型の値が積まれたときに表示する画面を指定します。リンクは「どの値を渡すか」だけを持ち、「どの画面を出すか」は <code>.navigationDestination</code> の側で決まります。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">渡す値の型は <code>Hashable</code> でなければならない</p>
+              <p>この時点でビルドすると、次のエラーで失敗します。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/ContentView.swift:39:29: error: initializer 'init(value:label:)' requires that 'TodoItem' conform to 'Hashable'</span><span class="terminal__line">…/ContentView.swift:58:14: error: instance method 'navigationDestination(for:destination:)' requires that 'TodoItem' conform to 'Hashable'</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                <code>requires that 'TodoItem' conform to 'Hashable'</code>（<code>TodoItem</code> が <code>Hashable</code> に準拠している必要がある）のエラーです。<code>NavigationLink(value:)</code> と <code>.navigationDestination(for:)</code> で扱う値の型は <code>Hashable</code> でなければなりません。
+                そこで <code>struct TodoItem: Identifiable, Hashable</code> とすると、今度は次のエラーになります。
+              </p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">…/TodoItem.swift:23:8: error: type 'TodoItem' does not conform to protocol 'Hashable'</span><span class="terminal__line">…/TodoItem.swift:23:8: error: type 'TodoItem' does not conform to protocol 'Equatable'</span><span class="terminal__line">note: stored property type 'Status' does not conform to protocol 'Hashable', preventing synthesized conformance of 'TodoItem' to 'Hashable'</span></pre>
+</div>
+              <p>
+                <code>note</code> の行が原因を示しています。プロパティ <code>status</code> の型 <code>Status</code> が <code>Hashable</code> ではないため、<code>TodoItem</code> の <code>Hashable</code> の実装を自動で作れません。
+              </p>
+            </div>
+          </div>
+
+          <p><code>Models/TodoItem.swift</code> の <code>Status</code> と <code>TodoItem</code> の両方に <code>Hashable</code> を付けます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoItem.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line"> </span><span class="diff-line">  enum Priority: Int, CaseIterable {</span><span class="diff-line">      case low = 1</span><span class="diff-line">      case medium</span><span class="diff-line">      case high</span><span class="diff-line"> </span><span class="diff-line">      var label: String {</span><span class="diff-line">          switch self {</span><span class="diff-line">          case .low: "低"</span><span class="diff-line">          case .medium: "中"</span><span class="diff-line">          case .high: "高"</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  // 関連値付きの enum</span><span class="diff-line diff-line--remove">- enum Status {</span><span class="diff-line diff-line--add">+ enum Status: Hashable {</span><span class="diff-line">      case todo</span><span class="diff-line">      case done(Date)</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- struct TodoItem: Identifiable {</span><span class="diff-line diff-line--add">+ struct TodoItem: Identifiable, Hashable {</span><span class="diff-line">      let id = UUID()</span><span class="diff-line">      let title: String</span><span class="diff-line">      var priority: Priority = .medium</span><span class="diff-line">      var status: Status = .todo</span><span class="diff-line"> </span><span class="diff-line">      var isDone: Bool {</span><span class="diff-line">          if case .done = status {</span><span class="diff-line">              return true</span><span class="diff-line">          }</span><span class="diff-line">          return false</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      mutating func toggle() {</span><span class="diff-line">          switch status {</span><span class="diff-line">          case .todo:</span><span class="diff-line">              status = .done(Date())</span><span class="diff-line">          case .done:</span><span class="diff-line">              status = .todo</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var statusText: String {</span><span class="diff-line">          switch status {</span><span class="diff-line">          case .todo:</span><span class="diff-line">              "未完了"</span><span class="diff-line">          case .done(let date):</span><span class="diff-line">              "完了 (\(date.formatted(.iso8601.year().month().day())))"</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>enum Status: Hashable</code>: 関連値の <code>Date</code> が <code>Hashable</code> なので、関連値付きの enum でも <code>==</code> と <code>hash(into:)</code> の実装は自動で作られます。自分で書く必要はありません。</li>
+            <li><code>Priority</code> は <code>Int</code> の raw value を持つ enum なので、最初から <code>Hashable</code> です。変更は要りません。</li>
+            <li>自動で作られる <code>==</code> は、<code>id</code> を含む全てのプロパティを比べます。</li>
+          </ul>
+
+          <p>これでビルドは通ります。ただし、このままシミュレータで行をタップしても、詳細画面には遷移しません。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">行の <code>onTapGesture</code> が <code>NavigationLink</code> のタップを奪う</p>
+              <p>
+                04 の <code>TodoRow</code> は、行全体に <code>.onTapGesture { item.toggle() }</code> を付けていました。この行を <code>NavigationLink</code> で包むと、タップは <code>TodoRow</code> の <code>onTapGesture</code> が受け取ります。
+                そのため「牛乳を買う」の行をタップすると、詳細画面には進まず、行が完了（緑のチェックマークと取り消し線）に切り替わるだけです。
+              </p>
+              <p>
+                そこで、行全体のタップは <code>NavigationLink</code> に任せ、完了・未完了の切り替えは左端のアイコンをボタンにして行います。
+              </p>
+            </div>
+          </div>
+
+          <p><code>Views/TodoRow.swift</code> を次の内容に書き換えます。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoRow.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import SwiftUI
+
+struct TodoRow: View {
+    @Binding var item: TodoItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // 完了の切り替えはアイコンのボタンだけに任せる（行のタップは NavigationLink に譲る）
+            Button {
+                item.toggle()
+            } label: {
+                // switch: Status の case ごとにアイコンを切り替える
+                switch item.status {
+                case .todo:
+                    Image(systemName: "circle")
+                        .foregroundStyle(.secondary)
+                case .done:
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(item.isDone ? "未完了に戻す" : "完了にする")
+
+            Text(item.title)
+                .strikethrough(item.isDone)
+
+            Spacer()
+
+            Text(item.priority.label)
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
+        }
+    }
+}
+
+#Preview("未完了") {
+    @Previewable @State var item = TodoItem(title: "牛乳を買う", priority: .high)
+    TodoRow(item: $item)
+        .padding()
+}
+
+#Preview("完了") {
+    @Previewable @State var item = TodoItem(title: "メールを返す", priority: .low, status: .done(Date()))
+    TodoRow(item: $item)
+        .padding()
+}</code></pre>
+</div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">04 の TodoRow.swift との差分を見る</summary>
+            <div class="disclosure__body">
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoRow.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct TodoRow: View {</span><span class="diff-line">      @Binding var item: TodoItem</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          HStack(spacing: 12) {</span><span class="diff-line diff-line--remove">-             // switch: Status の case ごとにアイコンを切り替える</span><span class="diff-line diff-line--remove">-             switch item.status {</span><span class="diff-line diff-line--remove">-             case .todo:</span><span class="diff-line diff-line--remove">-                 Image(systemName: "circle")</span><span class="diff-line diff-line--remove">-                     .foregroundStyle(.secondary)</span><span class="diff-line diff-line--remove">-             case .done:</span><span class="diff-line diff-line--remove">-                 Image(systemName: "checkmark.circle.fill")</span><span class="diff-line diff-line--remove">-                     .foregroundStyle(.green)</span><span class="diff-line diff-line--add">+             // 完了の切り替えはアイコンのボタンだけに任せる（行のタップは NavigationLink に譲る）</span><span class="diff-line diff-line--add">+             Button {</span><span class="diff-line diff-line--add">+                 item.toggle()</span><span class="diff-line diff-line--add">+             } label: {</span><span class="diff-line diff-line--add">+                 // switch: Status の case ごとにアイコンを切り替える</span><span class="diff-line diff-line--add">+                 switch item.status {</span><span class="diff-line diff-line--add">+                 case .todo:</span><span class="diff-line diff-line--add">+                     Image(systemName: "circle")</span><span class="diff-line diff-line--add">+                         .foregroundStyle(.secondary)</span><span class="diff-line diff-line--add">+                 case .done:</span><span class="diff-line diff-line--add">+                     Image(systemName: "checkmark.circle.fill")</span><span class="diff-line diff-line--add">+                         .foregroundStyle(.green)</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line">              }</span><span class="diff-line diff-line--add">+             .buttonStyle(.borderless)</span><span class="diff-line diff-line--add">+             .accessibilityLabel(item.isDone ? "未完了に戻す" : "完了にする")</span><span class="diff-line"> </span><span class="diff-line">              Text(item.title)</span><span class="diff-line">                  .strikethrough(item.isDone)</span><span class="diff-line"> </span><span class="diff-line">              Spacer()</span><span class="diff-line"> </span><span class="diff-line">              Text(item.priority.label)</span><span class="diff-line">                  .font(.caption)</span><span class="diff-line">                  .padding(.horizontal, 8)</span><span class="diff-line">                  .padding(.vertical, 2)</span><span class="diff-line">                  .background(.quaternary, in: Capsule())</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--remove">-         .contentShape(Rectangle())</span><span class="diff-line diff-line--remove">-         .onTapGesture {</span><span class="diff-line diff-line--remove">-             item.toggle()</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview("未完了") {</span><span class="diff-line">      @Previewable @State var item = TodoItem(title: "牛乳を買う", priority: .high)</span><span class="diff-line">      TodoRow(item: $item)</span><span class="diff-line">          .padding()</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview("完了") {</span><span class="diff-line">      @Previewable @State var item = TodoItem(title: "メールを返す", priority: .low, status: .done(Date()))</span><span class="diff-line">      TodoRow(item: $item)</span><span class="diff-line">          .padding()</span><span class="diff-line">  }</span></pre>
+</div>
+            </div>
+          </details>
+
+          <ul>
+            <li><code>Button { item.toggle() } label: { … }</code>: アイコンを <code>Button</code> のラベルにします。アイコンをタップしたときだけ完了・未完了が切り替わります。</li>
+            <li><code>.buttonStyle(.borderless)</code>: ステップ 2 の「追加」ボタンと同じく、行全体ではなくボタンの部分だけがタップに反応するようにします。</li>
+            <li><code>.accessibilityLabel(…)</code>: アイコンだけのボタンは、VoiceOver で読み上げる文字がありません。状態に合わせて「完了にする」「未完了に戻す」を設定します。</li>
+            <li>行全体の <code>.contentShape(Rectangle())</code> と <code>.onTapGesture</code> は削除します。</li>
+          </ul>
+
+          <p>ボタンにすると、未完了の丸いアイコンがアクセントカラー（薄い青）で表示されるようになります。この項目ではこの見た目のまま進めます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">詳細画面に渡るのはタップした時点のコピー</p>
+              <p>
+                <code>NavigationLink(value: item)</code> は、タップした時点の <code>TodoItem</code> の値（構造体のコピー）を渡します。<code>TodoDetailView</code> の <code>item</code> は <code>let</code> なので、詳細画面を開いたあとに一覧側で同じ ToDo が変わっても、詳細画面の表示は更新されません。
+                常に最新の値を表示したい場合は、<code>id</code> だけを渡してストアから引く設計にします（この項目では扱いません）。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              一覧の 3 行の右端に <code>&gt;</code> が付きます。未完了の行の丸いアイコンは、薄い青で表示されます。
+              「牛乳を買う」の文字をタップすると詳細画面に進みます。ナビゲーションバーの左端に戻るボタン（<code>&lt;</code>）が表示されます。中央のタイトル「牛乳を買う」は小さく表示されます。リストの行は「タイトル: 牛乳を買う」「優先度: 高」「状態: 未完了」の 3 つです。未完了なので「完了日時」の行はありません。
+            </p>
+            <p>
+              戻るボタンをタップすると一覧（ToDo）に戻ります。左端の丸いアイコンをタップすると、詳細画面には進まずに完了・未完了だけが切り替わります。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">onDelete と onMove で削除と並べ替えを実装する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ステップ 3 で付けた「Edit」ボタンは、押すと「Done」に変わるだけで、行には何も起きません。行を削除・並べ替えできるようにするには、<code>ForEach</code> に <code>.onDelete</code> と <code>.onMove</code> を付けます。
+            まず、配列を操作するメソッドを <code>TodoStore</code> に追加します。<code>Models/TodoStore.swift</code> を次のように変更します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoStore.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Observation</span><span class="diff-line diff-line--add">+ import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @Observable</span><span class="diff-line">  final class TodoStore {</span><span class="diff-line">      var items: [TodoItem]</span><span class="diff-line"> </span><span class="diff-line">      init(items: [TodoItem] = []) {</span><span class="diff-line">          self.items = items</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func add(title: String, priority: Priority = .medium) {</span><span class="diff-line">          items.append(TodoItem(title: title, priority: priority))</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func toggle(_ item: TodoItem) {</span><span class="diff-line">          guard let index = items.firstIndex(where: { $0.title == item.title }) else { return }</span><span class="diff-line">          items[index].toggle()</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+     func remove(at offsets: IndexSet) {</span><span class="diff-line diff-line--add">+         items.remove(atOffsets: offsets)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     func move(from source: IndexSet, to destination: Int) {</span><span class="diff-line diff-line--add">+         items.move(fromOffsets: source, toOffset: destination)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      static let sample = TodoStore(items: [</span><span class="diff-line">          TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">          TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">          TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">      ])</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>remove(at offsets: IndexSet)</code>: <code>IndexSet</code> は、配列の添字（オフセット）の集合です。<code>.onDelete</code> からは、削除する行の位置がこの形で渡されます。</li>
+            <li><code>move(from source: IndexSet, to destination: Int)</code>: <code>.onMove</code> から渡される「移動する行の位置」と「移動先の位置」をそのまま配列に適用します。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>import SwiftUI</code> を忘れるとメソッドが見つからない</p>
+              <p><code>import SwiftUI</code> の行を足さずに（<code>import Foundation</code> と <code>import Observation</code> だけで）ビルドすると、次のエラーになります。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/TodoStore.swift:22:15: error: instance method 'remove(atOffsets:)' is not available due to missing import of defining module 'SwiftUI' [#MemberImportVisibility]</span><span class="terminal__line">…/TodoStore.swift:26:15: error: instance method 'move(fromOffsets:toOffset:)' is not available due to missing import of defining module 'SwiftUI' [#MemberImportVisibility]</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                <code>remove(atOffsets:)</code> と <code>move(fromOffsets:toOffset:)</code> は、Swift の標準ライブラリではなく SwiftUI が配列に追加しているメソッドです。
+                このプロジェクトはビルド設定で <code>MemberImportVisibility</code> が有効です（Xcode 27 で新規作成したプロジェクトの既定）。そのため、ファイルで <code>import SwiftUI</code> していないと使えません。
+              </p>
+            </div>
+          </div>
+
+          <p>次に、<code>ContentView.swift</code> の <code>ForEach</code> に <code>.onDelete</code> と <code>.onMove</code> を付けます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line">                      ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("Todo") {</span><span class="diff-line">                      ForEach($store.items) { $item in</span><span class="diff-line">                          if showsDone || !item.isDone {</span><span class="diff-line">                              NavigationLink(value: item) {</span><span class="diff-line">                                  TodoRow(item: $item)</span><span class="diff-line">                              }</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line diff-line--add">+                     .onDelete { offsets in</span><span class="diff-line diff-line--add">+                         store.remove(at: offsets)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                     .onMove { source, destination in</span><span class="diff-line diff-line--add">+                         store.move(from: source, to: destination)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">                          TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line">                              store.add(title: newTitle)</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line">                          }</span><span class="diff-line">                          .buttonStyle(.borderless)</span><span class="diff-line">                          .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .navigationDestination(for: TodoItem.self) { item in</span><span class="diff-line">                  TodoDetailView(item: item)</span><span class="diff-line">              }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line">              .toolbar {</span><span class="diff-line">                  EditButton()</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>.onDelete</code> と <code>.onMove</code> は、<code>List</code> ではなく <strong><code>ForEach</code> に付けます</strong>。並べ替えや削除の対象になるのは、<code>ForEach</code> が作る行だけです。</li>
+            <li>2 つの修飾子を付けると、編集モードで行の左に削除ボタン、右に並べ替えのハンドルが表示されます。編集モードでなくても、行を左にスワイプすると削除ボタンが出ます。</li>
+          </ul>
+
+          <p><code>remove(at:)</code> と <code>move(from:to:)</code> のテストを <code>HandsonAppTests/TodoStoreTests.swift</code> の末尾に追加します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/TodoStoreTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Testing</span><span class="diff-line">  @testable import HandsonApp</span><span class="diff-line"> </span><span class="diff-line">  @MainActor</span><span class="diff-line">  struct TodoStoreTests {</span><span class="diff-line"> </span><span class="diff-line">      @Test func addAppendsItemWithDefaults() {</span><span class="diff-line">          let store = TodoStore()</span><span class="diff-line">          store.add(title: "買い物")</span><span class="diff-line">          #expect(store.items.count == 1)</span><span class="diff-line">          #expect(store.items[0].title == "買い物")</span><span class="diff-line">          #expect(store.items[0].priority == .medium)</span><span class="diff-line">          #expect(!store.items[0].isDone)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      @Test func toggleChangesStatus() {</span><span class="diff-line">          let store = TodoStore(items: [TodoItem(title: "買い物")])</span><span class="diff-line">          store.toggle(store.items[0])</span><span class="diff-line">          #expect(store.items[0].isDone)</span><span class="diff-line">          store.toggle(store.items[0])</span><span class="diff-line">          #expect(!store.items[0].isDone)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      @Test func toggleIgnoresUnknownItem() {</span><span class="diff-line">          let store = TodoStore(items: [TodoItem(title: "買い物")])</span><span class="diff-line">          store.toggle(TodoItem(title: "存在しない"))</span><span class="diff-line">          #expect(!store.items[0].isDone)</span><span class="diff-line">      }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     @Test func removeDeletesItemsAtOffsets() {</span><span class="diff-line diff-line--add">+         let store = TodoStore(items: [</span><span class="diff-line diff-line--add">+             TodoItem(title: "A"), TodoItem(title: "B"), TodoItem(title: "C"),</span><span class="diff-line diff-line--add">+         ])</span><span class="diff-line diff-line--add">+         store.remove(at: IndexSet(integer: 1))</span><span class="diff-line diff-line--add">+         #expect(store.items.map(\.title) == ["A", "C"])</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     @Test func moveReordersItems() {</span><span class="diff-line diff-line--add">+         let store = TodoStore(items: [</span><span class="diff-line diff-line--add">+             TodoItem(title: "A"), TodoItem(title: "B"), TodoItem(title: "C"),</span><span class="diff-line diff-line--add">+         ])</span><span class="diff-line diff-line--add">+         // 先頭の A を末尾（offset 3）へ</span><span class="diff-line diff-line--add">+         store.move(from: IndexSet(integer: 0), to: 3)</span><span class="diff-line diff-line--add">+         #expect(store.items.map(\.title) == ["B", "C", "A"])</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            <code>move(from:to:)</code> の <code>to</code> は「この位置の手前に入れる」というオフセットです。<code>["A", "B", "C"]</code> の先頭の A を末尾に動かすには、2 ではなく要素数の <strong>3</strong> を渡します。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 24 tests in 7 suites passed after 0.028 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">テストが失敗すると <code>xcodebuild</code> の終了まで長く待たされる</p>
+              <p>
+                テストが失敗すると、<code>xcodebuild</code> は終了前に <code>simctl diagnose</code>（診断情報の収集）を実行し、最大で 600 秒ほど待たされることがあります。この項目の作成中は、UI テストの失敗時に発生しました。
+                テストのコマンドを <code>perl -e 'alarm 600; exec @ARGV'</code> で包んでいるのは、600 秒で打ち切るためです。待ちきれない場合は <kbd>Ctrl</kbd> + <kbd>C</kbd> で止め、失敗したテストを直してから実行し直してください。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Test run with 24 tests in 7 suites passed</code> と表示されることを確かめます（22 + <code>TodoStoreTests</code> の 2 テスト）。</p>
+            <p>
+              シミュレータで「Edit」をタップすると、右上のボタンが青い丸のチェックマーク（Done）に変わります。ToDo の各行の左に赤い ⊖ ボタン、右端に ≡ のハンドルが表示されます。行の <code>&gt;</code> は編集モードでも残ります。
+              「牛乳を買う」の ≡ をドラッグして一番下に動かすと、順序が「メールを返す」「SwiftUI を勉強する」「牛乳を買う」になります。
+            </p>
+            <p>
+              チェックマークのボタンをタップして編集モードを終え、「メールを返す」の行を左にスワイプします。行が左にずれ、ゴミ箱のアイコン付きの赤い「Delete」ボタンが現れます。
+              「Delete」をタップすると「メールを返す」が消え、「SwiftUI を勉強する」「牛乳を買う」の 2 行が残ります。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">よくある 3 つの誤りを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ここまでの完成状態から、<code>List</code> と <code>NavigationStack</code> でつまずきやすい誤りを 1 つずつ起こしてみます。
+            1 つ目はビルドが失敗します。2 つ目と 3 つ目は、ビルドは通りますが、期待どおりの動作になりません。それぞれ確かめたら、必ず元に戻してください。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">1. <code>Identifiable</code> でない型を <code>id:</code> 無しの <code>ForEach</code> に渡す</p>
+              <p><code>Models/TodoItem.swift</code> の宣言から <code>Identifiable</code> を一時的に外し、<code>struct TodoItem: Hashable</code> にしてビルドします。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/ContentView.swift:37:21: error: initializer 'init(_:content:)' requires that 'TodoItem' conform to 'Identifiable'</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                <code>requires that 'TodoItem' conform to 'Identifiable'</code>（<code>TodoItem</code> が <code>Identifiable</code> に準拠している必要がある）のエラーです。<code>id:</code> を省略した <code>ForEach</code> は、要素の型が <code>Identifiable</code> であることを要求します。
+                直し方は、<code>Identifiable</code> に準拠させる（この項目の方法）か、04 のように <code>ForEach($store.items, id: \.title)</code> と <code>id:</code> を明示するかのどちらかです。確認したら <code>Identifiable</code> を戻してください。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">2. <code>.navigationDestination</code> を付けずに <code>NavigationLink(value:)</code> を使う</p>
+              <p>
+                <code>ContentView.swift</code> の <code>.navigationDestination(for: TodoItem.self) { … }</code> の 3 行を一時的に削除します。ビルドは<strong>成功します</strong>。
+                シミュレータで起動して「牛乳を買う」の行をタップすると、行が灰色にハイライトされるだけで、詳細画面には進みません。このときのログを <code>log show</code> で確かめます。
+              </p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl spawn booted log show --last 1m --predicate 'eventMessage CONTAINS "navigationDestination" OR eventMessage CONTAINS "NavigationLink"' --style compact</span><span class="terminal__line">…</span><span class="terminal__line">2026-10-03 16:49:49.915 F  HandsonApp[64565:2382de] [com.apple.SwiftUI:Invalid Configuration] A NavigationLink is presenting a value of type “TodoItem” but there is no matching navigationDestination declaration visible from the location of the link. The link cannot be activated.</span><span class="terminal__line"></span><span class="terminal__line">Note: Links search for destinations in any surrounding NavigationStack, then within the same column of a NavigationSplitView.</span><span class="terminal__line">…</span></pre>
+</div>
+              <p>
+                <code>A NavigationLink is presenting a value of type “TodoItem” but there is no matching navigationDestination declaration visible from the location of the link. The link cannot be activated.</code>（<code>NavigationLink</code> が <code>TodoItem</code> 型の値を表示しようとしているが、リンクの位置から見える <code>navigationDestination</code> の宣言が無い。リンクを有効にできない）というメッセージです。
+                <code>com.apple.SwiftUI</code> の <code>Invalid Configuration</code>（不正な構成）として、Fault（<code>F</code>）レベルで記録されます。アプリは落ちないので、ログを見ないと原因に気付きにくい誤りです。確認したら <code>.navigationDestination</code> を戻してください。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">3. <code>.navigationTitle</code> を <code>NavigationStack</code> の外側に付ける</p>
+              <p><code>.navigationTitle("ToDo")</code> を <code>List</code> から外し、<code>NavigationStack { … }</code> の閉じ括弧の後ろに付けてビルドします。</p>
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift（失敗する例）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">        NavigationStack {
+            List {
+                …
+            }
+            .navigationDestination(for: TodoItem.self) { item in
+                TodoDetailView(item: item)
+            }
+            .toolbar {
+                EditButton()
+            }
+        }
+        .navigationTitle("ToDo")      // NavigationStack の外側</code></pre>
+</div>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+</div>
+              <p>
+                ビルドは警告も無く成功します。しかしシミュレータで起動すると、大きなタイトル「ToDo」が表示されません。<code>.toolbar</code> は <code>List</code> に付いたままなので、右上の「Edit」ボタンは表示されます。
+                <code>.navigationTitle</code> の付け先は、<code>NavigationStack</code> の中に置いた View です。確認したら <code>List</code> の側に戻してください。
+              </p>
+            </div>
+          </div>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              1 つ目は <code>requires that 'TodoItem' conform to 'Identifiable'</code> でビルドが失敗することを確かめます。2 つ目はビルドが通るのに遷移せず、ログに <code>there is no matching navigationDestination declaration</code> が出ることを確かめます。3 つ目は、ビルドが通るのにタイトルが消えることを確かめます。
+              3 つとも元に戻し、<code>** BUILD SUCCEEDED **</code> になれば OK です。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">完成状態でビルドとテストを実行する</h3>
+        </div>
+        <div class="step__body">
+          <p>完成状態のファイル構成は次のとおりです。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Text</span>
+  <span class="code-block__filename">HandsonApp/</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-plaintext">HandsonApp/
+  HandsonApp/
+    HandsonAppApp.swift
+    ContentView.swift            # この項目で更新（NavigationStack + List + Section、NavigationLink、onDelete / onMove）
+    Greeting.swift
+    Models/
+      Profile.swift
+      Counter.swift
+      TodoItem.swift             # この項目で更新（Identifiable, Hashable、Status: Hashable）
+      TodoStore.swift            # この項目で更新（remove(at:) / move(from:to:)、import SwiftUI）
+      Describable.swift
+      Validation.swift
+    Views/
+      ProfileHeader.swift
+      TodoRow.swift              # この項目で更新（完了の切り替えをアイコンの Button に）
+      TodoDetailView.swift       # この項目で追加
+  HandsonAppTests/
+    TodoStoreTests.swift         # この項目で更新（2 テスト追加）
+    …                            # ほかは 04 のまま（合計 24 テスト）</code></pre>
+</div>
+
+          <p>ビルドと全てのユニットテストを実行し、シミュレータで最終的な画面を確かめてから、シミュレータを止めます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 24 tests in 7 suites passed after … seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+</div>
+
+          <p>Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> で全てのテストを実行し、<kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>** BUILD SUCCEEDED **</code> と <code>Test run with 24 tests in 7 suites passed</code> が表示されることを確かめます。シミュレータにタイトル「ToDo」と「Edit」ボタン付きの一覧が表示され、行のタップで詳細画面へ進めれば完成です。
+              ビルドの出力に、Swift のコードに対する警告（<code>appintentsmetadataprocessor</code> 以外の <code>warning:</code>）が出ていないことも確認してください。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">04 のプロジェクトをコピーし、ビルドと 22 テストが通ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>TodoItem</code> を <code>Identifiable</code> にし、<code>ForEach</code> の <code>id:</code> を省略できる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>List</code> と <code>Section</code> で一覧を組み立て、行内のボタンに <code>.buttonStyle(.borderless)</code> を付けた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>NavigationStack</code> の中の <code>List</code> に <code>.navigationTitle</code> と <code>.toolbar { EditButton() }</code> を付けた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>NavigationLink(value:)</code> と <code>.navigationDestination(for:)</code> で詳細画面へ遷移し、値の型に <code>Hashable</code> が必要な理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">行の <code>onTapGesture</code> が <code>NavigationLink</code> と衝突することを理解し、完了の切り替えをアイコンのボタンにした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>ForEach</code> に <code>.onDelete</code>・<code>.onMove</code> を付け、編集モード・並べ替え・スワイプ削除を試した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>.navigationDestination</code> の付け忘れがビルドでは見つからず、ログの <code>Invalid Configuration</code> で分かることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">24 テストが全て通り、<code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">行をタップしても詳細画面に進まない</p>
+          <p>行をタップして完了・未完了が切り替わる場合は、<code>TodoRow</code> に <code>.onTapGesture</code> が残っていないかを確認してください。行が灰色にハイライトされるだけの場合は、<code>.navigationDestination(for: TodoItem.self)</code> が <code>NavigationStack</code> の中にあるかを確認してください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">「Edit」を押しても削除ボタンやハンドルが出ない</p>
+          <p><code>.onDelete</code> と <code>.onMove</code> が <code>ForEach</code> に付いているかを確認してください。どちらも付いていないと、「Edit」は「Done」に変わるだけで、行には何も表示されません。この状態では、行を左にスワイプしても削除ボタンは出ません。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">詳細画面を開いたまま一覧で変更しても、詳細画面が変わらない</p>
+          <p><code>NavigationLink(value: item)</code> はタップした時点のコピーを渡し、<code>TodoDetailView</code> の <code>item</code> は <code>let</code> です。この項目ではこの動作のままにしています。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>TodoItem</code> を <code>Identifiable</code> にして <code>ForEach</code> の <code>id:</code> を省き、<code>List</code> と <code>Section</code> で一覧画面を作りました。
+        <code>NavigationStack</code> にタイトルと <code>EditButton</code> を付けました。また、<code>NavigationLink(value:)</code> と <code>.navigationDestination(for:)</code> で詳細画面へ遷移できるようにしました。
+        値の型には <code>Hashable</code> が必要で、関連値付きの <code>Status</code> にも準拠させました。
+        さらに、<code>ForEach</code> の <code>.onDelete</code>・<code>.onMove</code> で削除と並べ替えを実装しました。<code>.navigationDestination</code> の付け忘れや <code>.navigationTitle</code> の付け場所の誤りは、ビルドが通っても期待どおりに動かないことも確かめました。
+        次の項目では、async/await と <code>@MainActor</code> を使った非同期処理を扱います。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li>SwiftUI のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/swiftui/list">List</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftui/navigationstack">NavigationStack</a> / <a href="https://developer.apple.com/documentation/swiftui/navigationlink">NavigationLink</a> / <a href="https://developer.apple.com/documentation/swiftui/view/navigationdestination(for:destination:)">navigationDestination(for:destination:)</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftui/editbutton">EditButton</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftui/dynamicviewcontent/ondelete(perform:)">onDelete(perform:)</a> / <a href="https://developer.apple.com/documentation/swiftui/dynamicviewcontent/onmove(perform:)">onMove(perform:)</a></li>
+          </ul>
+        </li>
+        <li><a href="https://developer.apple.com/documentation/swift/identifiable">Identifiable</a></li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/05-list-navigation</code> の <code>ios/05-list-navigation/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/05-list-navigation/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../04-state-management/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">04: @State・@Binding・@Observable</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">06: async/await と @MainActor</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
