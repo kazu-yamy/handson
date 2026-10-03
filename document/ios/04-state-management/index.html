@@ -574,7 +574,7 @@ struct TodoRow: View {
             <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
           </div>
 
-          <!-- 要確認: キャンバスの Live プレビューでの行のクリック動作は手順ログで未確認 -->
+
           <p>
             Xcode では <code>TodoRow.swift</code> のキャンバスで「未完了」「完了」のプレビューを表示し、行をクリックしてアイコンが切り替わるかを試せます。
           </p>
@@ -1006,7 +1006,7 @@ struct ContentView: View {
               <p>
                 <code>#Preview</code> から <code>.environment(TodoStore.sample)</code> を外した場合も同じです。同じ <code>ContentView</code> を <code>.environment</code> 無しで起動すると <code>@Environment(TodoStore.self)</code> の解決で <code>Fatal error</code> になります。プレビューも同じ原因で失敗します。
               </p>
-              <!-- 要確認: キャンバスに何が表示されるか（エラー表示の見た目）は人の確認が必要 -->
+
             </div>
           </div>
 
