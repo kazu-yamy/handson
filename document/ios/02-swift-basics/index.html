@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02: Swift 基礎 | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">02</li>
+        </ol>
+        <h1 class="lesson-title">Swift 基礎</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 他の言語でプログラミングの経験があり、iOS 開発に必要な Swift の文法を手早く身に付けたい人</li>
+          <li class="lesson-meta__item">📋 前提: 他の言語（JavaScript・Python・Java など）で変数・関数・クラスを書いた経験があること。01 で作った <code>HandsonApp</code> プロジェクトが手元にあること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../01-setup/index.html">01 環境構築（Xcode 27・Swift 6 言語モード）</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>オプショナルを <code>if let</code>・<code>guard let</code>・<code>??</code>・オプショナルチェーンで安全に扱い、強制アンラップ（<code>!</code>）の危険を知る</li>
+          <li>構造体（値型）とクラス（参照型）の違いを、代入後の変更で確かめる</li>
+          <li>Raw 値・関連値付きの列挙型を定義し、<code>switch</code> で網羅的に分岐する</li>
+          <li>プロトコルと拡張でデフォルト実装を持つ共通の振る舞いを定義し、ジェネリクスと存在型 <code>any</code> の違いを知る</li>
+          <li><code>throws</code>（型付き <code>throws</code>）と <code>Result</code> でエラーを扱い、Swift Testing の <code>#expect(throws:)</code> で確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        iOS 開発で毎日のように使う Swift の文法を、小さなモデル型を書きながら学びます。
+        画面（SwiftUI）はまだ使わず、<code>Models</code> フォルダに 5 つの型を作り、それぞれの振る舞いを Swift Testing のテストで確かめます。
+        テストが「書いたコードの動きを確かめる実験台」になるため、シミュレータの画面を見なくても文法の効果を確認できます。
+      </p>
+      <p>
+        01 と同じく、Xcode の画面での操作と、同じ結果をターミナルで確かめるコマンドの両方を載せています。どちらか一方で進めてかまいません。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            01 と同じく、macOS 26.6.2 / Xcode 27.0 / Swift 6.4 で動作を確認しています。シミュレータは iPhone 17（iOS 26.5）を使います。
+            バージョンは執筆時点（2026年10月）のものです。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">01 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            01 の完成コードをそのまま出発点にします。ここでは、01 のプロジェクト（<code>HandsonApp</code> フォルダ）を <code>01-setup</code> ディレクトリに置いている例で説明します。
+            <code>01-setup</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>02-swift-basics</code> にコピーします。コマンドは何も表示せずに終わります。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 01-setup 02-swift-basics</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 02-swift-basics/HandsonApp</span></pre>
+          </div>
+
+          <p>
+            プロジェクト名・ターゲット名・Bundle Identifier は変えません。01 で説明したとおり、<code>HandsonApp</code> はトラックを通して使う名前です。
+            以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。
+          </p>
+
+          <p>コピーしたプロジェクトがそのままビルドでき、01 のテストが通ることを確かめます。ビルド結果の出力先は 01 と同じく変数 <code>DD</code> に入れておきます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">Test Suite 'All tests' started at …</span><span class="terminal__line">Test Suite 'All tests' passed at 2026-10-03 12:41:26.147.</span><span class="terminal__line">✔ Test greetingContainsName() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite HandsonAppTests passed after 0.001 seconds.</span><span class="terminal__line">✔ Test run with 1 test in 1 suite passed after 0.001 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+          </div>
+
+          <p>
+            テストのコマンドは 01 とほぼ同じです。先頭の <code>perl -e 'alarm 600; exec @ARGV'</code> は、後ろに続くコマンドを 600 秒（10 分）で強制終了させる書き方です。
+            macOS には <code>timeout</code> コマンドが標準で入っていないため、この形でタイムアウトを付けています。テストが固まったときに <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めるつもりなら、<code>perl …</code> の部分は省略してもかまいません。
+            以降のステップでも、テストはこのコマンドで実行します。シミュレータの起動を含めて、初回は 40 秒ほどかかります。
+          </p>
+
+          <p>Xcode の場合は、<code>02-swift-basics/HandsonApp/HandsonApp.xcodeproj</code> を開き、<kbd>⌘</kbd> + <kbd>U</kbd>（<code>Product</code> &gt; <code>Test</code>）でテストを実行します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> が表示され、01 で書いた <code>greetingContainsName()</code> が <code>passed</code> になれば準備完了です。テストの末尾には <code>** TEST SUCCEEDED **</code> が表示されます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">オプショナルで「値が無い」を扱う（Profile）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            最初のモデルとして、名前と省略可能なニックネームを持つ <code>Profile</code> を作ります。
+            まず、モデルを入れる <code>Models</code> フォルダとファイルを Xcode で作ります。
+          </p>
+
+          <ol>
+            <li>ナビゲータで <code>HandsonApp</code> フォルダ（黄色）を右クリックし、<code>New Group</code>（または <code>New Folder</code>）で <code>Models</code> を作ります。</li>
+            <li><code>Models</code> を右クリックし、<code>New File from Template…</code>（メニューの <code>File</code> &gt; <code>New</code> &gt; <code>File from Template…</code>、<kbd>⌘</kbd> + <kbd>N</kbd> でも可）を選びます。<code>iOS</code> &gt; <code>Swift File</code> を選び、名前を <code>Profile.swift</code>、<code>Targets</code> は <code>HandsonApp</code> にチェックを付けて作成します。</li>
+            <li>同じ手順で、<code>HandsonAppTests</code> フォルダに <code>ProfileTests.swift</code> を作ります。<code>Targets</code> は <code>HandsonAppTests</code> にチェックを付けます。</li>
+          </ol>
+
+          <p>
+            01 で見たとおり、3 つのフォルダは同期フォルダです。Finder やエディタで <code>HandsonApp/Models/Profile.swift</code> のようにファイルを置くだけでも、ターゲットへ取り込まれます。<code>project.pbxproj</code> の編集は不要です。
+            以降のステップでファイルを追加するときも、どちらの方法でもかまいません。
+          </p>
+
+          <p><code>Profile.swift</code> に次の内容を書きます。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Models/Profile.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">struct Profile {
+    let name: String
+    let nickname: String?
+
+    // if let: nil でなければ取り出す
+    var displayName: String {
+        if let nickname {
+            return nickname
+        }
+        return name
+    }
+
+    // guard let: nil なら早期リターン
+    func greeting() -&gt; String {
+        guard let nickname else {
+            return "Hello, \(name)!"
+        }
+        return "Hello, \(nickname) (\(name))!"
+    }
+
+    // ??: nil のときの既定値
+    var label: String {
+        nickname ?? "(no nickname)"
+    }
+
+    // オプショナルチェーン: nil なら結果も nil
+    var nicknameUppercased: String? {
+        nickname?.uppercased()
+    }
+}</code></pre>
+          </div>
+
+          <p>
+            型名の後ろに <code>?</code> を付けた <code>String?</code> がオプショナル型で、「<code>String</code> の値がある」か「値が無い（<code>nil</code>）」のどちらかを表します。
+            オプショナルのままでは <code>String</code> として使えないため、次の 4 つの書き方で中身を取り出します。
+          </p>
+          <ul>
+            <li><code>if let nickname { … }</code>: <code>nil</code> でなければ、中身を同じ名前の定数 <code>nickname</code>（<code>String</code> 型）として取り出してブロックを実行します。<code>if let nickname = nickname</code> の省略形で、Swift 5.7 から使えます。</li>
+            <li><code>guard let nickname else { … }</code>: <code>nil</code> なら <code>else</code> のブロックで早期リターンします。<code>guard</code> の後ろでは <code>nickname</code> を <code>String</code> として使えます。</li>
+            <li><code>nickname ?? "(no nickname)"</code>: <code>nil</code> のときに使う既定値を指定します。</li>
+            <li><code>nickname?.uppercased()</code>: オプショナルチェーンです。<code>nil</code> なら <code>uppercased()</code> を呼ばずに結果も <code>nil</code> になるため、戻り値の型は <code>String?</code> です。</li>
+          </ul>
+
+          <p>
+            <code>struct Profile</code> にはイニシャライザを書いていません。構造体は独自のイニシャライザを書いていなければ、プロパティを全て受け取るイニシャライザ（<code>Profile(name:nickname:)</code>）が自動で用意されます。既定値を持つプロパティは、このイニシャライザの引数を省略できます。
+            テストでは、このイニシャライザでニックネームがある場合と無い場合を作り分けます。<code>ProfileTests.swift</code> に次の内容を書きます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppTests/ProfileTests.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import Testing
+@testable import HandsonApp
+
+@MainActor
+struct ProfileTests {
+
+    @Test func displayNameUsesNicknameWhenPresent() {
+        let profile = Profile(name: "Taro", nickname: "Tarou")
+        #expect(profile.displayName == "Tarou")
+    }
+
+    @Test func displayNameFallsBackToName() {
+        let profile = Profile(name: "Taro", nickname: nil)
+        #expect(profile.displayName == "Taro")
+    }
+
+    @Test func greetingWithAndWithoutNickname() {
+        #expect(Profile(name: "Taro", nickname: "T").greeting() == "Hello, T (Taro)!")
+        #expect(Profile(name: "Taro", nickname: nil).greeting() == "Hello, Taro!")
+    }
+
+    @Test func labelAndOptionalChaining() {
+        let none = Profile(name: "Taro", nickname: nil)
+        let some = Profile(name: "Taro", nickname: "tt")
+        #expect(none.label == "(no nickname)")
+        #expect(none.nicknameUppercased == nil)
+        #expect(some.nicknameUppercased == "TT")
+    }
+}</code></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">テストの struct に <code>@MainActor</code> を付ける</p>
+              <p>
+                01 で見たとおり、アプリターゲットは <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> です。そのため、<code>Profile</code> を含むアプリ側の型や関数は、暗黙のうちにメインアクターへ分離されます。
+                一方、テストターゲットにはこの設定がありません。01 ではテスト関数に <code>@MainActor</code> を付けましたが、この項目ではテストの <code>struct</code> 全体に付けて、中のテスト関数をまとめてメインアクターで実行します。
+                付け忘れると、01 と同じ <code>call to main actor-isolated … in a synchronous nonisolated context</code> のエラーになります。
+              </p>
+            </div>
+          </div>
+
+          <p>テストを実行します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test displayNameUsesNicknameWhenPresent() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test displayNameFallsBackToName() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test greetingWithAndWithoutNickname() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test labelAndOptionalChaining() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite ProfileTests passed after 0.008 seconds.</span><span class="terminal__line">✔ Test run with 5 tests in 2 suites passed after 0.010 seconds.</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+          </div>
+
+          <p>01 の 1 テストと合わせて、5 テストが通ります。Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> で実行し、テストナビゲータに <code>ProfileTests</code> の 4 つのテストが緑で表示されることを確認します。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">強制アンラップ（<code>!</code>）は <code>nil</code> のとき実行時にクラッシュする</p>
+              <p>オプショナルの後ろに <code>!</code> を付けると、中身があるものとして無理やり取り出せます（強制アンラップ）。<code>nil</code> のときに何が起きるかを試します。<code>ProfileTests</code> の最後の <code>}</code> の直前に、次のテストを一時的に追加してください。</p>
+              <div class="code-block">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Swift</span>
+                  <span class="code-block__filename">HandsonAppTests/ProfileTests.swift（一時的に追加。確認後に削除する）</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><code class="language-swift">    @Test func forceUnwrapCrashes() {
+        let profile = Profile(name: "Taro", nickname: nil)
+        #expect(profile.nickname!.count &gt; 0)
+    }</code></pre>
+              </div>
+              <p>コンパイルは通ります。テストを実行すると、追加した <code>#expect</code> の行でテストのプロセスが落ちます（空行を 1 行挟んで追加した場合は 32 行目です）。次の出力は、<code>grep</code> で絞らずに実行したときの抜粋です。</p>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test</span><span class="terminal__line">…</span><span class="terminal__line">◇ Test forceUnwrapCrashes() started.</span><span class="terminal__line">HandsonAppTests/ProfileTests.swift:32: Fatal error: Unexpectedly found nil while unwrapping an Optional value</span><span class="terminal__line">2026-10-03 12:42:51.646368+0900 HandsonApp[76860:628806] HandsonAppTests/ProfileTests.swift:32: Fatal error: Unexpectedly found nil while unwrapping an Optional value</span><span class="terminal__line">Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.</span><span class="terminal__line">…</span><span class="terminal__line">** TEST FAILED **</span></pre>
+              </div>
+              <p>
+                <code>Fatal error: Unexpectedly found nil while unwrapping an Optional value</code> が、<code>nil</code> を強制アンラップしたときのクラッシュです。
+                アプリの実行中に起きれば、アプリ全体が落ちます。テストではプロセスが落ちたあと <code>Restarting after unexpected exit, crash, or test timeout</code> と表示され、再起動して残りのテストが実行されます。
+                末尾の失敗したテストの一覧（<code>Failing tests:</code>）にも <code>ProfileTests.forceUnwrapCrashes()</code> が載ります。
+              </p>
+              <p>
+                テストが固まったわけではなく、1 分ほどで <code>** TEST FAILED **</code> となって終わり、<code>xcodebuild</code> の終了コードは 65 になります。完了まで待ってください。
+                確認したら、追加したテストを削除して元に戻します。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>ProfileTests</code> の 4 テストが <code>passed</code> になり、<code>** TEST SUCCEEDED **</code> が表示されれば OK です。<code>!</code> がコンパイルエラーにはならず、実行時にだけクラッシュすることも確認してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">構造体とクラスの違いを確かめる（Counter）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            Swift には、データをまとめる型として構造体（<code>struct</code>）とクラス（<code>class</code>）があります。
+            同じ「カウンター」を両方で作り、代入したときの振る舞いを比べます。<code>Models</code> フォルダに <code>Counter.swift</code> を作り、次の内容を書きます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Models/Counter.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">// 値型: 代入するとコピーされる
+struct Counter {
+    var count = 0
+
+    mutating func increment() {
+        count += 1
+    }
+}
+
+// 参照型: 代入しても同じインスタンスを指す
+final class CounterBox {
+    var count = 0
+
+    func increment() {
+        count += 1
+    }
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>struct Counter</code>: 値型です。別の変数に代入すると、値がコピーされます。</li>
+            <li><code>mutating func increment()</code>: 構造体のメソッドが自分のプロパティを書き換えるときは <code>mutating</code> を付けます。そのため、<code>let</code> で宣言した <code>Counter</code> では <code>increment()</code> を呼べません。</li>
+            <li><code>final class CounterBox</code>: 参照型です。代入しても、同じインスタンスを指します。クラスは <code>let</code> で宣言していても、中のプロパティを書き換えられます。<code>final</code> は継承を禁止する指定です。</li>
+          </ul>
+
+          <p><code>HandsonAppTests</code> フォルダに <code>CounterTests.swift</code> を作り、次の内容を書きます。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppTests/CounterTests.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import Testing
+@testable import HandsonApp
+
+@MainActor
+struct CounterTests {
+
+    @Test func structIsCopiedOnAssignment() {
+        var a = Counter()
+        var b = a
+        b.increment()
+        a.increment()
+        a.increment()
+        #expect(a.count == 2)
+        #expect(b.count == 1)
+    }
+
+    @Test func classIsSharedOnAssignment() {
+        let a = CounterBox()
+        let b = a
+        b.increment()
+        a.increment()
+        #expect(a.count == 2)
+        #expect(a === b)
+    }
+}</code></pre>
+          </div>
+
+          <p>
+            <code>structIsCopiedOnAssignment()</code> では、<code>var b = a</code> の時点で <code>a</code> のコピーが <code>b</code> に入るため、<code>b</code> の変更は <code>a</code> に影響しません。
+            <code>classIsSharedOnAssignment()</code> では、<code>a</code> と <code>b</code> が同じインスタンスを指すため、どちらから <code>increment()</code> しても同じ <code>count</code> が増えます。
+            <code>===</code> は、2 つの参照が同じインスタンスを指すかを比べる演算子で、参照型にだけ使えます。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test structIsCopiedOnAssignment() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test classIsSharedOnAssignment() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite CounterTests passed after 0.001 seconds.</span><span class="terminal__line">✔ Test run with 7 tests in 3 suites passed after 0.009 seconds.</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">クラスと Swift 6 の並行性チェック</p>
+              <p>
+                <code>CounterBox</code> のように書き換えられる状態を持つクラスは、複数のスレッドから同時に触るとデータ競合の原因になります。
+                このプロジェクトではアプリターゲットの既定の分離により、<code>CounterBox</code> は何も書かなくてもメインアクターに分離されるため、警告やエラーは出ません。
+              </p>
+              <p>
+                試しに、<code>CounterBox</code> へ <code>nonisolated</code> を付けてメインアクターから外してみます。そのうえで <code>Task.detached</code> から触るコードを <code>Counter.swift</code> へ足すと、次のようにビルドエラーになります（コードと出力は抜粋）。
+              </p>
+              <div class="code-block">
+                <div class="code-block__header">
+                  <span class="code-block__lang">Swift</span>
+                  <span class="code-block__filename">HandsonApp/Models/Counter.swift（試す場合のみ。抜粋）</span>
+                  <span class="code-block__spacer"></span>
+                  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+                </div>
+                <pre><code class="language-swift">nonisolated final class CounterBox { … }
+
+func incrementInBackground(_ box: CounterBox) {
+    Task.detached {
+        box.increment()
+    }
+}</code></pre>
+              </div>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line">Counter.swift:20:10: error: passing closure as a 'sending' parameter risks causing data races between main actor-isolated code and concurrent execution of the closure [#RegionIsolation::SendingClosureRisksDataRace]</span><span class="terminal__line">   |             `- note: closure captures main actor-isolated 'box'</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+              </div>
+              <p>
+                <code>incrementInBackground</code> 自体は既定どおりメインアクターに分離されるため、引数の <code>box</code> はメインアクター側の値として扱われます。それを別スレッドで動く <code>Task.detached</code> に渡そうとしたため、エラーになりました。
+                対処には、メインアクターに閉じる（<code>Task { … }</code> を使う）方法や、<code>actor</code> にする方法などがあります。詳しくは 06（async/await と @MainActor）で扱います。試した場合は、足したコードを削除して元に戻してください。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>CounterTests</code> の 2 テストが <code>passed</code> になり、合計が <code>7 tests in 3 suites</code> になれば OK です。構造体は代入でコピーされ、クラスは同じインスタンスを共有することを説明できるようにしておきましょう。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">列挙型と switch でパターンマッチする（TodoItem）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ToDo の 1 件を表す <code>TodoItem</code> を、優先度と状態を表す 2 つの列挙型（<code>enum</code>）と一緒に作ります。
+            <code>Models</code> フォルダに <code>TodoItem.swift</code> を作り、次の内容を書きます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Models/TodoItem.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import Foundation
+
+enum Priority: Int, CaseIterable {
+    case low = 1
+    case medium
+    case high
+
+    var label: String {
+        switch self {
+        case .low: "低"
+        case .medium: "中"
+        case .high: "高"
+        }
+    }
+}
+
+// 関連値付きの enum
+enum Status {
+    case todo
+    case done(Date)
+}
+
+struct TodoItem {
+    let title: String
+    var priority: Priority = .medium
+    var status: Status = .todo
+
+    var statusText: String {
+        switch status {
+        case .todo:
+            "未完了"
+        case .done(let date):
+            "完了 (\(date.formatted(.iso8601.year().month().day())))"
+        }
+    }
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>enum Priority: Int, CaseIterable</code>: 各ケースに <code>Int</code> の Raw 値を持たせた列挙型です。<code>low = 1</code> とすると、以降のケースは <code>2</code>、<code>3</code> と続きます。<code>CaseIterable</code> に準拠すると、全ケースの配列 <code>Priority.allCases</code> が使えます。</li>
+            <li><code>enum Status</code>: <code>case done(Date)</code> のように、ケースごとに値を持たせられます（関連値）。「完了」のときだけ完了日時を持つ、という形を型で表せます。</li>
+            <li><code>switch</code>: 列挙型の全てのケースを網羅する必要があります。<code>case .done(let date)</code> と書くと、関連値を取り出せます。</li>
+            <li><code>switch</code> を式として使い、各 <code>case</code> の値をそのまま戻り値にしています。この書き方は Swift 5.9 から使えます。</li>
+            <li><code>Date.formatted(.iso8601.year().month().day())</code> は日付を <code>2026-10-03</code> の形式にします。<code>Date</code> と合わせて <code>Foundation</code> の <code>import</code> が必要です。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">型名を <code>Task</code> にしない</p>
+              <p><code>Task</code> は標準ライブラリの並行処理の型 <code>Swift.Task</code>（01 で使った <code>Task.detached</code> の <code>Task</code>）と名前が衝突します。そのため、この教材では ToDo の型を <code>TodoItem</code> としています。</p>
+            </div>
+          </div>
+
+          <p><code>HandsonAppTests</code> フォルダに <code>TodoItemTests.swift</code> を作り、次の内容を書きます。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppTests/TodoItemTests.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import Foundation
+import Testing
+@testable import HandsonApp
+
+@MainActor
+struct TodoItemTests {
+
+    @Test func priorityRawValueAndCases() {
+        #expect(Priority.high.rawValue == 3)
+        #expect(Priority(rawValue: 1) == .low)
+        #expect(Priority(rawValue: 9) == nil)
+        #expect(Priority.allCases.map(\.label) == ["低", "中", "高"])
+    }
+
+    @Test func statusTextForTodo() {
+        let item = TodoItem(title: "買い物")
+        #expect(item.statusText == "未完了")
+    }
+
+    @Test func statusTextForDone() {
+        let date = Date(timeIntervalSince1970: 0)
+        let item = TodoItem(title: "買い物", priority: .high, status: .done(date))
+        #expect(item.statusText.hasPrefix("完了 ("))
+    }
+}</code></pre>
+          </div>
+
+          <p>
+            <code>Priority(rawValue: 9)</code> のように Raw 値から列挙型を作るイニシャライザは、該当するケースが無いと <code>nil</code> を返します。戻り値の型はステップ 2 で学んだオプショナル（<code>Priority?</code>）です。
+            <code>statusTextForDone()</code> では、日付の中身ではなく <code>"完了 ("</code> で始まることだけを確かめています。表示される日付はタイムゾーンによってずれるためです。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test priorityRawValueAndCases() passed after 0.007 seconds.</span><span class="terminal__line">✔ Test statusTextForTodo() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test statusTextForDone() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite TodoItemTests passed after 0.007 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>switch</code> のケースが足りないとコンパイルエラーになる</p>
+              <p><code>Priority</code> の <code>label</code> から <code>case .medium: "中"</code> の行を一時的に消して、ビルドしてみます。</p>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">TodoItem.swift:9:9: error: switch must be exhaustive</span><span class="terminal__line"> 8 |     var label: String {</span><span class="terminal__line"> 9 |         switch self {</span><span class="terminal__line">   |         |- error: switch must be exhaustive</span><span class="terminal__line">   |         `- note: add missing case: '.medium'</span><span class="terminal__line">10 |         case .low: "低"</span><span class="terminal__line">11 |         case .high: "高"</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+              </div>
+              <p>
+                <code>switch must be exhaustive</code>（<code>switch</code> は網羅的でなければならない）のエラーと、<code>add missing case: '.medium'</code> の <code>note</code> が出ます。
+                列挙型にケースを追加したときも、対応していない <code>switch</code> がコンパイルエラーで見つかります。
+                Xcode では赤いエラー表示に <code>Fix</code> ボタンが出て、足りないケースを自動で挿入できます。確認したら、消した行を元に戻します。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>TodoItemTests</code> の 3 テストが <code>passed</code> になれば OK です。ケースを 1 つ消すと <code>switch must be exhaustive</code> でビルドが失敗することも確かめてください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">プロトコルと拡張で共通の振る舞いを定義する（Describable）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ここまでに作った <code>Profile</code>・<code>TodoItem</code>・<code>Counter</code> に、「1 行の要約を返す」という共通の振る舞いを持たせます。
+            Swift では、型が満たすべき要件をプロトコル（<code>protocol</code>）で定義します。<code>Models</code> フォルダに <code>Describable.swift</code> を作り、次の内容を書きます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Models/Describable.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">protocol Describable {
+    var summary: String { get }
+}
+
+// デフォルト実装
+extension Describable {
+    var summary: String { "(no summary)" }
+}
+
+extension Profile: Describable {
+    var summary: String { "Profile: \(displayName)" }
+}
+
+extension TodoItem: Describable {
+    var summary: String { "\(title) [\(priority.label)] \(statusText)" }
+}
+
+// 準拠するだけでデフォルト実装が使える
+extension Counter: Describable {}
+
+// ジェネリクス: 同じ型の配列
+func summaries&lt;T: Describable&gt;(_ items: [T]) -&gt; [String] {
+    items.map(\.summary)
+}
+
+// 存在型: 異なる型を混ぜた配列
+func summaries(of items: [any Describable]) -&gt; [String] {
+    items.map(\.summary)
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>protocol Describable</code>: 「読み取り可能な <code>summary</code> プロパティを持つ」という要件を定義します。</li>
+            <li><code>extension Describable { … }</code>: プロトコルの拡張（<code>extension</code>）で <code>summary</code> の実装を書くと、それがデフォルト実装になります。</li>
+            <li><code>extension Profile: Describable { … }</code>: 既存の型を後から拡張して、プロトコルに準拠させます。<code>Profile</code> と <code>TodoItem</code> は独自の <code>summary</code> を実装しているため、デフォルト実装より優先されます。</li>
+            <li><code>extension Counter: Describable {}</code>: 準拠を宣言するだけで、<code>summary</code> はデフォルト実装の <code>"(no summary)"</code> になります。</li>
+          </ul>
+
+          <p>
+            末尾の 2 つの関数は、どちらも <code>Describable</code> の配列から要約の配列を作りますが、受け取れる配列が違います。
+          </p>
+          <ul>
+            <li><code>summaries&lt;T: Describable&gt;(_ items: [T])</code>: ジェネリクスです。<code>T</code> は「<code>Describable</code> に準拠したある 1 つの型」を表すため、<code>[TodoItem]</code> のように同じ型だけの配列を受け取ります。</li>
+            <li><code>summaries(of items: [any Describable])</code>: 存在型です。<code>any Describable</code> は「<code>Describable</code> に準拠した何らかの型の値」を表すため、<code>Profile</code> と <code>Counter</code> のように異なる型を混ぜた配列を受け取れます。</li>
+          </ul>
+          <p><code>.map(\.summary)</code> は、配列の各要素の <code>summary</code> を取り出した新しい配列を作ります。<code>\.summary</code> はプロパティを指す書き方（キーパス）です。</p>
+
+          <p><code>HandsonAppTests</code> フォルダに <code>DescribableTests.swift</code> を作り、次の内容を書きます。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppTests/DescribableTests.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import Testing
+@testable import HandsonApp
+
+@MainActor
+struct DescribableTests {
+
+    @Test func conformingTypesProvideSummary() {
+        #expect(Profile(name: "Taro", nickname: nil).summary == "Profile: Taro")
+        #expect(TodoItem(title: "買い物").summary == "買い物 [中] 未完了")
+    }
+
+    @Test func defaultImplementationIsUsed() {
+        #expect(Counter().summary == "(no summary)")
+    }
+
+    @Test func genericFunctionTakesHomogeneousArray() {
+        let items = [TodoItem(title: "A"), TodoItem(title: "B", priority: .high)]
+        #expect(summaries(items) == ["A [中] 未完了", "B [高] 未完了"])
+    }
+
+    @Test func existentialArrayMixesTypes() {
+        let items: [any Describable] = [Profile(name: "Taro", nickname: nil), Counter()]
+        #expect(summaries(of: items) == ["Profile: Taro", "(no summary)"])
+    }
+}</code></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test conformingTypesProvideSummary() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test defaultImplementationIsUsed() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test genericFunctionTakesHomogeneousArray() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test existentialArrayMixesTypes() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite DescribableTests passed after 0.016 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>DescribableTests</code> の 4 テストが <code>passed</code> になれば OK です。<code>Counter</code> の要約がデフォルト実装の <code>(no summary)</code> になること、異なる型を混ぜた配列には <code>any Describable</code> を使うことを確認してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">throws と Result でエラーを扱う（Validation）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            名前の入力チェックを例に、エラー処理を書きます。<code>Models</code> フォルダに <code>Validation.swift</code> を作り、次の内容を書きます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Models/Validation.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">enum ValidationError: Error, Equatable {
+    case empty
+    case tooLong(max: Int)
+}
+
+func validate(name: String) throws(ValidationError) {
+    if name.isEmpty {
+        throw .empty
+    }
+    if name.count &gt; 10 {
+        throw .tooLong(max: 10)
+    }
+}
+
+// throws を Result に包み直した版
+func validatedName(_ name: String) -&gt; Result&lt;String, ValidationError&gt; {
+    do {
+        try validate(name: name)
+        return .success(name)
+    } catch {
+        return .failure(error)
+    }
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>enum ValidationError: Error, Equatable</code>: エラーの種類を列挙型で定義します。投げる（<code>throw</code>）値は <code>Error</code> プロトコルに準拠している必要があります。<code>tooLong(max:)</code> は関連値で上限の文字数を持ちます。<code>Equatable</code> はテストで値を比べるために付けています。</li>
+            <li><code>throws(ValidationError)</code>: 型付き <code>throws</code> です。この関数が投げるエラーは <code>ValidationError</code> だけであることを宣言します。そのため、<code>throw .empty</code> のように型名を省略して書けます。</li>
+            <li><code>do</code> / <code>try</code> / <code>catch</code>: エラーを投げる関数は <code>try</code> を付けて呼び、<code>catch</code> で受け取ります。型付き <code>throws</code> の関数を呼んでいるため、<code>catch</code> のブロック内の <code>error</code> は <code>ValidationError</code> 型になります。</li>
+            <li><code>Result&lt;String, ValidationError&gt;</code>: 成功（<code>.success</code>）か失敗（<code>.failure</code>）のどちらかを値として返す型です。<code>error</code> が <code>ValidationError</code> 型なので、<code>.failure(error)</code> にそのまま包めます。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">通常の <code>throws</code> にした場合</p>
+              <p>型を書かない通常の <code>throws</code> にすると、<code>throw .empty</code> が <code>type 'any Error' has no member 'empty'</code> でビルドに失敗します。<code>throw ValidationError.empty</code> に直しても、<code>catch</code> の <code>error</code> は <code>any Error</code> 型になります。そのため、<code>.failure(error)</code> の行が次のエラーでビルドに失敗します。</p>
+              <p><code>cannot convert value of type 'any Error' to expected argument type 'ValidationError'</code></p>
+              <p>型付き <code>throws</code> なら <code>catch</code> の <code>error</code> が <code>ValidationError</code> に確定するので、<code>.failure(error)</code> をそのまま書けます。</p>
+            </div>
+          </div>
+
+          <p><code>HandsonAppTests</code> フォルダに <code>ValidationTests.swift</code> を作り、次の内容を書きます。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonAppTests/ValidationTests.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import Testing
+@testable import HandsonApp
+
+@MainActor
+struct ValidationTests {
+
+    @Test func validNameDoesNotThrow() throws {
+        try validate(name: "Taro")
+    }
+
+    @Test func emptyNameThrows() {
+        #expect(throws: ValidationError.self) {
+            try validate(name: "")
+        }
+    }
+
+    @Test func tooLongNameThrowsWithAssociatedValue() {
+        #expect(throws: ValidationError.tooLong(max: 10)) {
+            try validate(name: "12345678901")
+        }
+    }
+
+    @Test func resultVersion() {
+        #expect(validatedName("Taro") == .success("Taro"))
+        #expect(validatedName("") == .failure(.empty))
+    }
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>validNameDoesNotThrow()</code>: テスト関数自体に <code>throws</code> を付けると、中で <code>try</code> した関数がエラーを投げたときにテストが失敗になります。</li>
+            <li><code>#expect(throws: ValidationError.self) { … }</code>: クロージャの中で <code>ValidationError</code> 型のエラーが投げられることを確かめます（エラーの型だけを確認）。</li>
+            <li><code>#expect(throws: ValidationError.tooLong(max: 10)) { … }</code>: 投げられたエラーの値まで一致することを確かめます。値を比べるため、<code>ValidationError</code> に <code>Equatable</code> を付けています。</li>
+          </ul>
+          <p><code>#expect(throws:)</code> は投げられたエラーを <code>ValidationError?</code> として返します。<code>let error = #expect(throws: ValidationError.self) { … }</code> のように受け取れば、エラーの中身を確認できます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test validNameDoesNotThrow() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test emptyNameThrows() passed after 0.002 seconds.</span><span class="terminal__line">✔ Test tooLongNameThrowsWithAssociatedValue() passed after 0.003 seconds.</span><span class="terminal__line">✔ Test resultVersion() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite ValidationTests passed after 0.007 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>ValidationTests</code> の 4 テストが <code>passed</code> になれば OK です。<code>#expect(throws:)</code> に型を渡す書き方と値を渡す書き方の違いを確認してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">完成状態でビルドとテストを実行する</h3>
+        </div>
+        <div class="step__body">
+          <p>完成状態のファイル構成は次のとおりです。<code>HandsonApp</code> フォルダの 3 ファイルと <code>HandsonAppTests.swift</code> は 01 のままです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Text</span>
+              <span class="code-block__filename">HandsonApp/</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext">HandsonApp/
+  HandsonApp/
+    HandsonAppApp.swift
+    ContentView.swift
+    Greeting.swift
+    Models/                      # この項目で追加
+      Profile.swift
+      Counter.swift
+      TodoItem.swift
+      Describable.swift
+      Validation.swift
+  HandsonAppTests/
+    HandsonAppTests.swift
+    ProfileTests.swift           # 以下 5 ファイルをこの項目で追加
+    CounterTests.swift
+    TodoItemTests.swift
+    DescribableTests.swift
+    ValidationTests.swift</code></pre>
+          </div>
+
+          <p>ビルドと全てのユニットテストを実行し、最後にシミュレータを止めます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">Test Suite 'All tests' started at …</span><span class="terminal__line">Test Suite 'All tests' passed at 2026-10-03 12:49:28.437.</span><span class="terminal__line">✔ Test structIsCopiedOnAssignment() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test classIsSharedOnAssignment() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite CounterTests passed after 0.001 seconds.</span><span class="terminal__line">✔ Test conformingTypesProvideSummary() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test defaultImplementationIsUsed() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test genericFunctionTakesHomogeneousArray() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test existentialArrayMixesTypes() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite DescribableTests passed after 0.016 seconds.</span><span class="terminal__line">✔ Test greetingContainsName() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite HandsonAppTests passed after 0.001 seconds.</span><span class="terminal__line">✔ Test displayNameUsesNicknameWhenPresent() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test displayNameFallsBackToName() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test greetingWithAndWithoutNickname() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test labelAndOptionalChaining() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite ProfileTests passed after 0.001 seconds.</span><span class="terminal__line">✔ Test priorityRawValueAndCases() passed after 0.007 seconds.</span><span class="terminal__line">✔ Test statusTextForTodo() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test statusTextForDone() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite TodoItemTests passed after 0.007 seconds.</span><span class="terminal__line">✔ Test validNameDoesNotThrow() passed after 0.001 seconds.</span><span class="terminal__line">✔ Test emptyNameThrows() passed after 0.002 seconds.</span><span class="terminal__line">✔ Test tooLongNameThrowsWithAssociatedValue() passed after 0.003 seconds.</span><span class="terminal__line">✔ Test resultVersion() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite ValidationTests passed after 0.007 seconds.</span><span class="terminal__line">✔ Test run with 18 tests in 6 suites passed after 0.032 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+          </div>
+
+          <p>
+            ビルドの途中で <code>appintentsmetadataprocessor</code> の <code>warning: Metadata extraction skipped, no AppIntents.framework dependency found</code> が表示されますが、App Intents を使っていないことを知らせるもので、Swift のコードに対する警告ではありません。無視してかまいません。
+            テストはビルドを含む初回で約 40 秒、ビルド済みなら約 4 秒で終わります。Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> で全てのテストを実行し、テストナビゲータで 6 つのスイートが全て緑になることを確認します。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> と <code>Test run with 18 tests in 6 suites passed</code>、<code>** TEST SUCCEEDED **</code> が表示されれば完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">01 のプロジェクトをコピーし、ビルドとテストが通ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>if let</code>・<code>guard let</code>・<code>??</code>・オプショナルチェーンの使い分けを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>nil</code> の強制アンラップ（<code>!</code>）が実行時のクラッシュになることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">構造体は代入でコピーされ、クラスは同じインスタンスを共有することをテストで確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">関連値付きの列挙型を <code>switch</code> で分岐し、ケース不足がコンパイルエラーになることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">プロトコルのデフォルト実装を拡張で書き、ジェネリクスと <code>any</code> の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">型付き <code>throws</code> と <code>Result</code> でエラーを扱い、<code>#expect(throws:)</code> でテストした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">18 テストが全て通り、<code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>call to main actor-isolated … in a synchronous nonisolated context</code> が出る</p>
+          <p>テストの <code>struct</code> に <code>@MainActor</code> を付け忘れています。アプリ側の型は既定でメインアクターに分離されるため、テスト側もメインアクターで実行する必要があります。ステップ 2 の <code>ProfileTests</code> のように、<code>struct</code> の直前に <code>@MainActor</code> を付けてください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>let</code> で宣言した構造体のメソッドが呼べない</p>
+          <p>自分のプロパティを書き換えるメソッドには <code>mutating</code> が付いており、<code>let</code> で宣言した構造体からは呼べません。ステップ 3 の <code>var a = Counter()</code> のように <code>var</code> で宣言してください。クラスの場合は <code>let</code> でも中身を変更できます。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">クラッシュするテストを流したら、しばらく終わらない</p>
+          <p>強制アンラップなどでテストのプロセスが落ちると、再起動して残りのテストを流すため、終了まで 1 分ほどかかります。固まったわけではないので、<code>** TEST FAILED **</code> が出るまで待ってください。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>Models</code> フォルダに 5 つの型を作り、Swift の基本文法を Swift Testing のテストで確かめました。扱ったのは、オプショナル、構造体とクラス、列挙型と <code>switch</code>、プロトコルと拡張、エラー処理です。
+        あわせて、<code>nil</code> の強制アンラップが実行時のクラッシュになること、<code>switch</code> のケース不足がコンパイルエラーになることも確かめました。
+        次の項目では、SwiftUI の View の基本とプレビューを使って画面を組み立てます。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li><a href="https://docs.swift.org/swift-book/documentation/the-swift-programming-language/">The Swift Programming Language</a>
+          <ul>
+            <li><a href="https://docs.swift.org/swift-book/documentation/the-swift-programming-language/thebasics/">The Basics</a></li>
+            <li><a href="https://docs.swift.org/swift-book/documentation/the-swift-programming-language/classesandstructures/">Structures and Classes</a></li>
+            <li><a href="https://docs.swift.org/swift-book/documentation/the-swift-programming-language/enumerations/">Enumerations</a></li>
+            <li><a href="https://docs.swift.org/swift-book/documentation/the-swift-programming-language/protocols/">Protocols</a></li>
+            <li><a href="https://docs.swift.org/swift-book/documentation/the-swift-programming-language/extensions/">Extensions</a></li>
+            <li><a href="https://docs.swift.org/swift-book/documentation/the-swift-programming-language/errorhandling/">Error Handling</a></li>
+          </ul>
+        </li>
+        <li><a href="https://developer.apple.com/documentation/testing">Swift Testing</a>
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/testing/testing-for-errors-in-swift-code">Testing for errors in Swift code</a></li>
+          </ul>
+        </li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/02-swift-basics</code> の <code>ios/02-swift-basics/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/02-swift-basics/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../01-setup/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">01: 環境構築（Xcode 27・Swift 6 言語モード）</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">03: SwiftUI 入門</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
