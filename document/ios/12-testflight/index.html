@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>12: TestFlight で配布 | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">12</li>
+        </ol>
+        <h1 class="lesson-title">TestFlight で配布</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分（Apple 側の処理待ちの時間を除く）</li>
+          <li class="lesson-meta__item">📊 難易度: 中級</li>
+          <li class="lesson-meta__item">👤 対象: 11 までで ToDo アプリを作り終え、自分の iPhone や知人の端末にベータ版として配りたい人</li>
+          <li class="lesson-meta__item">📋 前提: 11 で Charts と地図を加えた <code>HandsonApp</code> プロジェクトが手元にあること。ステップ 1 のチーム設定とステップ 4 の後半以降には、有料の Apple Developer Program への加入が必要です（未加入でも、ステップ 4 の署名なしアーカイブまでは進められます）</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../11-charts-mapkit/index.html">11 Charts と MapKit</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>配布の前に、Bundle ID・App Group・チームを自分のものにそろえる</li>
+          <li>バージョン（<code>MARKETING_VERSION</code>）とビルド番号（<code>CURRENT_PROJECT_VERSION</code>）を整え、<code>agvtool</code> でビルド番号を上げる</li>
+          <li>アプリアイコンと輸出コンプライアンスのキー <code>ITSAppUsesNonExemptEncryption</code> を設定する</li>
+          <li><code>xcodebuild archive</code> でアーカイブを作り、中身と署名の有無を確かめる</li>
+          <li>App Store Connect にアプリを登録し、Xcode Organizer からアップロードする流れを知る</li>
+          <li>テスターを招待し、TestFlight アプリでのインストールとフィードバックの流れを知る</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        11 までで作った ToDo アプリを、TestFlight でベータ配布します。TestFlight は、App Store に公開する前のビルドをテスターに配る Apple の仕組みです。
+        テスターは TestFlight アプリからベータ版をインストールし、スクリーンショット付きのフィードバックを送れます。
+      </p>
+      <p>この項目は、性質の違う 2 つのパートでできています。</p>
+      <ul>
+        <li><strong>実測パート</strong>（ステップ 1〜4 と 7 のコマンド）: これまでの項目と同じく、手元の Mac で実行したコマンドと実際の出力、ファイルの変更をそのまま載せています。</li>
+        <li><strong>手順解説パート</strong>（ステップ 5・6 と、ステップ 7 の再アップロード）: App Store Connect へのアプリ登録、アップロード、テスターの招待、TestFlight アプリでの操作です。</li>
+      </ul>
+
+      <div class="callout callout--warning">
+        <span class="callout__icon" aria-hidden="true">⚠️</span>
+        <div class="callout__body">
+          <p class="callout__title">手順解説パートについて</p>
+          <p>
+            手順解説パートは、2026年10月時点の Apple の公式ヘルプに基づく手順です。執筆時には、実際のアップロードは行っていません（Apple Developer Program のアカウントに変更を加えないため）。
+            画面の文言は、公式ヘルプで確認できた英語表記のまま書いています。各手順には、公式ドキュメントへのリンクを付けています。画面の配置や文言が変わっている場合は、リンク先の最新の記載を優先してください。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">Apple Developer Program が必要</p>
+          <p>
+            App Store Connect と TestFlight は、有料の Apple Developer Program の会員向けの機能です。年会費は 99 USD で、加入手続きの中では現地通貨で表示されます。
+            加入していない Apple Account は、Xcode では「Personal Team」と表示されます。Personal Team では App Store Connect と TestFlight を使えません（<a href="https://developer.apple.com/support/compare-memberships/">Choosing a Membership</a>、<a href="https://developer.apple.com/programs/enroll/">Enrollment</a>）。
+          </p>
+          <p>
+            未加入の場合は、ステップ 1 の Bundle ID の変更と、ステップ 2・3、ステップ 4 の署名なしアーカイブと、ステップ 7 の agvtool までを進めてください。ステップ 1 のチーム設定、ステップ 4 の署名ありアーカイブ以降は、加入後に行います。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Xcode 27.0 / Swift 6.4（Swift 6 言語モード）/ 最小対象 iOS 18.0 / シミュレータ iPhone 17（iOS 27.0）は 11 と同じです。バージョンは執筆時点（2026年10月）のものです。
+          </p>
+          <p>
+            2026年4月28日以降、App Store Connect にアップロードするアプリは Xcode 26 以降と iOS 26 SDK でビルドする必要があります。2026年9月9日以降は、iOS 13 以上を対象にする必要があります（<a href="https://developer.apple.com/news/upcoming-requirements/">Upcoming requirements</a>）。Xcode 27 で最小対象 iOS 18 のこのアプリは、どちらも満たします。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="preparation">準備</h2>
+      <p>
+        11 の完成コードをそのまま出発点にします。<code>11-charts-mapkit</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>12-testflight</code> にコピーします。
+      </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 11-charts-mapkit 12-testflight</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 12-testflight/HandsonApp</span><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span></pre>
+</div>
+
+      <p>以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。Xcode の場合は、<code>12-testflight/HandsonApp/HandsonApp.xcodeproj</code> を開きます。</p>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">配布前の点検と、Bundle ID・App Group・チームの変更</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            まず、配布に関わるビルド設定を確かめます。<code>xcodebuild -showBuildSettings</code> は、ビルドせずに設定値だけを表示します。Release 構成のアプリターゲットの値を見ます。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -showBuildSettings -project HandsonApp.xcodeproj -target HandsonApp -configuration Release 2&gt;/dev/null | grep -E ' (ASSETCATALOG_COMPILER_APPICON_NAME|CODE_SIGN_ENTITLEMENTS|CODE_SIGN_IDENTITY|CODE_SIGN_STYLE|CURRENT_PROJECT_VERSION|DEVELOPMENT_TEAM|IPHONEOS_DEPLOYMENT_TARGET|MARKETING_VERSION|PRODUCT_BUNDLE_IDENTIFIER|PRODUCT_NAME) = '</span><span class="terminal__line">    ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon</span><span class="terminal__line">    CODE_SIGN_ENTITLEMENTS = HandsonApp/HandsonApp.entitlements</span><span class="terminal__line">    CODE_SIGN_IDENTITY = Apple Development</span><span class="terminal__line">    CODE_SIGN_STYLE = Automatic</span><span class="terminal__line">    CURRENT_PROJECT_VERSION = 1</span><span class="terminal__line">    IPHONEOS_DEPLOYMENT_TARGET = 18.0</span><span class="terminal__line">    MARKETING_VERSION = 1.0</span><span class="terminal__line">    PRODUCT_BUNDLE_IDENTIFIER = com.example.HandsonApp</span><span class="terminal__line">    PRODUCT_NAME = HandsonApp</span></pre>
+</div>
+
+          <p>読み取れることは次のとおりです。</p>
+          <ul>
+            <li><code>CODE_SIGN_STYLE = Automatic</code>: 自動署名です。チームを設定すれば、必要な証明書やプロビジョニングプロファイルを Xcode が用意します。</li>
+            <li><code>DEVELOPMENT_TEAM</code> は出力に出ません。チームがまだ設定されていません。</li>
+            <li><code>PRODUCT_BUNDLE_IDENTIFIER</code> は <code>com.example.HandsonApp</code> です。ウィジェットの拡張（<code>TodoWidgetExtension</code>）は <code>com.example.HandsonApp.TodoWidget</code> です。</li>
+            <li>アプリと拡張の entitlements には、App Group <code>group.com.example.HandsonApp</code> が 1 つだけ入っています。</li>
+            <li><code>ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon</code> ですが、<code>AppIcon.appiconset</code> には画像がまだありません（ステップ 3 で用意します）。</li>
+          </ul>
+
+          <p>
+            Bundle ID は全ての開発者の間で一意でなければなりません。<code>com.example</code> のままでは、自分のアカウントで登録できません。
+            Apple は、組織 ID（逆ドメイン）に自分のドメインを使うことを推奨しています（<a href="https://developer.apple.com/documentation/xcode/preparing-your-app-for-distribution">Preparing your app for distribution</a>）。
+            ここでは <code>com.example</code> を <code>com.yourname</code> に置き換える例で示します。<code>yourname</code> の部分は、自分のドメインや名前に合わせて読み替えてください。
+          </p>
+          <p>変える値は 3 種類で、アプリと拡張の両方をそろえます。</p>
+          <ul>
+            <li>アプリの Bundle ID: <code>com.yourname.HandsonApp</code></li>
+            <li>拡張の Bundle ID: <code>com.yourname.HandsonApp.TodoWidget</code></li>
+            <li>App Group: <code>group.com.yourname.HandsonApp</code>（App Group の ID は <code>group.</code> で始めます。<a href="https://developer.apple.com/documentation/xcode/configuring-app-groups">Configuring app groups</a>）</li>
+          </ul>
+
+          <p>
+            Bundle ID は Xcode で変えます。プロジェクトを選び、ターゲット <code>HandsonApp</code> と <code>TodoWidgetExtension</code> それぞれの <code>Signing &amp; Capabilities</code> を開きます。そこにある <code>Bundle Identifier</code> 欄を書き換えます。
+            変更は <code>project.pbxproj</code> の Debug と Release の両方に入ります。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">diff</span>
+  <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（アプリ。Debug と Release の 2 か所）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  				MARKETING_VERSION = 1.0;</span><span class="diff-line diff-line--remove">- 				PRODUCT_BUNDLE_IDENTIFIER = com.example.HandsonApp;</span><span class="diff-line diff-line--add">+ 				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.HandsonApp;</span><span class="diff-line">  				PRODUCT_NAME = "$(TARGET_NAME)";</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">diff</span>
+  <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（拡張。Debug と Release の 2 か所）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  				MARKETING_VERSION = 1.0;</span><span class="diff-line diff-line--remove">- 				PRODUCT_BUNDLE_IDENTIFIER = com.example.HandsonApp.TodoWidget;</span><span class="diff-line diff-line--add">+ 				PRODUCT_BUNDLE_IDENTIFIER = com.yourname.HandsonApp.TodoWidget;</span><span class="diff-line">  				PRODUCT_NAME = "$(TARGET_NAME)";</span></pre>
+</div>
+
+          <p>
+            App Group の ID は、アプリと拡張の entitlements と、10 で作った <code>SharedStore</code> の 3 か所に書かれています。3 か所とも同じ値に変えます。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">diff</span>
+  <span class="code-block__filename">HandsonApp/HandsonApp.entitlements と TodoWidgetExtension.entitlements（同じ変更）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  	&lt;key&gt;com.apple.security.application-groups&lt;/key&gt;</span><span class="diff-line">  	&lt;array&gt;</span><span class="diff-line diff-line--remove">- 		&lt;string&gt;group.com.example.HandsonApp&lt;/string&gt;</span><span class="diff-line diff-line--add">+ 		&lt;string&gt;group.com.yourname.HandsonApp&lt;/string&gt;</span><span class="diff-line">  	&lt;/array&gt;</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">diff</span>
+  <span class="code-block__filename">HandsonApp/Shared/SharedStore.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  nonisolated enum SharedStore {</span><span class="diff-line diff-line--remove">-     static let appGroupID = "group.com.example.HandsonApp"</span><span class="diff-line diff-line--add">+     static let appGroupID = "group.com.yourname.HandsonApp"</span></pre>
+</div>
+
+          <p>
+            最後に、<code>Signing &amp; Capabilities</code> の <code>Team</code> で、Apple Developer Program に加入したチームを選びます。TestFlight で配布する場合は、全てのターゲットを加入済みのチームに割り当てます（<a href="https://developer.apple.com/documentation/xcode/preparing-your-app-for-distribution">Preparing your app for distribution</a>）。
+            アップロードやエクスポートのときに、Xcode がそのアカウントに必要な署名用の資産を作ります。App ID や App Group を Web の Certificates, Identifiers &amp; Profiles で手作業で登録する必要はありません。
+          </p>
+          <p>
+            加入済みの場合は、チームを選んだ後に、各ターゲットの <code>App Groups</code> 欄の (+) で <code>group.com.yourname.HandsonApp</code> を追加します。古い <code>group.com.example.HandsonApp</code> のチェックは外します。Xcode がアカウントに App Group を登録し、entitlements は上の diff と同じ内容になります（<a href="https://developer.apple.com/documentation/xcode/configuring-app-groups">Configuring app groups</a>）。
+            未加入の場合は、entitlements を直接書き換えれば、シミュレータで動きます。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Bundle ID は最初のアップロード後に変えられない</p>
+              <p>
+                最初のビルドをアップロードした後は、そのアプリの Bundle ID を変更できません（<a href="https://developer.apple.com/documentation/xcode/preparing-your-app-for-distribution">Preparing your app for distribution</a>、<a href="https://developer.apple.com/help/app-store-connect/reference/app-information/app-information">App information</a>）。この値を最後まで使います。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">完成コードの Bundle ID とチーム</p>
+              <p>
+                ブランチ <code>ios/12-testflight</code> の完成コードは、Bundle ID と App Group を <code>com.example.*</code> のまま残しています。チームも設定していません（<code>DEVELOPMENT_TEAM</code> は <code>project.pbxproj</code> にありません）。完成コードを使う場合も、このステップの変更を自分で行ってください。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>grep -rn "com.example" .</code> を実行します。<code>project.pbxproj</code> のアプリと拡張の 4 行、entitlements の 2 ファイル、<code>SharedStore.swift</code> に、<code>com.example</code> が残っていないことを確かめます。
+              テストターゲット（<code>com.example.HandsonAppTests</code> など）は配布しないので、残っていても構いません。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">バージョンとビルド番号を整える</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            アプリには 2 つの番号があります。どちらも <code>project.pbxproj</code> のビルド設定から、ビルド時に Info.plist へ書き込まれます。
+          </p>
+          <ul>
+            <li>バージョン（<code>MARKETING_VERSION</code> → <code>CFBundleShortVersionString</code>）: ユーザーに見せる番号です。</li>
+            <li>ビルド番号（<code>CURRENT_PROJECT_VERSION</code> → <code>CFBundleVersion</code>）: 同じバージョンの中でビルドを区別する番号です。</li>
+          </ul>
+          <p>
+            App Store Connect は、Bundle ID・バージョン・ビルド番号の組でビルドを識別します（<a href="https://developer.apple.com/help/app-store-connect/reference/app-information/app-information">App information</a>、<a href="https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleversion">CFBundleVersion</a>）。
+            ビルド番号は、数字とピリオドだけでできた、ピリオド区切りの 1〜3 個の整数です。
+          </p>
+          <p>
+            このステップでは、バージョンを <code>1.0</code> から <code>1.0.0</code> にします。ビルド番号は <code>1</code> のままにします。
+            <code>MARKETING_VERSION</code> は、アプリ・拡張・2 つのテストターゲットの Debug と Release で 8 か所あります。<code>sed</code> でまとめて書き換えます（出力はありません）。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sed -i '' 's/MARKETING_VERSION = 1.0;/MARKETING_VERSION = 1.0.0;/' HandsonApp.xcodeproj/project.pbxproj</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -c "MARKETING_VERSION = 1.0.0;" HandsonApp.xcodeproj/project.pbxproj</span><span class="terminal__line">8</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">diff</span>
+  <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（8 か所とも同じ変更）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line diff-line--remove">- 				MARKETING_VERSION = 1.0;</span><span class="diff-line diff-line--add">+ 				MARKETING_VERSION = 1.0.0;</span></pre>
+</div>
+
+          <p>
+            Xcode で変える場合は、ターゲットの <code>General</code> にある <code>Version</code> 欄を使います。アプリと拡張のバージョンは同じ値にそろえておきます。
+          </p>
+          <p>
+            ビルド番号を上げるには、Xcode に付属する <code>agvtool</code> が使えます。ビルド番号を上げて再配布するときに使うので、ステップ 7 で実行します。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>grep -c</code> が <code>8</code> を返すことを確かめます。ビルドすると、アプリと拡張の Info.plist は、どちらも <code>CFBundleShortVersionString</code> が <code>"1.0.0"</code> になります。<code>CFBundleVersion</code> は <code>"1"</code> です（ステップ 4 のアーカイブで確かめます）。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">アプリアイコンと輸出コンプライアンスのキーを設定する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            11 までのプロジェクトの <code>AppIcon.appiconset</code> には、画像がありません。1024×1024 の枠（universal・dark・tinted）が並んでいるだけです。
+            ここでは、1024×1024 でアルファチャンネルのない PNG を 1 枚用意し、universal の枠に入れます。
+          </p>
+          <p>
+            自分で用意した画像を使う場合は、1024×1024・アルファなしの PNG を用意します。<code>HandsonApp/Assets.xcassets/AppIcon.appiconset/AppIcon.png</code> として置き、下の <code>sips</code> から続けます。
+            画像が手元にない場合は、次のスクリプトで青地に白いチェックマークのアイコンを生成できます。リポジトリの外（ここでは <code>/tmp/make-icon.swift</code>）に保存します。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">/tmp/make-icon.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
+import Foundation
+
+let size = 1024
+let cs = CGColorSpaceCreateDeviceRGB()
+// alpha なし（noneSkipLast）で描画する
+let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+                    space: cs, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+ctx.setFillColor(CGColor(red: 0.12, green: 0.45, blue: 0.95, alpha: 1))
+ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
+// 白いチェックマーク
+ctx.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+ctx.setLineWidth(120)
+ctx.setLineCap(.round)
+ctx.setLineJoin(.round)
+ctx.move(to: CGPoint(x: 290, y: 520))
+ctx.addLine(to: CGPoint(x: 450, y: 360))
+ctx.addLine(to: CGPoint(x: 740, y: 680))
+ctx.strokePath()
+let image = ctx.makeImage()!
+let url = URL(fileURLWithPath: CommandLine.arguments[1]) as CFURL
+let dest = CGImageDestinationCreateWithURL(url, UTType.png.identifier as CFString, 1, nil)!
+CGImageDestinationAddImage(dest, image, nil)
+CGImageDestinationFinalize(dest)</code></pre>
+</div>
+
+          <p>
+            <code>CGContext</code> を <code>CGImageAlphaInfo.noneSkipLast</code> で作るのがポイントです。透明度の情報を持たない画像になります。スクリプトを実行し、<code>sips</code> でサイズとアルファの有無を確かめます。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> swift /tmp/make-icon.swift HandsonApp/Assets.xcassets/AppIcon.appiconset/AppIcon.png</span><span class="terminal__line"><span class="terminal__prompt">$</span> sips -g pixelWidth -g pixelHeight -g hasAlpha HandsonApp/Assets.xcassets/AppIcon.appiconset/AppIcon.png</span><span class="terminal__line">…</span><span class="terminal__line">  pixelWidth: 1024</span><span class="terminal__line">  pixelHeight: 1024</span><span class="terminal__line">  hasAlpha: no</span></pre>
+</div>
+
+          <p>
+            続けて <code>Contents.json</code> を書き換えます。dark と tinted の枠は削除し、universal の 1 枠に <code>"filename"</code> を足します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">diff</span>
+  <span class="code-block__filename">HandsonApp/Assets.xcassets/AppIcon.appiconset/Contents.json</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  {</span><span class="diff-line">    "images" : [</span><span class="diff-line">      {</span><span class="diff-line diff-line--add">+       "filename" : "AppIcon.png",</span><span class="diff-line">        "idiom" : "universal",</span><span class="diff-line">        "platform" : "ios",</span><span class="diff-line">        "size" : "1024x1024"</span><span class="diff-line diff-line--remove">-     },</span><span class="diff-line diff-line--remove">-     {</span><span class="diff-line diff-line--remove">-       "appearances" : [</span><span class="diff-line diff-line--remove">-         {</span><span class="diff-line diff-line--remove">-           "appearance" : "luminosity",</span><span class="diff-line diff-line--remove">-           "value" : "dark"</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--remove">-       ],</span><span class="diff-line diff-line--remove">-       "idiom" : "universal",</span><span class="diff-line diff-line--remove">-       "platform" : "ios",</span><span class="diff-line diff-line--remove">-       "size" : "1024x1024"</span><span class="diff-line diff-line--remove">-     },</span><span class="diff-line diff-line--remove">-     {</span><span class="diff-line diff-line--remove">-       "appearances" : [</span><span class="diff-line diff-line--remove">-         {</span><span class="diff-line diff-line--remove">-           "appearance" : "luminosity",</span><span class="diff-line diff-line--remove">-           "value" : "tinted"</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--remove">-       ],</span><span class="diff-line diff-line--remove">-       "idiom" : "universal",</span><span class="diff-line diff-line--remove">-       "platform" : "ios",</span><span class="diff-line diff-line--remove">-       "size" : "1024x1024"</span><span class="diff-line">      }</span><span class="diff-line">    ],</span><span class="diff-line">    "info" : {</span><span class="diff-line">      "author" : "xcode",</span><span class="diff-line">      "version" : 1</span><span class="diff-line">    }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            次は輸出コンプライアンスです。暗号化を使うアプリは、米国の輸出規制に関する申告が必要です。
+            アップロードしたビルドは、申告が済むまで <code>Missing Compliance</code> の状態になり、テスターに配れません（<a href="https://developer.apple.com/help/app-store-connect/reference/app-uploads/app-build-statuses">App build statuses</a>）。
+            Info.plist の <code>ITSAppUsesNonExemptEncryption</code> を <code>NO</code> にすると、「暗号化を使っていない、または免除対象の暗号化だけを使っている」と申告できます。このキーがない場合、新しいバージョンをアップロードするたびに質問への回答が必要です（<a href="https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption">ITSAppUsesNonExemptEncryption</a>）。
+          </p>
+          <p>
+            このプロジェクトは Info.plist をビルド設定から生成しています（<code>GENERATE_INFOPLIST_FILE = YES</code>）。そこで、アプリターゲットの Debug と Release の両方に <code>INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;</code> を足します。
+            Xcode では、ターゲット <code>HandsonApp</code> の <code>Info</code> タブにキーを追加しても同じです。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">diff</span>
+  <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（アプリの Debug と Release の 2 か所）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  				GENERATE_INFOPLIST_FILE = YES;</span><span class="diff-line diff-line--add">+ 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;</span><span class="diff-line">  				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>NO</code> にしてよいかは自分で判断する</p>
+              <p>
+                HandsonApp の通信は、07 で使った <code>URLSession</code> の HTTPS だけです。OS に組み込まれた暗号化は、通常は書類提出の対象外です（<a href="https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations">Complying with Encryption Export Regulations</a>）。
+                ただし、規制の解釈を誤った場合の責任は開発者にあると、Apple は明記しています（<a href="https://developer.apple.com/help/app-store-connect/manage-app-information/overview-of-export-compliance">Overview of export compliance</a>）。独自の暗号化を加えたアプリでは、<code>NO</code> にしないでください。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            ここまでの変更（バージョン・アイコン・<code>ITSAppUsesNonExemptEncryption</code>）で、既存のテストが通ることを確かめます。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild test -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.0' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests</span><span class="terminal__line">…</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild test -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.0' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppUITests</span><span class="terminal__line">…</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <ul>
+              <li><code>sips</code> の出力が <code>pixelWidth: 1024</code>・<code>pixelHeight: 1024</code>・<code>hasAlpha: no</code> であること。</li>
+              <li>シミュレータにインストールすると、ホーム画面に青地に白いチェックのアイコンが「HandsonApp」の名前で表示されること。</li>
+              <li>ユニットテストが 24 スイート 82 件で通ること（1 件の known issue は、09 で作った既知の問題のデモで、意図どおりです）。UI テストは <code>Executed 3 tests, with 0 failures</code> です。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">アーカイブを作り、中身と署名を確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            配布するビルドは、アーカイブ（<code>.xcarchive</code>）として作ります。アーカイブには、Release 構成でビルドしたアプリと、クラッシュログの解析に使うシンボル（dSYM）が入ります。
+            まず、署名を無効にしてアーカイブを作り、中身を確かめます。署名なしなら、Apple Developer Program に加入していなくても実行できます。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild archive -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'generic/platform=iOS' -archivePath HandsonApp.xcarchive -derivedDataPath $DD CODE_SIGNING_ALLOWED=NO</span><span class="terminal__line">…</span><span class="terminal__line">** ARCHIVE SUCCEEDED **</span></pre>
+</div>
+
+          <p>
+            <code>-destination 'generic/platform=iOS'</code> は「実機向け（特定の端末を指定しない）」という意味です。<code>CODE_SIGNING_ALLOWED=NO</code> で署名を省きます。
+            できたアーカイブの中身は、次のとおりです（抜粋）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Text</span>
+  <span class="code-block__filename">HandsonApp.xcarchive/（抜粋）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-plaintext">HandsonApp.xcarchive/
+  Info.plist
+  dSYMs/HandsonApp.app.dSYM
+  dSYMs/TodoWidgetExtension.appex.dSYM
+  Products/Applications/HandsonApp.app/
+    HandsonApp  Info.plist  Assets.car  AppIcon60x60@2x.png  AppIcon76x76@2x~ipad.png
+    PkgInfo  Metadata.appintents/  PlugIns/TodoWidgetExtension.appex</code></pre>
+</div>
+
+          <ul>
+            <li>ウィジェットの拡張（<code>TodoWidgetExtension.appex</code>）は、アプリの <code>PlugIns/</code> に入っています。アプリと拡張は 1 つのアーカイブで一緒に配布されます。</li>
+            <li>1024×1024 の 1 枚から、端末ごとのサイズのアイコン（<code>AppIcon60x60@2x.png</code> など）が生成されています。</li>
+            <li>10 で作ったショートカットの情報は <code>Metadata.appintents/</code> に入っています。</li>
+          </ul>
+
+          <p>アーカイブ自体の <code>Info.plist</code> を見ます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> plutil -p HandsonApp.xcarchive/Info.plist</span><span class="terminal__line">…</span><span class="terminal__line">"ApplicationProperties" =&gt; {</span><span class="terminal__line">  "ApplicationPath" =&gt; "Applications/HandsonApp.app"</span><span class="terminal__line">  "Architectures" =&gt; [</span><span class="terminal__line">    0 =&gt; "arm64"</span><span class="terminal__line">  ]</span><span class="terminal__line">  "CFBundleIdentifier" =&gt; "com.example.HandsonApp"</span><span class="terminal__line">  "CFBundleShortVersionString" =&gt; "1.0.0"</span><span class="terminal__line">  "CFBundleVersion" =&gt; "1"</span><span class="terminal__line">  "SigningIdentity" =&gt; ""</span><span class="terminal__line">  "Team" =&gt; ""</span><span class="terminal__line">}</span><span class="terminal__line">"ArchiveVersion" =&gt; 2</span><span class="terminal__line">…</span><span class="terminal__line">"Name" =&gt; "HandsonApp"</span><span class="terminal__line">"SchemeName" =&gt; "HandsonApp"</span><span class="terminal__line">…</span></pre>
+</div>
+
+          <p>
+            バージョンは <code>1.0.0</code>、ビルド番号は <code>1</code> です。<code>SigningIdentity</code> と <code>Team</code> が空なのが、署名なしの印です。
+            この出力は、Bundle ID を <code>com.example</code> のまま実行したときのものです。ステップ 1 で変えた場合は、<code>CFBundleIdentifier</code> に自分の Bundle ID が出ます。
+            アプリの <code>Info.plist</code> は <code>Products/Applications/HandsonApp.app/Info.plist</code> です。ここには、ステップ 3 で設定した <code>"ITSAppUsesNonExemptEncryption" =&gt; false</code> と、<code>CFBundleIconName</code>（値は <code>AppIcon</code>）が入っています。
+          </p>
+
+          <p>
+            署名なしのアーカイブは、App Store Connect に送れません。配布には、チームの署名入りのアーカイブを使います。
+            たとえば、チーム ID だけをコマンドラインで渡し、Bundle ID は <code>com.example</code> のまま実行すると、次のように失敗します（チーム ID は伏せています）。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild archive -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'generic/platform=iOS' -archivePath HandsonApp.xcarchive -derivedDataPath $DD DEVELOPMENT_TEAM=XXXXXXXXXX</span><span class="terminal__line">…</span><span class="terminal__line">error: No profiles for 'com.example.HandsonApp' were found: Xcode couldn't find any iOS App Development provisioning profiles matching 'com.example.HandsonApp'. Automatic signing is disabled and unable to generate a profile. To enable automatic signing, pass -allowProvisioningUpdates to xcodebuild. (in target 'HandsonApp' from project 'HandsonApp')</span><span class="terminal__line">error: No profiles for 'com.example.HandsonApp.TodoWidget' were found: Xcode couldn't find any iOS App Development provisioning profiles matching 'com.example.HandsonApp.TodoWidget'. Automatic signing is disabled and unable to generate a profile. To enable automatic signing, pass -allowProvisioningUpdates to xcodebuild. (in target 'TodoWidgetExtension' from project 'HandsonApp')</span><span class="terminal__line">** ARCHIVE FAILED **</span></pre>
+</div>
+
+          <p>
+            アプリと拡張のそれぞれの Bundle ID で、プロビジョニングプロファイルが求められています。このアカウントには、<code>com.example.*</code> の App ID とプロファイルがありません。
+            さらに、コマンドラインの <code>xcodebuild</code> は、<code>-allowProvisioningUpdates</code> を付けない限りプロファイルを自動で作りません。
+            <code>xcodebuild -help</code> には、このオプションについて「自動署名のターゲットでは、プロファイル・App ID・証明書を作成・更新する」と書かれています。
+          </p>
+          <p>
+            配布用のアーカイブは、ステップ 1 で自分の Bundle ID とチームを設定したうえで、Xcode で作るのが簡単です。
+            Scheme ツールバーで実行先を選び、メニューの <code>Product &gt; Archive</code> を選びます。成功したアーカイブは Archives organizer に表示されます。<code>Window &gt; Organizer</code> でも開けます（<a href="https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases">Distributing your app for beta testing and releases</a>）。
+          </p>
+          <p>
+            Xcode 15 以降は、実行先がシミュレータのままでも、そのデバイスの種類に必要な全アーキテクチャを含めてアーカイブできます。
+          </p>
+          <p>
+            コマンドラインで署名ありのアーカイブを作る場合は、自分の Bundle ID とチームを設定したうえで <code>-allowProvisioningUpdates</code> を付けます。成功すると、署名なしのときと同じく <code>** ARCHIVE SUCCEEDED **</code> と表示されます。
+            <code>-allowProvisioningUpdates</code> を付けると、xcodebuild がアカウントに App ID・プロファイル・証明書を作成・更新します（<code>xcodebuild -help</code>）。執筆時はアカウントを変更しないため実行していません。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <ul>
+              <li>署名なしのアーカイブで <code>** ARCHIVE SUCCEEDED **</code> が表示され、<code>Info.plist</code> の <code>CFBundleShortVersionString</code> が <code>"1.0.0"</code>、<code>CFBundleVersion</code> が <code>"1"</code> であること。</li>
+              <li>（加入済みの場合）Xcode の <code>Product &gt; Archive</code> で作ったアーカイブが Archives organizer に表示されること。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">App Store Connect にアプリを登録してアップロードする</h3>
+        </div>
+        <div class="step__body">
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">ここからは手順解説パート</p>
+              <p>
+                このステップは、2026年10月時点の Apple の公式ヘルプに基づく手順です。執筆時に実際のアップロードは行っていません。画面の文言は公式ヘルプの英語表記です。App Store Connect を日本語で表示している場合は、対応する日本語の項目を探してください。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            <strong>1. アプリを登録する</strong>（<a href="https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app">Add a new app</a>）。
+            <a href="https://appstoreconnect.apple.com/">App Store Connect</a> の <code>Apps</code> で左上の (+) を押し、<code>New App</code> を選びます。
+          </p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">作ると元に戻しにくい値がある</p>
+              <p>
+                SKU は作成後に変更できません。アプリを削除すると、アプリ名の権利を失います。また、SKU は同じ組織で再利用できません。ビルドをアップロード済みなら、Bundle ID も再利用できません（<a href="https://developer.apple.com/help/app-store-connect/create-an-app-record/remove-an-app">Remove an app</a>）。練習用でも、値は慎重に決めてください。
+              </p>
+            </div>
+          </div>
+
+          <p>ダイアログでは、次の項目を入力します。</p>
+          <ul>
+            <li><code>Platforms</code>: <code>iOS</code> を選びます。</li>
+            <li><code>Name</code>: App Store に表示される名前です（2〜30 文字）。他の開発者が使っている名前は使えません。</li>
+            <li><code>Primary Language</code>: 主な言語です。</li>
+            <li><code>Bundle ID</code>: ステップ 1 で決めたアプリの Bundle ID を選びます。Xcode のプロジェクトと一致させます。</li>
+            <li><code>SKU</code>: 社内管理用の ID で、利用者には見えません。英数字・ハイフン・ピリオド・アンダースコアが使えます。先頭に記号は置けません。</li>
+            <li><code>User Access</code>: <code>Limited Access</code> か <code>Full Access</code> を選びます。</li>
+          </ul>
+          <p>
+            <code>Create</code> を押すと、ステータスが <code>Prepare for Submission</code> のアプリができます。
+            新しいアプリを追加するには、Account Holder が <code>Business</code> セクションで最新の契約に同意している必要があります。
+            未登録のまま初めてアップロードすると、登録に必要な情報を Xcode が尋ねます（<a href="https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases">Distributing your app for beta testing and releases</a>）。
+          </p>
+
+
+          <p>
+            <strong>2. Organizer からアップロードする</strong>（<a href="https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases">Distributing your app for beta testing and releases</a>）。
+            Organizer のサイドバーで <code>Archives</code> を選び、ステップ 4 のアーカイブを選んで <code>Distribute App</code> を押します。推奨設定の選択肢が並ぶので、次のどちらかを選びます。
+          </p>
+          <ul>
+            <li><code>TestFlight &amp; App Store</code>: TestFlight で配布し、App Store にも提出できる既定の設定です。</li>
+            <li><code>TestFlight Internal Only</code>: TestFlight で配布し、チーム内だけに限定する既定の設定です。このビルドは App Store に提出できません。</li>
+          </ul>
+          <p>
+            練習なら <code>TestFlight Internal Only</code> が安全です。<code>TestFlight &amp; App Store</code> は、ビルド番号の更新・自動署名・シンボル付きのアップロードを行う設定です。どちらの推奨設定でも、ビルド番号は Xcode が更新します（<a href="https://developer.apple.com/documentation/xcode/preparing-your-app-for-distribution">Preparing your app for distribution</a>）。
+            <code>Distribute</code> を押すと、Xcode が処理・パッケージ化・アップロードを進めます。最後に、App Store Connect のビルドのページへのリンクが表示されます。
+            提出せずに簡易な自動検証だけを行いたい場合は、<code>Validate App</code> を使います。
+          </p>
+
+          <p>
+            <strong>3. 処理を待ち、輸出コンプライアンスを確かめる</strong>（<a href="https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds">Upload builds</a>、<a href="https://developer.apple.com/help/app-store-connect/reference/app-uploads/build-upload-statuses">Build upload statuses</a>）。
+            アップロードしたビルドは、Apple 側の処理を経てから App Store Connect に表示されます。処理が終わるとメールが届きます。
+            アップロードのステータスは <code>Processing</code> から <code>Complete</code> か <code>Failed</code> に変わります。<code>Processing</code> のまま 24 時間を超えたら、問題が起きている可能性があります。<code>Failed</code> になった場合は、次のアップロードで同じビルド番号を使えます。
+          </p>
+          <p>
+            ステップ 3 で <code>ITSAppUsesNonExemptEncryption</code> を設定していない場合、ビルドは <code>Missing Compliance</code> になります。
+            その場合は、<code>TestFlight</code> タブでビルドを開き、<code>Manage</code> を押します。<code>Provide Export Compliance Information</code> で質問に答えます。手順は <a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/provide-export-compliance-information-for-beta-builds">Provide export compliance information for beta builds</a> にあります。
+          </p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">コマンドラインでエクスポート・アップロードする場合</summary>
+            <div class="disclosure__body">
+              <p>
+                Organizer の代わりに、<code>xcodebuild -exportArchive</code> でアーカイブを書き出せます。設定は ExportOptions.plist に書きます。次の内容は、App Store Connect 向けの形式で手元に書き出す設定です。リポジトリの外に保存します。
+              </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">XML</span>
+  <span class="code-block__filename">ExportOptions.plist</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-xml">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+&lt;plist version="1.0"&gt;
+&lt;dict&gt;
+	&lt;key&gt;method&lt;/key&gt;
+	&lt;string&gt;app-store-connect&lt;/string&gt;
+	&lt;key&gt;destination&lt;/key&gt;
+	&lt;string&gt;export&lt;/string&gt;
+&lt;/dict&gt;
+&lt;/plist&gt;</code></pre>
+</div>
+
+              <p><code>xcodebuild -help</code>（Xcode 27.0）には、主なキーが次のように説明されています。</p>
+              <ul>
+                <li><code>method</code>: 書き出し方です。<code>app-store-connect</code>・<code>release-testing</code>・<code>enterprise</code>・<code>debugging</code>・<code>developer-id</code>・<code>mac-application</code>・<code>validation</code> から選びます。旧名の <code>app-store</code>・<code>ad-hoc</code>・<code>development</code> は非推奨です。</li>
+                <li><code>destination</code>: <code>export</code>（手元に書き出す）か <code>upload</code>（Apple にアップロードする）です。既定は <code>export</code> です。</li>
+                <li><code>manageAppVersionAndBuildNumber</code>: アップロード時に Xcode がビルド番号を管理するかどうかです。既定は YES です。</li>
+                <li><code>testFlightInternalTestingOnly</code>: 有効にすると、外部の TestFlight や App Store では配布できないビルドになります。</li>
+                <li><code>teamID</code>: 書き出しに使うチームです。既定は、アーカイブをビルドしたチームです。</li>
+              </ul>
+              <p>ステップ 4 の署名なしアーカイブに対して実行すると、チームがないため失敗します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -exportArchive -archivePath HandsonApp.xcarchive -exportPath export -exportOptionsPlist ExportOptions.plist</span><span class="terminal__line">…</span><span class="terminal__line">error: exportArchive No Team Found in Archive</span><span class="terminal__line">  Use the Signing &amp; Capabilities editor to assign a team to the targets and build a new archive.</span><span class="terminal__line"></span><span class="terminal__line">** EXPORT FAILED **</span></pre>
+</div>
+
+              <p>
+                署名ありのアーカイブなら、<code>export/</code> に書き出されます。<code>destination</code> を <code>upload</code> にすると、書き出す代わりに App Store Connect へ直接アップロードします。
+                Xcode の Accounts 設定に追加したアカウントで通信させるには <code>-allowProvisioningUpdates</code> を付けます。API キーを使う場合は <code>-authenticationKeyPath</code>・<code>-authenticationKeyID</code>・<code>-authenticationKeyIssuerID</code> を指定します。
+              </p>
+              <p>署名ありアーカイブでの書き出しと <code>upload</code> は、アカウントに送信するため執筆時には実行していません（出力は載せていません）。</p>
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              App Store Connect でアプリの <code>TestFlight</code> タブを開き、アップロードしたビルド（バージョン 1.0.0）が表示されることを確かめます。処理が終わると、ビルドのステータスが <code>Missing Compliance</code> ではなく、<code>Ready to Test</code> などの状態で表示されます（<a href="https://developer.apple.com/help/app-store-connect/reference/app-uploads/app-build-statuses">App build statuses</a>）。
+              <code>Missing Compliance</code> と出ている場合は、ステップ 3 の設定を見直します。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">テスターを招待し、TestFlight アプリでフィードバックを送る</h3>
+        </div>
+        <div class="step__body">
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">手順解説パート</p>
+              <p>このステップも、2026年10月時点の Apple の公式ヘルプに基づく手順です。執筆時に実際の配布は行っていません。</p>
+            </div>
+          </div>
+
+          <p>TestFlight のテスターには、内部テスターと外部テスターの 2 種類があります。</p>
+            <table>
+              <thead>
+                <tr><th></th><th>内部テスター</th><th>外部テスター</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>対象</td><td>自分のチームの App Store Connect ユーザー</td><td>App Store Connect ユーザーでない人（メールまたは公開リンクで招待）</td></tr>
+                <tr><td>人数の上限</td><td>100 人</td><td>アプリごとに 10,000 人</td></tr>
+                <tr><td>審査</td><td>不要</td><td>最初のビルドは TestFlight App Review が必要</td></tr>
+                <tr><td>出典</td><td><a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/add-internal-testers">Add internal testers</a></td><td><a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers">Invite external testers</a></td></tr>
+              </tbody>
+            </table>
+
+          <p>
+            <strong>1. 内部テスターに配る</strong>（<a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/add-internal-testers">Add internal testers</a>）。
+            <code>TestFlight</code> タブのサイドバーにある <code>Internal Testing</code> の (+) で、グループ名を入れて <code>Create</code> を押します。
+            <code>Enable automatic distribution</code> をオンにすると、Xcode からアップロードしたビルドが自動でこのグループに配られます。オフの場合は <code>Add Builds</code> で手動で追加します。
+            <code>Invite Testers</code> でテスターを選んで <code>Add</code> を押します。ビルドを追加するときに、テスターに試してほしいことを <code>What to Test</code> に書きます。
+            個人で加入した場合は自分が Account Holder なので、自分自身を内部テスターにできます。
+          </p>
+
+          <p>
+            <strong>2. TestFlight アプリでインストールする</strong>（<a href="https://testflight.apple.com/">TestFlight</a>）。
+            テスターは、iPhone に App Store から TestFlight アプリをインストールします。招待メールの <code>View in TestFlight</code>（TestFlightで表示）か公開リンクをタップし、<code>Accept</code>（承諾）→ <code>Install</code>（インストール）をタップします。
+            1 人のテスターは、最大 30 台の端末にベータ版をインストールできます。
+          </p>
+
+          <p>
+            <strong>3. フィードバックを送る・受け取る</strong>。
+            テスターは、ベータ版のアプリでスクリーンショットを撮り、サムネイルをタップして書き込みを加えます。<code>Done</code>（完了）→ <code>Share Beta Feedback</code>（ベータ版フィードバックを共有）を選ぶと送信できます。アプリがクラッシュしたときは、詳細を送るかどうかを尋ねるアラートが出ます。
+            開発者は、受け取った内容を App Store Connect で見ます。<code>TestFlight</code> タブの <code>Feedback</code> にある <code>Screenshots</code> と <code>Crashes</code> です（<a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/view-tester-feedback">View tester feedback</a>）。
+            Xcode の <code>Window &gt; Organizer</code> の <code>Feedback</code> でも見られます（<a href="https://developer.apple.com/documentation/xcode/viewing-and-responding-to-feedback">Viewing and responding to feedback</a>）。
+          </p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">外部テスターに配る場合</summary>
+            <div class="disclosure__body">
+              <p>
+                外部グループを作るには、先に内部グループが必要です。<code>External Testing</code> の (+) でグループを作り、<code>Add Builds</code> でビルドを追加して <code>What to Test</code> を書きます。最後に <code>Submit Review</code> を押して TestFlight App Review に提出します（<a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers">Invite external testers</a>）。
+              </p>
+              <ul>
+                <li>最初のビルドは、全項目の審査を受けます。同じバージョンの後続のビルドは、審査が要らない場合があります。</li>
+                <li>1 つのバージョンで同時に審査を受けられるのは 1 ビルドだけです。24 時間で提出できるのは 6 ビルドまでです。</li>
+                <li>外部テストでは、テスト情報（<code>Beta App Description</code> など）が必須です。<code>TestFlight</code> タブの <code>Test Information</code> で入力します（<a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/provide-test-information">Provide test information</a>）。</li>
+                <li>メールの代わりに、<code>Testers</code> タブの <code>Create Public Link</code> で公開リンクを作れます。参加人数の上限（1〜10,000）も設定できます。</li>
+              </ul>
+            </div>
+          </details>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">ビルドは 90 日で期限切れになる</p>
+              <p>
+                TestFlight のビルドは、アップロードから最大 90 日間テストできます。期限を過ぎると、ステータスが <code>Expired</code> になり、テスターは使えなくなります（<a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview">TestFlight overview</a>）。
+                期限より前にテストを止めたい場合は、ビルドを開いて <code>Expire Build</code> を押します（<a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/stop-testing-a-build">Stop testing a build</a>）。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <ul>
+              <li>テスターの端末の TestFlight アプリに HandsonApp が表示され、インストールしたアプリが起動すること。</li>
+              <li>App Store Connect で、ビルドのステータスが <code>Ready to Test</code> や <code>Testing</code> になっていること（<a href="https://developer.apple.com/help/app-store-connect/reference/app-uploads/app-build-statuses">App build statuses</a>）。</li>
+              <li>テスターが送ったスクリーンショットが、<code>Feedback</code> の <code>Screenshots</code> に表示されること。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">（任意）ビルド番号を上げて再配布する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ToDo アプリを直したら、新しいビルドをアップロードしてテスターに届けます。同じバージョンのまま、ビルド番号だけを上げれば、同じバージョンの下にビルドが増えていきます。
+            iOS アプリの場合、新しいバージョンではビルド番号を 1 から振り直しても構いません（<a href="https://developer.apple.com/documentation/xcode/preparing-your-app-for-distribution">Preparing your app for distribution</a>）。
+          </p>
+          <p>
+            <code>agvtool new-version -all</code> で、全ターゲットのビルド番号をまとめて変えられます。<code>HandsonApp.xcodeproj</code> があるフォルダで実行します。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> agvtool new-version -all 2</span><span class="terminal__line">Setting version of project HandsonApp to: </span><span class="terminal__line">    2.</span><span class="terminal__line"></span><span class="terminal__line">Also setting CFBundleVersion key (assuming it exists)</span><span class="terminal__line"></span><span class="terminal__line">Updating CFBundleVersion in Info.plist(s)...</span><span class="terminal__line"></span><span class="terminal__line">Updated CFBundleVersion in "HandsonApp.xcodeproj/../TodoWidget/Info.plist" to 2</span><span class="terminal__line">Cannot find "HandsonApp.xcodeproj/../YES"</span></pre>
+</div>
+
+          <p>
+            <code>project.pbxproj</code> の <code>CURRENT_PROJECT_VERSION</code> は、8 か所全てが <code>2</code> になります。
+            <code>Updated … TodoWidget/Info.plist</code> と表示されますが、実際には変わりません。このファイルには <code>CFBundleVersion</code> キーがないためです（<code>git diff</code> にも出ません）。
+          </p>
+          <p>
+            最後の <code>Cannot find "HandsonApp.xcodeproj/../YES"</code> は警告です。agvtool が <code>GENERATE_INFOPLIST_FILE = YES</code> の値 <code>YES</code> を Info.plist のパスとして読んだために出ます（この行を除くと出ないことを確かめました）。ビルド番号の変更には影響しません。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">diff</span>
+  <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（8 か所とも同じ変更）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line diff-line--remove">- 				CURRENT_PROJECT_VERSION = 1;</span><span class="diff-line diff-line--add">+ 				CURRENT_PROJECT_VERSION = 2;</span></pre>
+</div>
+
+          <p>
+            ビルド番号を変えたら、ステップ 4・5 と同じようにアーカイブしてアップロードします（ここからは手順解説パートです）。
+            ただし、Organizer の推奨設定（ステップ 5）でアップロードすると、Xcode がアップロード時にビルド番号を更新します。
+            <code>Custom</code> で <code>Manage version and build number</code> をオフにしたら、事前に自分で上げます（<a href="https://developer.apple.com/documentation/xcode/preparing-your-app-for-distribution">Preparing your app for distribution</a>）。
+            内部グループで <code>Enable automatic distribution</code> をオンにしていれば、新しいビルドは自動でテスターに配られます。
+          </p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>agvtool</code> の変更は <code>git diff</code> で確かめる</p>
+              <p>
+                <code>agvtool</code> は <code>project.pbxproj</code> を直接書き換えます。実行後は <code>git diff</code> で、意図した行だけが変わったことを確かめてください。
+                完成コード（ブランチ <code>ios/12-testflight</code>）は、ビルド番号を <code>1</code> に戻した状態（1.0.0 (1)）です。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>grep -c "CURRENT_PROJECT_VERSION = 2;" HandsonApp.xcodeproj/project.pbxproj</code> が <code>8</code> を返すことを確かめます。アップロードした場合は、App Store Connect の <code>TestFlight</code> タブで、バージョン 1.0.0 の下にビルド 2 が加わります。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <p>作業が終わったら、アーカイブと書き出しのフォルダを消しておきます。どちらもビルドの成果物なので、リポジトリには含めません。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -rf HandsonApp.xcarchive export</span></pre>
+</div>
+
+      <p>完成状態のファイル構成は次のとおりです。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Text</span>
+  <span class="code-block__filename">HandsonApp/</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-plaintext">HandsonApp/
+  HandsonApp.xcodeproj/
+    project.pbxproj                        # この項目で更新（バージョン 1.0.0、ITSAppUsesNonExemptEncryption）
+  HandsonApp/
+    Assets.xcassets/
+      AppIcon.appiconset/
+        AppIcon.png                        # この項目で追加（1024×1024、アルファなし）
+        Contents.json                      # この項目で更新（universal の 1 枠）
+    …                                      # ほかは 11 のまま
+  TodoWidget/                              # 11 のまま
+  HandsonAppTests/                         # 11 のまま（82 テスト）
+  HandsonAppUITests/                       # 11 のまま（3 テスト）</code></pre>
+</div>
+
+      <h2 id="exercise">演習</h2>
+      <p>次の課題に取り組んでみましょう。</p>
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">アプリの <code>Info.plist</code> に <code>ITSAppUsesNonExemptEncryption</code> が入っていることを、アーカイブの中の <code>HandsonApp.app/Info.plist</code> を <code>plutil -p</code> で開いて確かめる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">（加入済みの場合）ToDo アプリの文言を 1 か所変え、ビルド番号を上げて再アップロードし、TestFlight アプリで更新を受け取る</label>
+        </li>
+      </ul>
+
+      <details class="disclosure">
+        <summary class="disclosure__summary">解答例を見る</summary>
+        <div class="disclosure__body">
+          <p>1 つ目は、ステップ 4 の署名なしアーカイブを作った状態で、次のコマンドを実行します。出力に <code>"ITSAppUsesNonExemptEncryption" =&gt; false</code> が含まれていれば設定できています。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> plutil -p HandsonApp.xcarchive/Products/Applications/HandsonApp.app/Info.plist</span></pre>
+</div>
+
+          <p>2 つ目は、ステップ 7 の手順です。Organizer の推奨設定でアップロードする場合は、ビルド番号を自分で上げなくても Xcode が更新します。</p>
+        </div>
+      </details>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">「No profiles for 'com.example.HandsonApp' were found」と出る</p>
+          <p>
+            Bundle ID が <code>com.example</code> のままか、コマンドラインで <code>-allowProvisioningUpdates</code> を付けずにアーカイブしています。ステップ 1 で Bundle ID とチームを自分のものに変え、Xcode の <code>Product &gt; Archive</code> でアーカイブします。
+            エラーはアプリと拡張の Bundle ID ごとに出ます。拡張の Bundle ID も変えたか確かめてください。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">「No Team Found in Archive」と出る</p>
+          <p>
+            署名なし（<code>CODE_SIGNING_ALLOWED=NO</code>）で作ったアーカイブは書き出せません。メッセージのとおり、<code>Signing &amp; Capabilities</code> でターゲットにチームを割り当て、アーカイブを作り直します。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">アイコンの画像にアルファチャンネルが入っている</p>
+          <p>
+            App Store 用のアイコンは、アルファチャンネルのない画像にします。自分で用意した PNG は、<code>sips -g hasAlpha</code> で <code>hasAlpha: no</code> になっていることを確かめてください。
+            ローカルのビルドでは、アルファ付きの PNG でもエラーになりません。そのため、アップロードの前に必ず確かめます。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ビルドが「Missing Compliance」のまま配れない</p>
+          <p>
+            <code>ITSAppUsesNonExemptEncryption</code> がアプリの Info.plist に入っていません。ステップ 3 の設定を確かめるか、App Store Connect でビルドを開き、<code>Provide Export Compliance Information</code> の質問に答えます。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        配布の前に、Bundle ID・App Group・チームを自分のものにそろえ、バージョンを 1.0.0 にしました。1024×1024・アルファなしのアプリアイコンを用意し、<code>ITSAppUsesNonExemptEncryption</code> を <code>NO</code> にしました。
+        <code>xcodebuild archive</code> で署名なしのアーカイブを作って中身を確かめ、署名ありのアーカイブにはチームとプロファイルが必要なことを、実際のエラーから確かめました。
+        手順解説パートでは、App Store Connect へのアプリ登録と、Organizer の <code>Distribute App</code> でのアップロードを押さえました。テスターの招待とフィードバック、ビルド番号を上げての再配布の流れも確認しました。
+      </p>
+
+      <h2 id="track-summary">iOS トラックの振り返り</h2>
+      <p>この項目で iOS トラックは終わりです。01〜12 で身に付けたことを振り返ります。</p>
+        <table>
+          <thead>
+            <tr><th>項目</th><th>身に付けたこと</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><a href="../01-setup/index.html">01</a>・<a href="../02-swift-basics/index.html">02</a></td><td>Xcode 27 と Swift 6 言語モードのプロジェクト作成、オプショナル・構造体・プロトコルなど Swift の文法</td></tr>
+            <tr><td><a href="../03-swiftui-basics/index.html">03</a>・<a href="../04-state-management/index.html">04</a></td><td>SwiftUI の View とプレビュー、<code>@State</code>・<code>@Binding</code>・<code>@Observable</code> による状態管理</td></tr>
+            <tr><td><a href="../05-list-navigation/index.html">05</a>・<a href="../06-concurrency/index.html">06</a></td><td><code>List</code> と <code>NavigationStack</code> による画面遷移、async/await と <code>@MainActor</code></td></tr>
+            <tr><td><a href="../07-networking/index.html">07</a>・<a href="../08-swiftdata/index.html">08</a></td><td>URLSession と Codable による API 通信、SwiftData による永続化</td></tr>
+            <tr><td><a href="../09-swift-testing/index.html">09</a></td><td>Swift Testing によるユニットテスト</td></tr>
+            <tr><td><a href="../10-widget-intents/index.html">10</a>・<a href="../11-charts-mapkit/index.html">11</a></td><td>WidgetKit と App Intents、Swift Charts と MapKit</td></tr>
+            <tr><td>12</td><td>アーカイブと TestFlight によるベータ配布</td></tr>
+          </tbody>
+        </table>
+      <p>
+        1 つの ToDo アプリを育てながら、画面・状態・非同期処理・通信・保存・テスト・ウィジェット・グラフと地図を加え、最後にテスターへ届けるところまで進みました。
+        次は、自分のアイデアのアプリを同じ流れで作り、TestFlight で周りの人に試してもらいましょう。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li>配布の準備とアップロード
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/xcode/preparing-your-app-for-distribution">Preparing your app for distribution</a> / <a href="https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases">Distributing your app for beta testing and releases</a></li>
+            <li><a href="https://developer.apple.com/documentation/xcode/configuring-app-groups">Configuring app groups</a> / <a href="https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleversion">CFBundleVersion</a> / <a href="https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption">ITSAppUsesNonExemptEncryption</a></li>
+            <li><a href="https://developer.apple.com/news/upcoming-requirements/">Upcoming requirements</a></li>
+          </ul>
+        </li>
+        <li>App Store Connect ヘルプ
+          <ul>
+            <li><a href="https://developer.apple.com/help/app-store-connect/create-an-app-record/add-a-new-app">Add a new app</a> / <a href="https://developer.apple.com/help/app-store-connect/manage-builds/upload-builds">Upload builds</a> / <a href="https://developer.apple.com/help/app-store-connect/reference/app-uploads/app-build-statuses">App build statuses</a></li>
+            <li><a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview">TestFlight overview</a> / <a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/add-internal-testers">Add internal testers</a> / <a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers">Invite external testers</a> / <a href="https://developer.apple.com/help/app-store-connect/test-a-beta-version/view-tester-feedback">View tester feedback</a></li>
+            <li>日本語版: <a href="https://developer.apple.com/jp/help/app-store-connect/test-a-beta-version/testflight-overview">TestFlightの概要</a> / <a href="https://developer.apple.com/jp/help/app-store-connect/create-an-app-record/add-a-new-app">新規アプリの追加</a></li>
+          </ul>
+        </li>
+        <li><a href="https://testflight.apple.com/">TestFlight（テスター向け）</a></li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>
+            このレッスンの完成コードは、ブランチ <code>ios/12-testflight</code> の <code>ios/12-testflight/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/12-testflight/HandsonApp/</code>）。
+            Bundle ID と App Group は <code>com.example.*</code> のままで、チームは設定していません。配布するには、ステップ 1 の変更を自分で行ってください。
+          </p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../11-charts-mapkit/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">11: Charts と MapKit</span>
+        </a>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
