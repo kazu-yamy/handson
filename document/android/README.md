@@ -31,7 +31,7 @@ Kotlin + Jetpack Compose を使った Android アプリ開発を学ぶトラッ�
 | 番号 | タイトル | 到達目標 | 所要時間 |
 | --- | --- | --- | --- |
 | 01 | [環境構築（Android Studio・Version Catalog）](./01-setup/index.html) | Android Studio と Version Catalog を用いたプロジェクトを作成できる | 45分 |
-| 02 | Kotlin 基礎 | Android 開発に必要な Kotlin の文法（null 安全・データクラス・拡張関数）を理解する | 45分 |
+| 02 | [Kotlin 基礎](./02-kotlin-basics/index.html) | Android 開発に必要な Kotlin の文法（null 安全・データクラス・拡張関数）を理解する | 45分 |
 | 03 | Compose 入門 | Composable 関数の基本とプレビューを使った UI 構築ができる | 45分 |
 | 04 | 状態と State hoisting | `remember` / `mutableStateOf` と State hoisting パターンを実装できる | 45分 |
 | 05 | Material3 と LazyColumn | Material3 コンポーネントと `LazyColumn` でリスト UI を構築できる | 45分 |

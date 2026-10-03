@@ -1,0 +1,1438 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02: Kotlin 基礎 | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">02</li>
+        </ol>
+        <h1 class="lesson-title">Kotlin 基礎</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: Java などで、何らかの言語のプログラミング経験がある人。Kotlin は未経験でも構いません</li>
+          <li class="lesson-meta__item">📋 前提: 01 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../01-setup/index.html">01: 環境構築（Android Studio・Version Catalog）</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>val</code> / <code>var</code>、デフォルト引数・名前付き引数、文字列テンプレート、<code>when</code> 式を使える</li>
+          <li>null 安全（<code>?</code>・<code>?.</code>・<code>?:</code>・<code>!!</code>・スマートキャスト）の仕組みと、<code>lateinit</code> / <code>by lazy</code> の違いを説明できる</li>
+          <li>データクラス（<code>copy</code>・分解宣言）と sealed interface で、画面の状態をモデル化できる</li>
+          <li><code>List</code> と <code>MutableList</code> を使い分け、ラムダでコレクションを加工できる</li>
+          <li>拡張関数を定義し、スコープ関数（<code>apply</code> / <code>also</code> / <code>run</code> / <code>with</code> / <code>let</code>）を使い分けられる</li>
+          <li><code>suspend</code> 関数を書き、<code>runTest</code> の仮想時間でテストできる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        Android 開発で毎日のように使う Kotlin の文法を、Java との違いに注目しながら学びます。
+        以降の項目では Jetpack Compose・ViewModel・Room などを扱います。そこで出てくる null 許容型・データクラス・拡張関数・ラムダ・<code>suspend</code> 関数を、ここで先に押さえておきます。
+        最後のステップでは、作った関数を 01 の画面から呼び出して表示を変えます。
+      </p>
+
+      <h3 id="how-to-proceed">この項目の進め方</h3>
+      <p>文法のテーマごとに小さな Kotlin ファイルを 1 つ書き、同じ名前のテストクラスで動作を確かめます。画面に表示して確かめるのは最後のステップ 7 だけです。</p>
+
+          <table>
+            <thead>
+            <tr><th>やること</th><th>置き場所・方法</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>文法ごとの Kotlin ファイルを書く</td><td><code>app/src/main/java/com/handson/android01/kotlin/</code>（パッケージ <code>com.handson.android01.kotlin</code>）</td></tr>
+            <tr><td>JUnit のテストを書く</td><td><code>app/src/test/java/com/handson/android01/kotlin/</code>（<code>&lt;ファイル名&gt;Test.kt</code>）</td></tr>
+            <tr><td>Android Studio でテストを実行する</td><td>テストクラスやテスト関数の左に出る ▶ ボタンから Run を選ぶ。結果は Run ツールウィンドウに表示される</td></tr>
+            <tr><td>ターミナルでテストを実行する</td><td><code>./gradlew :app:testDebugUnitTest --tests &#x27;com.handson.android01.kotlin.&lt;クラス名&gt;&#x27;</code></td></tr>
+            </tbody>
+          </table>
+
+      <p>ターミナルでは、<code>--tests</code> でテストクラスを絞り込むと、そのクラスのテストだけが実行されます。テストがすべて成功すると <code>BUILD SUCCESSFUL</code> と表示され、1 件でも失敗すると <code>BUILD FAILED</code> になります。</p>
+
+      <h3 id="java-diff">Java 経験者向けの差分早見表</h3>
+      <p>この項目で扱う Java との主な違いを先に俯瞰しておきます。詳しくは各ステップで確かめます。</p>
+
+          <table>
+            <thead>
+            <tr><th>項目</th><th>Java</th><th>Kotlin</th><th>ステップ</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>文末</td><td><code>;</code> が必要</td><td>不要</td><td>1</td></tr>
+            <tr><td>インスタンス生成</td><td><code>new Todo(1, &quot;買い物&quot;)</code></td><td><code>Todo(1, &quot;買い物&quot;)</code>（<code>new</code> は無い）</td><td>3</td></tr>
+            <tr><td>変数</td><td><code>final</code> の有無で再代入を制御</td><td><code>val</code>（再代入不可）/ <code>var</code>（再代入可）。型は推論できる</td><td>1</td></tr>
+            <tr><td>プリミティブ型</td><td><code>int</code> と <code>Integer</code> を区別する</td><td><code>Int</code> だけを使う。JVM ではコンパイル時に必要に応じて <code>int</code> になる</td><td>1</td></tr>
+            <tr><td>null</td><td>どの参照型にも <code>null</code> を入れられる</td><td><code>String?</code> のように <code>?</code> を付けた型だけが <code>null</code> を持てる（null 安全）</td><td>2</td></tr>
+            <tr><td>値を保持するクラス</td><td><code>equals</code> / <code>hashCode</code> / <code>toString</code> を手で書く（または record）</td><td><code>data class</code> で自動生成。<code>copy</code> と分解宣言も使える</td><td>3</td></tr>
+            <tr><td>分岐</td><td><code>switch</code> 文</td><td><code>when</code> 式（値を返す）。sealed 型は網羅性をコンパイラが検査する</td><td>1・3</td></tr>
+            <tr><td>既存クラスへの機能追加</td><td>ユーティリティクラスの static メソッド</td><td>拡張関数（<code>fun String.toTitleCase()</code>）</td><td>5</td></tr>
+            <tr><td>関数の置き場所</td><td>必ずクラスの中</td><td>ファイル直下に書ける（トップレベル関数）</td><td>1</td></tr>
+            </tbody>
+          </table>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">使用バージョン</p>
+              <p>01 と同じく、Kotlin 2.4.20 / AGP 9.4.1 / Gradle 9.6.0 / Compose BOM 2026.09.00 / JUnit 4.13.2 で作成しています。ステップ 6 で <code>kotlinx-coroutines-test</code> 1.11.0 を追加します（01 で追加した <code>kotlinx-coroutines-android</code> と同じバージョン）。バージョンは執筆時点（2026年10月）の最新安定版です。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Android Studio の画面について</p>
+              <p>
+                Android Studio の画面の名称や配置はバージョンで変わります。本教材は Rabbit 1（2026.2.1）を前提に画面の操作を書いています。
+                本文のコードとコマンドの出力は、ターミナル（Gradle・<code>adb</code>）で実際に動かして確認したものです。
+                テストの ▶ ボタンや結果の表示が本文と違う場合は、同じ意味の項目を選んでください。
+              </p>
+            </div>
+          </div>
+
+      <h2 id="prepare">準備</h2>
+      <p>01 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名だけを 02 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid01&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid02&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid01&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid02&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>パッケージ名（<code>namespace</code> / <code>applicationId</code> の <code>com.handson.android01</code>）は変えません。変えると <code>package</code> 宣言・import・<code>AndroidManifest.xml</code> などを全ファイルで書き換える必要があり、この項目の主題（Kotlin の文法）と関係のない作業が増えるからです。</p>
+      <p>そのため、この項目で作るファイルのパッケージも <code>com.handson.android01.kotlin</code> になります。<code>main</code> と <code>test</code> の <code>java/com/handson/android01/</code> の下に、それぞれ <code>kotlin</code> ディレクトリを作っておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p app/src/main/java/com/handson/android01/kotlin app/src/test/java/com/handson/android01/kotlin</span></pre>
+</div>
+
+      <p>Android Studio では、Project ツールウィンドウでパッケージ <code>com.handson.android01</code> を右クリックし、New &gt; Package から作っても同じです。</p>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">変数・関数・文字列テンプレート・<code>when</code> 式</h3>
+        </div>
+        <div class="step__body">
+
+          <p>まず、Kotlin の最小限の書き方を確かめます。<code>Basics.kt</code> を作り、次の内容を書きます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+// Step 1: 変数・関数・文字列テンプレート・when 式
+
+// 再代入できない（Java の final 相当）。型は右辺から推論される（String）
+val appName = &quot;HandsonAndroid02&quot;
+
+// 再代入できる。型は推論されるが、ここでは Int のまま
+var counter = 0
+
+// デフォルト引数: 省略すると既定値が使われる
+fun greet(name: String, greeting: String = &quot;こんにちは&quot;, punctuation: String = &quot;！&quot;): String =
+    &quot;$greeting、$name$punctuation&quot;
+
+// 単一式関数: 戻り値の型を省略でき、= の右辺がそのまま戻り値になる
+fun add(a: Int, b: Int): Int = a + b
+
+// when は式として値を返せる。上から順に評価され、最初に一致した分岐が使われる
+fun describeNumber(n: Int): String = when {
+    n &lt; 0 -&gt; &quot;負の数&quot;
+    n == 0 -&gt; &quot;ゼロ&quot;
+    n % 2 == 0 -&gt; &quot;正の偶数&quot;
+    else -&gt; &quot;正の奇数&quot;
+}
+
+// 値そのものと比較する when（複数の値を , で並べられる）
+fun dayType(day: String): String = when (day) {
+    &quot;土&quot;, &quot;日&quot; -&gt; &quot;休日&quot;
+    else -&gt; &quot;平日&quot;
+}
+
+// 文字列テンプレート: $変数名、または ${式}
+fun formatSum(a: Int, b: Int): String = &quot;${a} + ${b} = ${add(a, b)}&quot;
+
+fun incrementCounter(): Int {
+    counter++
+    return counter
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>val</code> は再代入できない変数（Java の <code>final</code> 相当）、<code>var</code> は再代入できる変数です。<code>val appName = "HandsonAndroid02"</code> のように右辺があれば型を書かなくても推論されます（<code>appName</code> は <code>String</code>、<code>counter</code> は <code>Int</code>）。</li>
+            <li><code>greet</code> の <code>greeting: String = "こんにちは"</code> はデフォルト引数です。呼び出し側で省略すると既定値が使われます。</li>
+            <li><code>fun add(a: Int, b: Int): Int = a + b</code> は単一式関数です。<code>{ return ... }</code> の代わりに <code>=</code> の右辺が戻り値になります。</li>
+            <li><code>when</code> は値を返す式です。条件だけを並べる形（<code>describeNumber</code>）と、値と比較する形（<code>dayType</code>）があります。<code>"土", "日"</code> のように <code>,</code> で複数の値をまとめられます。</li>
+            <li><code>"$greeting、$name$punctuation"</code> や <code>"${add(a, b)}"</code> は文字列テンプレートです。<code>$変数名</code> で変数を、<code>${式}</code> で式の結果を埋め込みます。</li>
+            <li>関数も変数も、クラスの外（ファイル直下）に書いています。これをトップレベル関数・トップレベルプロパティと呼びます。</li>
+          </ul>
+          <p>次に、テストを <code>BasicsTest.kt</code> に書きます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class BasicsTest {
+    @Test
+    fun greet_usesDefaultArguments() {
+        assertEquals(&quot;こんにちは、Android！&quot;, greet(&quot;Android&quot;))
+    }
+
+    @Test
+    fun greet_acceptsNamedArguments() {
+        // 名前付き引数は順番を変えて渡せる。省略した greeting は既定値のまま
+        assertEquals(&quot;Hello、Kotlin!&quot;, greet(punctuation = &quot;!&quot;, name = &quot;Kotlin&quot;, greeting = &quot;Hello&quot;))
+        assertEquals(&quot;やあ、Compose！&quot;, greet(&quot;Compose&quot;, greeting = &quot;やあ&quot;))
+    }
+
+    @Test
+    fun add_isSingleExpressionFunction() {
+        assertEquals(5, add(2, 3))
+    }
+
+    @Test
+    fun describeNumber_usesWhenExpression() {
+        assertEquals(&quot;負の数&quot;, describeNumber(-1))
+        assertEquals(&quot;ゼロ&quot;, describeNumber(0))
+        assertEquals(&quot;正の偶数&quot;, describeNumber(4))
+        assertEquals(&quot;正の奇数&quot;, describeNumber(7))
+    }
+
+    @Test
+    fun dayType_matchesMultipleValues() {
+        assertEquals(&quot;休日&quot;, dayType(&quot;土&quot;))
+        assertEquals(&quot;休日&quot;, dayType(&quot;日&quot;))
+        assertEquals(&quot;平日&quot;, dayType(&quot;月&quot;))
+    }
+
+    @Test
+    fun formatSum_usesStringTemplate() {
+        assertEquals(&quot;2 + 3 = 5&quot;, formatSum(2, 3))
+    }
+
+    @Test
+    fun var_canBeReassigned_andValIsTopLevelConstant() {
+        counter = 0
+        assertEquals(1, incrementCounter())
+        assertEquals(2, incrementCounter())
+        assertEquals(&quot;HandsonAndroid02&quot;, appName)
+    }
+}</code></pre>
+</div>
+
+          <p><code>greet(punctuation = "!", name = "Kotlin", greeting = "Hello")</code> は名前付き引数です。引数名を書けば順番を入れ替えて渡せます。<code>greet("Compose", greeting = "やあ")</code> のように、一部の引数だけを名前で指定する書き方も使えます。</p>
+          <p>テストを実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:testDebugUnitTest --tests &#x27;com.handson.android01.kotlin.BasicsTest&#x27;</span><span class="terminal__line">BUILD SUCCESSFUL in 1s</span><span class="terminal__line">26 actionable tasks: 8 executed, 18 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> と表示され、<code>BasicsTest</code> の 7 件がすべて成功すれば OK です。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">null 安全</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Kotlin では、<code>String</code> 型の変数に <code>null</code> を入れられません。<code>null</code> を入れたい場合は <code>String?</code> のように型に <code>?</code> を付けます。こうすると、<code>null</code> の可能性がある値をそのまま使うコードはコンパイルエラーになります。Java でよく起きる <code>NullPointerException</code> を、コンパイル時に防ぐ仕組みです。</p>
+          <p>Android では、値が無い可能性のある入力が頻繁に登場します。たとえば、画面に渡される <code>Intent.extras</code>（<code>Bundle</code>）は、キーが無いと <code>null</code> を返します。API から受け取る JSON の省略可能なフィールドや、データを読み込む前の画面の状態も <code>null</code> になりえます。ここでは <code>Bundle</code> の代わりに <code>Map</code> を使って、同じ状況を作ります。</p>
+          <p><code>NullSafety.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/NullSafety.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+// Step 2: null 安全
+
+// 型に ? を付けると null を入れられる。String は null を入れられない
+fun findNickname(users: Map&lt;String, String?&gt;, id: String): String? = users[id]
+
+// ?. 安全呼び出し: レシーバーが null なら式全体が null になる
+fun nicknameLength(nickname: String?): Int? = nickname?.length
+
+// ?: エルビス演算子: 左辺が null のときだけ右辺を使う
+fun displayName(nickname: String?): String = nickname ?: &quot;名無し&quot;
+
+// !! 非 null アサーション: null なら NullPointerException を投げる
+fun forceLength(nickname: String?): Int = nickname!!.length
+
+// let: null でないときだけブロックを実行する（it は非 null の値）
+fun greetIfPresent(nickname: String?): String? = nickname?.let { &quot;こんにちは、$it&quot; }
+
+// スマートキャスト: null チェックの後は String として扱える（!! は不要）
+fun lengthOrZero(text: String?): Int {
+    if (text != null) {
+        return text.length
+    }
+    return 0
+}
+
+// Android では Intent.extras（Bundle）のように、値が無いかもしれない入力が多い。
+// Bundle の代わりに Map で模擬する
+fun readTitle(extras: Map&lt;String, Any?&gt;?): String {
+    val title = extras?.get(&quot;title&quot;) as? String
+    return title ?: &quot;untitled&quot;
+}
+
+class Profile {
+    // lateinit: 後から代入する前提の var。代入前に読むと例外になる。
+    // プリミティブ型（Int など）と null 許容型（String?）には付けられない
+    lateinit var name: String
+
+    // by lazy: 初めて読んだときに一度だけ計算される val
+    val summary: String by lazy { &quot;profile:$name&quot; }
+}</code></pre>
+</div>
+
+
+          <table>
+            <thead>
+            <tr><th>書き方</th><th>意味</th><th>この例</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>T?</code></td><td><code>null</code> を入れられる型</td><td><code>findNickname</code> の戻り値 <code>String?</code></td></tr>
+            <tr><td><code>a?.b</code></td><td>安全呼び出し。<code>a</code> が <code>null</code> なら式全体が <code>null</code></td><td><code>nickname?.length</code></td></tr>
+            <tr><td><code>a ?: b</code></td><td>エルビス演算子。<code>a</code> が <code>null</code> のときだけ <code>b</code> を使う</td><td><code>nickname ?: "名無し"</code></td></tr>
+            <tr><td><code>a!!</code></td><td>非 null アサーション。<code>null</code> なら <code>NullPointerException</code></td><td><code>nickname!!.length</code></td></tr>
+            <tr><td><code>a?.let { }</code></td><td><code>null</code> でないときだけブロックを実行する</td><td><code>greetIfPresent</code></td></tr>
+            <tr><td>スマートキャスト</td><td><code>if (text != null)</code> の後は <code>String</code> として扱える</td><td><code>lengthOrZero</code></td></tr>
+            <tr><td><code>as?</code></td><td>安全キャスト。型が違えば <code>null</code></td><td><code>readTitle</code></td></tr>
+            </tbody>
+          </table>
+
+          <p><code>Profile</code> クラスでは、初期化を後回しにする 2 つの方法を比べます。</p>
+          <ul>
+            <li><code>lateinit var</code>: 「後で必ず代入する」と約束した <code>var</code> です。型は非 null（<code>String</code>）のまま書けます。代入する前に読むと例外になります。<code>Int</code> などのプリミティブ型と、<code>String?</code> のような null 許容型には付けられません。</li>
+            <li><code>by lazy { }</code>: 最初に読んだときに一度だけブロックを実行し、その結果を覚えておく <code>val</code> です。</li>
+          </ul>
+          <p>テストを <code>NullSafetyTest.kt</code> に書きます。<code>!!</code> と <code>lateinit</code> で投げられる例外のメッセージを確かめるため、<code>println</code> で出力しています。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/NullSafetyTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Test
+
+class NullSafetyTest {
+    private val users: Map&lt;String, String?&gt; = mapOf(&quot;u1&quot; to &quot;taro&quot;, &quot;u2&quot; to null)
+
+    @Test
+    fun findNickname_returnsNullableValue() {
+        assertEquals(&quot;taro&quot;, findNickname(users, &quot;u1&quot;))
+        assertNull(findNickname(users, &quot;u2&quot;))
+        assertNull(findNickname(users, &quot;unknown&quot;))
+    }
+
+    @Test
+    fun safeCall_returnsNullWhenReceiverIsNull() {
+        assertEquals(4, nicknameLength(&quot;taro&quot;))
+        assertNull(nicknameLength(null))
+    }
+
+    @Test
+    fun elvis_providesFallback() {
+        assertEquals(&quot;taro&quot;, displayName(&quot;taro&quot;))
+        assertEquals(&quot;名無し&quot;, displayName(null))
+    }
+
+    @Test
+    fun forceUnwrap_throwsNullPointerException_whenNull() {
+        assertEquals(4, forceLength(&quot;taro&quot;))
+        val e = assertThrows(NullPointerException::class.java) { forceLength(null) }
+        println(&quot;NPE message: ${e.message}&quot;)
+    }
+
+    @Test
+    fun let_runsOnlyWhenNotNull() {
+        assertEquals(&quot;こんにちは、taro&quot;, greetIfPresent(&quot;taro&quot;))
+        assertNull(greetIfPresent(null))
+    }
+
+    @Test
+    fun smartCast_afterNullCheck() {
+        assertEquals(4, lengthOrZero(&quot;taro&quot;))
+        assertEquals(0, lengthOrZero(null))
+    }
+
+    @Test
+    fun readTitle_handlesMissingExtras() {
+        assertEquals(&quot;Lesson&quot;, readTitle(mapOf(&quot;title&quot; to &quot;Lesson&quot;)))
+        assertEquals(&quot;untitled&quot;, readTitle(null))
+        assertEquals(&quot;untitled&quot;, readTitle(mapOf(&quot;title&quot; to 42)))
+    }
+
+    @Test
+    fun lateinit_throwsUntilAssigned() {
+        val profile = Profile()
+        val e = assertThrows(UninitializedPropertyAccessException::class.java) { profile.name }
+        println(&quot;lateinit message: ${e.message}&quot;)
+        profile.name = &quot;taro&quot;
+        assertEquals(&quot;taro&quot;, profile.name)
+    }
+
+    @Test
+    fun byLazy_computesOnce() {
+        val profile = Profile()
+        profile.name = &quot;taro&quot;
+        assertEquals(&quot;profile:taro&quot;, profile.summary)
+        profile.name = &quot;hanako&quot;
+        // 初回読み取りの値がキャッシュされる
+        assertEquals(&quot;profile:taro&quot;, profile.summary)
+    }
+}</code></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:testDebugUnitTest --tests &#x27;com.handson.android01.kotlin.NullSafetyTest&#x27;</span><span class="terminal__line">BUILD SUCCESSFUL in 1s</span><span class="terminal__line">26 actionable tasks: 6 executed, 20 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+          <p><code>println</code> の出力は、テスト結果の XML（<code>app/build/test-results/testDebugUnitTest/</code> 配下）の標準出力に記録されます。執筆環境では次のとおりでした。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">NullSafetyTest の標準出力</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">NPE message: null
+lateinit message: lateinit property name has not been initialized</code></pre>
+</div>
+
+          <ul>
+            <li><code>!!</code> が投げる <code>java.lang.NullPointerException</code> のメッセージは <code>null</code>（メッセージ無し）です。どの式が <code>null</code> だったかは文字列から分からないので、スタックトレースの行番号で追うことになります。</li>
+            <li><code>lateinit</code> のプロパティを代入前に読むと、<code>UninitializedPropertyAccessException</code> が投げられ、プロパティ名（<code>name</code>）入りのメッセージが出ます。</li>
+            <li><code>byLazy_computesOnce</code> では、<code>name</code> を <code>"hanako"</code> に変えた後も <code>summary</code> は <code>"profile:taro"</code> のままです。<code>by lazy</code> は最初の 1 回だけ計算します。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>NullSafetyTest</code> の 9 件がすべて成功すれば OK です。<code>?.</code>・<code>?:</code>・<code>!!</code> の違いを、それぞれ「<code>null</code> のときに何が起きるか」で説明できるか確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">データクラスと sealed interface</h3>
+        </div>
+        <div class="step__body">
+
+          <p>アプリが扱うデータ（Todo など）と、画面の状態（読み込み中・成功・エラー）を型で表します。<code>Models.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Models.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+// Step 3: データクラス・sealed interface・enum class
+
+// data class: equals / hashCode / toString / copy / 分解宣言が自動で生成される
+data class Todo(
+    val id: Int,
+    val title: String,
+    val done: Boolean = false,
+)
+
+// enum class: 決まった値の集合。when で網羅的に扱える
+enum class Priority { LOW, MEDIUM, HIGH }
+
+// sealed interface: 実装クラスを同じモジュール・同じパッケージ内に限定できる（Kotlin 1.5 以降）。
+// when で全ての子型を書けば、else なしでも網羅性がコンパイル時に検査される
+sealed interface UiState {
+    data object Loading : UiState
+    data class Success(val data: List&lt;Todo&gt;) : UiState
+    data class Error(val message: String) : UiState
+}
+
+fun stateLabel(state: UiState): String = when (state) {
+    is UiState.Loading -&gt; &quot;読み込み中&quot;
+    is UiState.Success -&gt; &quot;${state.data.size} 件&quot;
+    is UiState.Error -&gt; &quot;エラー: ${state.message}&quot;
+}
+
+fun priorityLabel(priority: Priority): String = when (priority) {
+    Priority.LOW -&gt; &quot;低&quot;
+    Priority.MEDIUM -&gt; &quot;中&quot;
+    Priority.HIGH -&gt; &quot;高&quot;
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>data class</code>: コンストラクタの引数（プロパティ）から、<code>equals</code> / <code>hashCode</code> / <code>toString</code> / <code>copy</code> / 分解宣言用の関数が自動で作られます。<code>val</code> だけで書けば不変（作った後に中身が変わらない）なクラスになります。</li>
+            <li><code>done: Boolean = false</code>: コンストラクタにもデフォルト引数を書けます。<code>Todo(1, "買い物")</code> と書けば <code>done</code> は <code>false</code> です。</li>
+            <li><code>enum class</code>: 決まった値の集合です。<code>Priority.entries</code> で全ての値を一覧できます。</li>
+            <li><code>sealed interface</code>: 実装できる型を、同じモジュール・同じパッケージの中に限定できます（Kotlin 1.5 以降）。コンパイラが子型をすべて把握できるので、<code>when</code> で全ての子型を書けば <code>else</code> は不要です。</li>
+            <li><code>data object Loading</code>: 状態を持たない子型は <code>object</code>（インスタンスが 1 つだけのクラス）にします。<code>data</code> を付けると <code>toString</code> が <code>Loading</code> のように読みやすくなります。</li>
+            <li><code>is UiState.Success -&gt; "${state.data.size} 件"</code>: <code>is</code> で型を判定した分岐の中では、<code>state</code> が <code>UiState.Success</code> にスマートキャストされ、<code>data</code> を参照できます。</li>
+          </ul>
+          <p>この <code>UiState</code> の形は、06（ViewModel と StateFlow）で画面の状態を表すときにも使います。</p>
+          <p>テストを <code>ModelsTest.kt</code> に書きます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/ModelsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ModelsTest {
+    private val todo = Todo(id = 1, title = &quot;Kotlin を学ぶ&quot;)
+
+    @Test
+    fun dataClass_hasDefaultValue() {
+        assertEquals(false, todo.done)
+    }
+
+    @Test
+    fun dataClass_copyChangesOnlySpecifiedField() {
+        val done = todo.copy(done = true)
+        assertEquals(true, done.done)
+        assertEquals(todo.title, done.title)
+        // copy は新しいインスタンスを返し、元の値は変わらない
+        assertEquals(false, todo.done)
+    }
+
+    @Test
+    fun dataClass_equalsComparesFields() {
+        assertEquals(Todo(1, &quot;Kotlin を学ぶ&quot;), todo)
+        assertNotEquals(Todo(2, &quot;Kotlin を学ぶ&quot;), todo)
+    }
+
+    @Test
+    fun dataClass_destructuring() {
+        val (id, title, done) = todo
+        assertEquals(1, id)
+        assertEquals(&quot;Kotlin を学ぶ&quot;, title)
+        assertEquals(false, done)
+    }
+
+    @Test
+    fun dataClass_toStringShowsFields() {
+        assertTrue(todo.toString().startsWith(&quot;Todo(id=1, title=Kotlin を学ぶ, done=false)&quot;))
+    }
+
+    @Test
+    fun sealedWhen_coversAllStates() {
+        assertEquals(&quot;読み込み中&quot;, stateLabel(UiState.Loading))
+        assertEquals(&quot;2 件&quot;, stateLabel(UiState.Success(listOf(todo, todo.copy(id = 2)))))
+        assertEquals(&quot;エラー: 通信失敗&quot;, stateLabel(UiState.Error(&quot;通信失敗&quot;)))
+    }
+
+    @Test
+    fun enum_whenReturnsLabel() {
+        assertEquals(&quot;低&quot;, priorityLabel(Priority.LOW))
+        assertEquals(&quot;中&quot;, priorityLabel(Priority.MEDIUM))
+        assertEquals(&quot;高&quot;, priorityLabel(Priority.HIGH))
+        assertEquals(listOf(&quot;LOW&quot;, &quot;MEDIUM&quot;, &quot;HIGH&quot;), Priority.entries.map { it.name })
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>todo.copy(done = true)</code> は、指定したプロパティだけを変えた新しいインスタンスを返します。元の <code>todo</code> は変わりません。</li>
+            <li><code>val (id, title, done) = todo</code> は分解宣言です。プロパティを宣言順に取り出します。</li>
+            <li><code>assertEquals(Todo(1, "Kotlin を学ぶ"), todo)</code> が成功するのは、<code>data class</code> の <code>equals</code> がプロパティの値で比較するからです。</li>
+          </ul>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:testDebugUnitTest --tests &#x27;com.handson.android01.kotlin.ModelsTest&#x27;</span><span class="terminal__line">BUILD SUCCESSFUL in 1s</span><span class="terminal__line">26 actionable tasks: 6 executed, 20 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+          <p>次に、<code>when</code> の網羅チェックを体験します。<code>stateLabel</code> から <code>is UiState.Error -&gt; ...</code> の行を一時的に消して、コンパイルします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:compileDebugKotlin</span><span class="terminal__line">（中略）</span><span class="terminal__line">e: file:///.../app/src/main/java/com/handson/android01/kotlin/Models.kt:23:42 &#x27;when&#x27; expression must be exhaustive. Add the &#x27;is Error&#x27; branch or an &#x27;else&#x27; branch.</span></pre>
+</div>
+
+          <p>「<code>when</code> 式は網羅的でなければならない。<code>is Error</code> の分岐か <code>else</code> の分岐を追加せよ」という意味です。<code>Models.kt:23:42</code> は 23 行目 42 文字目（<code>when</code> の位置）を指します。確認できたら、消した行を元に戻してください。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">sealed 型の <code>when</code> に <code>else</code> を書かない</p>
+              <p>エラーを消すだけなら <code>else -&gt; ...</code> を足しても通ります。ただし、<code>else</code> があると、後から <code>UiState</code> に子型（たとえば <code>Empty</code>）を追加しても、この <code>when</code> はエラーになりません。子型を足したときに、対応が必要な箇所をコンパイラに教えてもらえるよう、sealed 型の <code>when</code> では子型をすべて書きます。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>ModelsTest</code> の 7 件がすべて成功し、分岐を 1 つ消したときに <code>'when' expression must be exhaustive</code> のエラーになることを確認できれば OK です。最後に分岐を戻し、<code>./gradlew :app:compileDebugKotlin</code> が成功することも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">コレクションとラムダ</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Todo のリストを、ラムダを使って加工します。<code>Collections.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Collections.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+// Step 4: コレクションとラムダ
+
+// List は読み取り専用（要素の追加・削除はできない）
+fun sampleTodos(): List&lt;Todo&gt; = listOf(
+    Todo(1, &quot;買い物&quot;, done = true),
+    Todo(2, &quot;掃除&quot;),
+    Todo(3, &quot;Kotlin を学ぶ&quot;, done = true),
+    Todo(4, &quot;散歩&quot;),
+)
+
+// MutableList は可変（追加・削除ができる）
+fun collectTitles(todos: List&lt;Todo&gt;): MutableList&lt;String&gt; {
+    val result = mutableListOf&lt;String&gt;()
+    for (todo in todos) {
+        result.add(todo.title)
+    }
+    return result
+}
+
+// it: ラムダの引数が 1 つのときの暗黙の名前
+fun titlesOfDone(todos: List&lt;Todo&gt;): List&lt;String&gt; =
+    todos.filter { it.done }.map { it.title }
+
+// 明示的なラムダ引数: 引数が複数あるときは名前を付ける
+fun sortedByIdDescending(todos: List&lt;Todo&gt;): List&lt;Todo&gt; =
+    todos.sortedBy { todo -&gt; -todo.id }
+
+// groupBy: キーごとに要素をまとめた Map を作る
+fun groupByDone(todos: List&lt;Todo&gt;): Map&lt;Boolean, List&lt;Todo&gt;&gt; =
+    todos.groupBy { it.done }
+
+// firstOrNull: 条件に合う最初の要素。無ければ null
+fun findTodo(todos: List&lt;Todo&gt;, id: Int): Todo? =
+    todos.firstOrNull { it.id == id }
+
+// 末尾ラムダ: 最後の引数がラムダなら、括弧の外に書ける
+fun countWhere(todos: List&lt;Todo&gt;, predicate: (Todo) -&gt; Boolean): Int =
+    todos.count(predicate)</code></pre>
+</div>
+
+          <ul>
+            <li><code>listOf(...)</code> が返すリストは、要素の追加・削除ができません（サイズ固定）。<code>add</code> や <code>remove</code> は <code>List</code> 型にありません。</li>
+            <li><code>mutableListOf()</code> が返す <code>MutableList</code> は、要素の追加・削除ができます。</li>
+            <li><code>{ it.done }</code> はラムダ（その場で書く無名の関数）です。引数が 1 つのときは、<code>it</code> という暗黙の名前で参照できます。<code>{ todo -&gt; -todo.id }</code> のように <code>-&gt;</code> の左に名前を付けることもできます。</li>
+            <li><code>filter</code>（条件に合う要素だけ残す）・<code>map</code>（要素を変換する）・<code>sortedBy</code>（キーで並べ替える）・<code>groupBy</code>（キーごとにまとめた <code>Map</code> を作る）・<code>firstOrNull</code>（条件に合う最初の要素。無ければ <code>null</code>）は、いずれも元のリストを変えずに新しい結果を返します。</li>
+            <li><code>predicate: (Todo) -&gt; Boolean</code> は関数型です。「<code>Todo</code> を受け取って <code>Boolean</code> を返す関数」を引数に取ります。</li>
+          </ul>
+          <p>テストを <code>CollectionsTest.kt</code> に書きます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/CollectionsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Test
+
+class CollectionsTest {
+    private val todos = sampleTodos()
+
+    @Test
+    fun listOf_isReadOnlyView() {
+        // 型は List。追加は関数としても用意されていない（コンパイルで防がれる）
+        assertEquals(4, todos.size)
+        assertEquals(1, todos.first().id)
+    }
+
+    @Test
+    @Suppress(&quot;UNCHECKED_CAST&quot;)
+    fun listOf_isReadOnlyOnlyByType_notAtRuntime() {
+        // List は型の上で読み取り専用なだけ。キャストすれば実行時に変更でき、
+        // 変更を試みると UnsupportedOperationException になる（listOf が返すリストは要素の追加・削除ができない（サイズ固定））
+        val sneaky = todos as MutableList&lt;Todo&gt;
+        val e = org.junit.Assert.assertThrows(UnsupportedOperationException::class.java) {
+            sneaky.add(Todo(5, &quot;強制追加&quot;))
+        }
+        println(&quot;add message: ${e.message}&quot;)
+    }
+
+    @Test
+    fun mutableList_canAddElements() {
+        val titles = collectTitles(todos)
+        titles.add(&quot;追加&quot;)
+        assertEquals(5, titles.size)
+        assertEquals(&quot;追加&quot;, titles.last())
+    }
+
+    @Test
+    fun filter_and_map_withIt() {
+        assertEquals(listOf(&quot;買い物&quot;, &quot;Kotlin を学ぶ&quot;), titlesOfDone(todos))
+    }
+
+    @Test
+    fun sortedBy_withExplicitLambdaParameter() {
+        assertEquals(listOf(4, 3, 2, 1), sortedByIdDescending(todos).map { it.id })
+    }
+
+    @Test
+    fun groupBy_splitsByKey() {
+        val groups = groupByDone(todos)
+        assertEquals(listOf(1, 3), groups[true]!!.map { it.id })
+        assertEquals(listOf(2, 4), groups[false]!!.map { it.id })
+    }
+
+    @Test
+    fun firstOrNull_returnsNullWhenNotFound() {
+        assertEquals(&quot;掃除&quot;, findTodo(todos, 2)?.title)
+        assertNull(findTodo(todos, 99))
+    }
+
+    @Test
+    fun trailingLambda_passesPredicate() {
+        assertEquals(2, countWhere(todos) { !it.done })
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>countWhere(todos) { !it.done }</code> は末尾ラムダの書き方です。最後の引数がラムダなら、括弧の外に出して書けます。Compose の <code>Column { ... }</code> も同じ書き方です。</li>
+            <li><code>listOf_isReadOnlyOnlyByType_notAtRuntime</code> は、<code>List</code> を <code>MutableList</code> にキャストして <code>add</code> を呼ぶテストです。実行時に <code>UnsupportedOperationException</code>（メッセージは <code>null</code>）が投げられます。<code>List</code> の「読み取り専用」はコンパイラが型の上で守る約束です。実際に変更できるかどうかは、中身のリストの実装で決まります。</li>
+          </ul>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:testDebugUnitTest --tests &#x27;com.handson.android01.kotlin.CollectionsTest&#x27;</span><span class="terminal__line">BUILD SUCCESSFUL in 854ms</span><span class="terminal__line">26 actionable tasks: 2 executed, 24 up-to-date</span><span class="terminal__line">Configuration cache entry reused.</span></pre>
+</div>
+
+          <p>関数の引数と戻り値は <code>List</code> で受け渡すのが基本です。<code>collectTitles</code> のように、関数の中で組み立てるときだけ <code>MutableList</code> を使います。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>CollectionsTest</code> の 8 件がすべて成功すれば OK です。<code>titlesOfDone</code> の <code>filter</code> と <code>map</code> がそれぞれ返す値を、説明できるようにしておきましょう。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">拡張関数とスコープ関数</h3>
+        </div>
+        <div class="step__body">
+
+          <p>既存の型に関数を追加する拡張関数と、オブジェクトに対する処理をまとめるスコープ関数を書きます。<code>Extensions.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Extensions.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+// Step 5: 拡張関数とスコープ関数
+
+// 拡張関数: 既存の型に、クラスを継承せずに関数を足す。レシーバーは this で参照する
+fun String.toTitleCase(): String =
+    split(&quot; &quot;).joinToString(&quot; &quot;) { word -&gt; word.replaceFirstChar { it.uppercaseChar() } }
+
+// List&lt;Todo&gt; に対する拡張関数。Todo のリストを加工する
+fun List&lt;Todo&gt;.doneCount(): Int = count { it.done }
+
+// 表示用の 1 行にまとめる（MainActivity の画面で使う）
+fun List&lt;Todo&gt;.summaryLine(): String = &quot;${size} 件中 ${doneCount()} 件完了&quot;
+
+// 組み立て用の可変クラス（Todo は data class で不変にしたので、初期化の例として別に用意）
+class TodoDraft {
+    var title: String = &quot;&quot;
+    var done: Boolean = false
+}
+
+// apply: レシーバーを初期化し、レシーバー自身を返す（オブジェクトの設定）
+fun draftWithApply(title: String): TodoDraft = TodoDraft().apply {
+    this.title = title
+    done = false
+}
+
+// also: 副作用（ログ・追加処理）を入れ、レシーバー自身を返す
+fun addAndRecord(list: MutableList&lt;String&gt;, title: String): MutableList&lt;String&gt; =
+    list.also { it.add(title) }
+
+// run: レシーバーを使って結果の値を計算する（this でレシーバーを参照）
+fun summarizeWithRun(todos: List&lt;Todo&gt;): String = todos.run {
+    &quot;${size} 件中 ${doneCount()} 件完了&quot;
+}
+
+// with: レシーバーを引数で渡し、ブロックの結果を返す（拡張関数ではなく通常の関数）
+fun summarizeWithWith(todos: List&lt;Todo&gt;): String = with(todos) {
+    &quot;${size} 件中 ${doneCount()} 件完了&quot;
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>fun String.toTitleCase()</code> は <code>String</code> の拡張関数です。<code>"hello kotlin world".toTitleCase()</code> のように、<code>String</code> のメソッドと同じ形で呼べます。関数の中では、レシーバー（呼び出し元の値）を <code>this</code> で参照できます。<code>this</code> は省略できるので、<code>split(" ")</code> は <code>this.split(" ")</code> と同じです。</li>
+            <li><code>fun List&lt;Todo&gt;.doneCount()</code> のように、型引数を指定した型にも拡張関数を定義できます。<code>List&lt;String&gt;</code> には <code>doneCount</code> は現れません。</li>
+            <li>拡張関数は、クラスを継承したり書き換えたりはしません。実体は「レシーバーを第 1 引数に取る static 関数」で、Java の <code>StringUtils.toTitleCase(s)</code> のようなユーティリティを、呼び出しやすい形で書けるようにしたものです。</li>
+          </ul>
+          <p>スコープ関数は、レシーバーの参照方法（<code>this</code> か <code>it</code>）と、戻り値（レシーバー自身かラムダの結果か）で使い分けます。</p>
+
+          <table>
+            <thead>
+            <tr><th>関数</th><th>レシーバーの参照</th><th>戻り値</th><th>主な用途</th><th>この項目での例</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>apply</code></td><td><code>this</code>（省略可）</td><td>レシーバー自身</td><td>オブジェクトの初期化・設定</td><td><code>draftWithApply</code></td></tr>
+            <tr><td><code>also</code></td><td><code>it</code></td><td>レシーバー自身</td><td>副作用（ログ・追加処理）</td><td><code>addAndRecord</code></td></tr>
+            <tr><td><code>run</code></td><td><code>this</code>（省略可）</td><td>ラムダの結果</td><td>レシーバーを使って値を計算</td><td><code>summarizeWithRun</code></td></tr>
+            <tr><td><code>with</code></td><td><code>this</code>（省略可）</td><td>ラムダの結果</td><td>既存オブジェクトに対する処理（拡張関数ではない）</td><td><code>summarizeWithWith</code></td></tr>
+            <tr><td><code>let</code></td><td><code>it</code></td><td>ラムダの結果</td><td><code>null</code> でないときだけ処理（ステップ 2）</td><td><code>greetIfPresent</code></td></tr>
+            </tbody>
+          </table>
+
+          <p>テストを <code>ExtensionsTest.kt</code> に書きます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/ExtensionsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Test
+
+class ExtensionsTest {
+    private val todos = sampleTodos()
+
+    @Test
+    fun stringExtension_toTitleCase() {
+        assertEquals(&quot;Hello Kotlin World&quot;, &quot;hello kotlin world&quot;.toTitleCase())
+        assertEquals(&quot;&quot;, &quot;&quot;.toTitleCase())
+    }
+
+    @Test
+    fun listExtension_doneCount() {
+        assertEquals(2, todos.doneCount())
+        assertEquals(0, emptyList&lt;Todo&gt;().doneCount())
+    }
+
+    @Test
+    fun listExtension_summaryLine() {
+        assertEquals(&quot;4 件中 2 件完了&quot;, todos.summaryLine())
+    }
+
+    @Test
+    fun apply_configuresAndReturnsReceiver() {
+        val draft = draftWithApply(&quot;買い物&quot;)
+        assertEquals(&quot;買い物&quot;, draft.title)
+        assertFalse(draft.done)
+    }
+
+    @Test
+    fun also_addsAndReturnsSameList() {
+        val list = mutableListOf(&quot;a&quot;)
+        val returned = addAndRecord(list, &quot;b&quot;)
+        assertEquals(listOf(&quot;a&quot;, &quot;b&quot;), returned)
+        assertEquals(true, returned === list)
+    }
+
+    @Test
+    fun run_andWith_computeSameResult() {
+        assertEquals(&quot;4 件中 2 件完了&quot;, summarizeWithRun(todos))
+        assertEquals(&quot;4 件中 2 件完了&quot;, summarizeWithWith(todos))
+    }
+}</code></pre>
+</div>
+
+          <p><code>also_addsAndReturnsSameList</code> の <code>returned === list</code> は、2 つが同じインスタンスかどうかの比較です。<code>also</code> はレシーバー自身を返すので <code>true</code> になります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:testDebugUnitTest --tests &#x27;com.handson.android01.kotlin.ExtensionsTest&#x27;</span><span class="terminal__line">BUILD SUCCESSFUL in 1s</span><span class="terminal__line">26 actionable tasks: 6 executed, 20 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+
+          <h4>Android での拡張関数</h4>
+          <p>Android の公式ライブラリでも拡張関数は多く使われています。この項目のコードでは使いませんが、次の項目以降で目にします。</p>
+          <ul>
+            <li><code>Modifier.padding(16.dp)</code>: Compose で見た目を指定する <code>Modifier</code> の書き方は、拡張関数の連鎖です。<code>padding</code> は <code>Modifier</code> に定義された拡張関数で、ステップ 7 の画面でも使います。</li>
+            <li><code>Context.getSystemService&lt;T&gt;()</code>: AndroidX Core の拡張関数です。<code>reified</code> 型パラメータを使い、取得したいサービスのクラスを型引数で指定できるようにしています。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>ExtensionsTest</code> の 6 件がすべて成功すれば OK です。スコープ関数の表を見ずに、<code>apply</code> と <code>also</code>、<code>run</code> と <code>let</code> の違いを説明できるか確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">コルーチンの入口</h3>
+        </div>
+        <div class="step__body">
+
+          <p>通信やデータベースの読み書きのように時間のかかる処理は、Kotlin のコルーチンで書きます。ここでは <code>suspend</code> 関数の書き方と、そのテスト方法を学びます。</p>
+          <p>まず、コルーチンをテストするためのライブラリ <code>kotlinx-coroutines-test</code> を追加します。01 で追加した <code>kotlinx-coroutines-android</code> と同じバージョン（<code>kotlinxCoroutines</code>）を参照します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line diff-line--add">+ kotlinx-coroutines-test = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-test&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line diff-line--add">+     testImplementation(libs.kotlinx.coroutines.test)</span><span class="diff-line">      androidTestImplementation(platform(libs.androidx.compose.bom))</span><span class="diff-line">      androidTestImplementation(libs.androidx.junit)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>testImplementation</code> は、ユニットテスト（<code>src/test/</code>）のときだけ使う依存です。アプリ本体の APK には含まれません。Android Studio で編集した場合は、Sync Now で同期してください。</p>
+          <p><code>Coroutines.kt</code> を作ります。通信の代わりに <code>delay</code> で待ちます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Coroutines.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+
+// Step 6: コルーチンの入口
+
+// suspend fun: 途中で中断・再開できる関数。delay は待ち時間の間スレッドを塞がない
+suspend fun fetchTodos(): List&lt;Todo&gt; {
+    delay(1000) // 通信の代わりに 1 秒待つ
+    return sampleTodos()
+}
+
+// withContext(Dispatchers.IO): ブロッキングになりうる処理を IO 用のスレッドで実行する
+suspend fun fetchTodosOnIo(): List&lt;Todo&gt; = withContext(Dispatchers.IO) {
+    delay(1000)
+    sampleTodos()
+}
+
+// async / await: 2 つの処理を並列に走らせ、両方の結果を待つ
+suspend fun fetchTodosAndCount(): Pair&lt;List&lt;Todo&gt;, Int&gt; = coroutineScope {
+    val todos = async { fetchTodos() }
+    val count = async {
+        delay(1000)
+        4
+    }
+    todos.await() to count.await()
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>suspend fun</code>: 途中で中断・再開できる関数です。<code>suspend</code> 関数は、コルーチンの中か、別の <code>suspend</code> 関数の中からだけ呼べます。</li>
+            <li><code>delay(1000)</code>: 1 秒待ちます。待っている間、スレッドを塞ぎません（Java の <code>Thread.sleep</code> とは違います）。</li>
+            <li><code>withContext(Dispatchers.IO)</code>: ブロックを IO 用のスレッドで実行し、結果を返します。</li>
+            <li><code>coroutineScope</code> + <code>async</code> / <code>await</code>: 2 つの処理を並行して開始し、両方の結果を待ちます。<code>todos.await() to count.await()</code> の <code>to</code> は、2 つの値から <code>Pair</code> を作る関数です。</li>
+          </ul>
+          <p>テストを <code>CoroutinesTest.kt</code> に書きます。<code>suspend</code> 関数を呼ぶため、テストの本体を <code>runTest { }</code> で囲みます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/CoroutinesTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.kotlin
+
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class CoroutinesTest {
+    @Test
+    fun delay_doesNotConsumeRealTime() = runTest {
+        val startedAt = System.currentTimeMillis()
+        val todos = fetchTodos()
+        val elapsedRealMs = System.currentTimeMillis() - startedAt
+
+        assertEquals(4, todos.size)
+        // 仮想時間では 1000ms 進んでいる
+        assertEquals(1000L, currentTime)
+        // 実時間はほとんど消費していない
+        assertTrue(&quot;実時間 ${elapsedRealMs}ms&quot;, elapsedRealMs &lt; 1000)
+    }
+
+    @Test
+    fun advanceTimeBy_controlsVirtualClock() = runTest {
+        var finished = false
+        launch {
+            delay(500)
+            finished = true
+        }
+        advanceTimeBy(499)
+        assertFalse(finished)
+        advanceTimeBy(1)
+        runCurrent()
+        assertTrue(finished)
+        assertEquals(500L, currentTime)
+    }
+
+    @Test
+    fun withContext_ioDispatcher_returnsResult() = runTest {
+        assertEquals(4, fetchTodosOnIo().size)
+    }
+
+    @Test
+    fun async_runsInParallel() = runTest {
+        val (todos, count) = fetchTodosAndCount()
+        assertEquals(4, todos.size)
+        assertEquals(4, count)
+        // 直列なら 2000ms かかるが、並列なので 1000ms
+        assertEquals(1000L, currentTime)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>runTest</code> の中の <code>delay</code> は、実際には待たずに仮想時間を進めます。<code>currentTime</code> は仮想時間（ミリ秒）です。<code>delay_doesNotConsumeRealTime</code> では、仮想時間が 1000ms 進む一方で、実時間は 1000ms 未満であることを確かめています。</li>
+            <li>仮想時間になるのは、テストディスパッチャ上の <code>delay</code> だけです。<code>withContext(Dispatchers.IO)</code> に切り替えた先は実時間で待つため、<code>fetchTodosOnIo</code> の処理は実測で約 1 秒かかります（この実行では 1.053 秒）。だから本番コードでは、ディスパッチャを引数で注入できる形にします。</li>
+            <li><code>advanceTimeBy_controlsVirtualClock</code> では、<code>launch</code> で開始した処理を仮想時間で少しずつ進めます。<code>advanceTimeBy(499)</code> の時点では <code>delay(500)</code> の後ろは実行されません。<code>advanceTimeBy(1)</code> で 500ms に達した後、<code>runCurrent()</code> を呼ぶと、その時点で実行可能な処理が実行されて <code>finished</code> が <code>true</code> になります。</li>
+            <li><code>async_runsInParallel</code> では、1 秒かかる処理を 2 つ並行に実行しています。直列なら 2000ms かかるところが、仮想時間 1000ms で終わります。</li>
+          </ul>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:testDebugUnitTest --tests &#x27;com.handson.android01.kotlin.CoroutinesTest&#x27;</span><span class="terminal__line">BUILD SUCCESSFUL in 9s</span><span class="terminal__line">26 actionable tasks: 26 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+          <p>依存を追加した直後なので、すべてのタスクが実行され（<code>26 executed</code>）、他のステップより時間がかかっています。</p>
+          <p>Android では、画面（ViewModel や Activity）の寿命に合わせてコルーチンを開始する <code>viewModelScope</code> / <code>lifecycleScope</code> を使います。これらは 06（ViewModel と StateFlow）で扱います。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>CoroutinesTest</code> の 4 件がすべて成功すれば OK です。<code>delay(1000)</code> を含むテストが実時間で 1 秒待たずに終わる理由を説明できるか確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">作った関数を画面に反映する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、ここまでに作った <code>Todo</code>・拡張関数を、01 の画面（<code>MainActivity.kt</code> の <code>Greeting</code>）から使います。「Hello, Compose!」とバージョンの表示を、Todo の一覧に置き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.tooling.preview.Preview</span><span class="diff-line">  import androidx.compose.ui.unit.dp</span><span class="diff-line diff-line--add">+ import com.handson.android01.kotlin.Todo</span><span class="diff-line diff-line--add">+ import com.handson.android01.kotlin.summaryLine</span><span class="diff-line diff-line--add">+ import com.handson.android01.kotlin.toTitleCase</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ // 画面に出す Todo（Step 3 の Todo を Step 4 の sampleTodos と同じ形で並べる）</span><span class="diff-line diff-line--add">+ private val demoTodos = listOf(</span><span class="diff-line diff-line--add">+     Todo(1, &quot;learn kotlin basics&quot;, done = true),</span><span class="diff-line diff-line--add">+     Todo(2, &quot;build compose screen&quot;),</span><span class="diff-line diff-line--add">+     Todo(3, &quot;write unit tests&quot;, done = true),</span><span class="diff-line diff-line--add">+ )</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  @Composable</span><span class="diff-line">  fun Greeting(modifier: Modifier = Modifier) {</span><span class="diff-line">      Column(</span><span class="diff-line diff-line--remove">-         modifier = modifier,</span><span class="diff-line diff-line--add">+         modifier = modifier.padding(16.dp),</span><span class="diff-line">          verticalArrangement = Arrangement.spacedBy(8.dp)</span><span class="diff-line">      ) {</span><span class="diff-line diff-line--remove">-         Text(text = &quot;Hello, Compose!&quot;)</span><span class="diff-line diff-line--remove">-         Text(text = &quot;Kotlin ${BuildConfig.KOTLIN_VERSION} / Compose BOM ${BuildConfig.COMPOSE_BOM_VERSION}&quot;)</span><span class="diff-line diff-line--add">+         Text(text = demoTodos.summaryLine())</span><span class="diff-line diff-line--add">+         demoTodos.forEach { todo -&gt;</span><span class="diff-line diff-line--add">+             val mark = if (todo.done) &quot;[x]&quot; else &quot;[ ]&quot;</span><span class="diff-line diff-line--add">+             Text(text = &quot;$mark ${todo.title.toTitleCase()}&quot;)</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>import com.handson.android01.kotlin.summaryLine</code> / <code>toTitleCase</code>: 別のパッケージで定義した拡張関数は、関数名で import してから使います。</li>
+            <li><code>private val demoTodos</code>: ステップ 3 の <code>Todo</code> で作った、画面に表示するリストです。<code>private</code> を付けたトップレベルのプロパティは、このファイルの中からだけ見えます。</li>
+            <li><code>modifier.padding(16.dp)</code>: ステップ 5 で触れた <code>Modifier</code> の拡張関数です。周囲に 16dp の余白を付けます。</li>
+            <li><code>demoTodos.forEach { todo -&gt; ... }</code>: ステップ 4 の末尾ラムダです。Composable 関数の中では、<code>forEach</code> で要素ごとに <code>Text</code> を並べられます。長いリストを効率よく表示する <code>LazyColumn</code> は 05 で扱います。</li>
+            <li><code>if (todo.done) "[x]" else "[ ]"</code>: Kotlin の <code>if</code> は式なので、値を返せます（Java の三項演算子の代わりです）。</li>
+          </ul>
+          <p>01 で追加した <code>BuildConfig</code> の設定（<code>buildConfigField</code>）は、画面からは参照しなくなりますが残しておきます。</p>
+          <p>01 のステップ 6 と同じ手順でエミュレータを起動し、アプリをインストールして表示を確かめます（Android Studio の Run ▶ でも構いません）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb wait-for-device</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell getprop sys.boot_completed</span><span class="terminal__line">1</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell uiautomator dump /sdcard/window.xml</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cat /sdcard/window.xml | grep -oE &#x27;text=&quot;[^&quot;]*&quot;&#x27;</span><span class="terminal__line">text=&quot;3 件中 2 件完了&quot;</span><span class="terminal__line">text=&quot;[x] Learn Kotlin Basics&quot;</span><span class="terminal__line">text=&quot;[ ] Build Compose Screen&quot;</span><span class="terminal__line">text=&quot;[x] Write Unit Tests&quot;</span></pre>
+</div>
+
+          <p>1 行目に件数、続いて 3 件の Todo が表示されます。<code>title</code> は <code>toTitleCase()</code> で単語の先頭が大文字になっています。確認が終わったら、<code>adb emu kill</code> でエミュレータを止めます。</p>
+          <p>最後に、ビルド・lint・全テストをまとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 10s</span><span class="terminal__line">53 actionable tasks: 13 executed, 40 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+          <p>ユニットテストは、01 からある <code>ExampleUnitTest</code> の 1 件と、この項目で書いた 41 件の合計 42 件で、失敗は 0 件でした。件数は <code>app/build/test-results/testDebugUnitTest/</code> の XML で確認できます。</p>
+
+          <table>
+            <thead>
+            <tr><th>テストクラス</th><th>件数</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>BasicsTest</code></td><td>7</td></tr>
+            <tr><td><code>NullSafetyTest</code></td><td>9</td></tr>
+            <tr><td><code>ModelsTest</code></td><td>7</td></tr>
+            <tr><td><code>CollectionsTest</code></td><td>8</td></tr>
+            <tr><td><code>ExtensionsTest</code></td><td>6</td></tr>
+            <tr><td><code>CoroutinesTest</code></td><td>4</td></tr>
+            <tr><td><code>ExampleUnitTest</code>（01 から）</td><td>1</td></tr>
+            <tr><td><strong>合計</strong></td><td><strong>42</strong></td></tr>
+            </tbody>
+          </table>
+
+          <p>lint の結果は <code>0 errors, 6 warnings</code> でした。6 件の警告は、いずれも 01 の設定から引き継いだものです（<code>OldTargetApi</code>、<code>RedundantLabel</code>、<code>AndroidGradlePluginVersion</code>、<code>ObsoleteSdkInt</code>、<code>MonochromeLauncherIcon</code> × 2）。この項目の変更で増えた警告はありません。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>エミュレータに「3 件中 2 件完了」と 3 件の Todo が表示されれば OK です。<code>./gradlew assembleDebug lint test</code> も <code>BUILD SUCCESSFUL</code> で終わることを確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code> と <code>app_name</code> を <code>HandsonAndroid02</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>val</code> / <code>var</code>、デフォルト引数・名前付き引数、文字列テンプレート、<code>when</code> 式を使って <code>BasicsTest</code> を通した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>?.</code>・<code>?:</code>・<code>!!</code>・スマートキャストの違いと、<code>lateinit</code> と <code>by lazy</code> の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>copy</code> と分解宣言を使い、sealed interface の <code>when</code> から分岐を消したときのコンパイルエラーを確認した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>List</code> と <code>MutableList</code> の違いを説明し、<code>filter</code> / <code>map</code> / <code>groupBy</code> を使った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">拡張関数を定義し、スコープ関数 5 つを戻り値とレシーバーの参照方法で使い分けられる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>kotlinx-coroutines-test</code> を追加し、<code>runTest</code> の仮想時間で <code>suspend</code> 関数をテストした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">画面に「3 件中 2 件完了」を表示し、<code>./gradlew assembleDebug lint test</code> が成功した（テスト 42 件）</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>./gradlew test --tests ...</code> はエラーになる</p>
+              <p>ルートの <code>test</code> タスクは、複数のテストタスクを束ねたものなので <code>--tests</code> を受け付けず、<code>Unknown command-line option '--tests'</code> で失敗します。テストクラスを絞り込むときは、モジュールとビルドバリアントを指定した <code>./gradlew :app:testDebugUnitTest --tests '...'</code> を使います。全テストを実行するだけなら <code>./gradlew test</code> で構いません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>!!</code> を多用しない</p>
+              <p><code>!!</code> で投げられる <code>NullPointerException</code> のメッセージは <code>null</code> です（ステップ 2）。どの値が <code>null</code> だったかが分からないので、原因の調査に時間がかかります。<code>?.</code>・<code>?:</code>・スマートキャストで、<code>null</code> のときの扱いをコードに書いてください。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>lateinit</code> と null 許容型は別物</p>
+              <p><code>lateinit var name: String</code> は「読む前に必ず代入する」という約束で、守らないと <code>UninitializedPropertyAccessException</code> になります。<code>var name: String?</code> は最初から <code>null</code> を許し、読む側で <code>null</code> を処理します。代入されないことがありうる値には、<code>lateinit</code> ではなく null 許容型を使います。<code>Int</code> などのプリミティブ型や <code>String?</code> には <code>lateinit</code> を付けられません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>List</code> 型でも中身が変更不可とは限らない</p>
+              <p><code>List</code> の読み取り専用は型の上だけの約束です。ステップ 4 のテストのように <code>as MutableList</code> でキャストできてしまい、変更できるかどうかは中身の実装で決まります。キャストで <code>List</code> を書き換えず、変更が必要なら <code>toMutableList()</code> でコピーを作るか、最初から <code>MutableList</code> として扱います。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>==</code> と <code>===</code> の違い</p>
+              <p>Kotlin の <code>==</code> は <code>equals</code> による値の比較で、Java の <code>==</code>（参照の比較）とは意味が違います。同じインスタンスかどうかを比べるのは <code>===</code> です（ステップ 5 の <code>also_addsAndReturnsSameList</code> で使っています）。<code>data class</code> は <code>==</code> でプロパティの値が比較されます（ステップ 3 の <code>assertEquals</code> で確かめます）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">スコープ関数は戻り値で選ぶ</p>
+              <p>迷ったら、まず「レシーバー自身を返したいか（<code>apply</code> / <code>also</code>）、ラムダの結果を返したいか（<code>run</code> / <code>let</code> / <code>with</code>）」で絞ります。次に、ブロックの中でレシーバーを <code>this</code>（省略可）で使うか、<code>it</code> で使うかで選びます。スコープ関数を入れ子にすると <code>this</code> や <code>it</code> が何を指すか分かりにくくなるので、深く重ねないようにします。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">テストでは <code>runBlocking</code> ではなく <code>runTest</code> を使う</p>
+              <p><code>runBlocking</code> でもテストから <code>suspend</code> 関数を呼べますが、<code>delay</code> を実時間で待ちます。<code>delay(1000)</code> を含むテストは 1 秒かかります。<code>runTest</code> は仮想時間で進めるため、テストディスパッチャ上の <code>delay</code> は一瞬で終わり、<code>advanceTimeBy</code> で時間の進み方も制御できます。ただし仮想時間になるのはテストディスパッチャ上の <code>delay</code> だけです。<code>withContext(Dispatchers.IO)</code> の先は実時間で待ちます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Java のコードを呼ぶときの platform type</p>
+              <p>注釈のない Java の戻り値は platform type（<code>String!</code>）になります。Kotlin はこの型で null チェックを強制しません。<code>@Nullable</code> / <code>@NotNull</code> などが付いていれば、通常の null 許容型・非 null 型として見えます。この項目のコードでは Java の API を呼んでいないため、この挙動は実際には確かめていません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Android Studio の「Convert Java to Kotlin」</p>
+              <p>Android Studio には、Java のファイルを Kotlin に変換する機能があります。変換後のコードでは、<code>!!</code> や <code>Any?</code> の箇所が増える場合があります。変換結果はそのまま使わず、null 許容型を見直してください。この項目では変換を試していません。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>val</code> / <code>var</code> と <code>when</code> 式から始めて、null 安全、データクラスと sealed interface、コレクションとラムダを書きました。続いて拡張関数とスコープ関数、<code>suspend</code> 関数を、いずれもテストで動作を確かめながら書きました。
+        最後に、作った <code>Todo</code> と拡張関数を Compose の画面から呼び出し、表示を変えました。
+        次の項目では、Composable 関数とプレビューを使った UI の組み立て方を学びます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>android/02-kotlin-basics</code> の <code>android/02-kotlin-basics/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../01-setup/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">01: 環境構築（Android Studio・Version Catalog）</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">03: Compose 入門</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
