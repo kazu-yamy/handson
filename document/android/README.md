@@ -39,7 +39,7 @@ Kotlin + Jetpack Compose を使った Android アプリ開発を学ぶトラッ�
 | 07 | [ViewModel と StateFlow](./07-viewmodel-stateflow/index.html) | 一覧の状態を ViewModel と `StateFlow` に移し、`SavedStateHandle` でプロセスの終了から復元し、`viewModelScope` の非同期処理を単体テストできる | 60分 |
 | 08 | [Navigation 3](./08-navigation3/index.html) | キーとバックスタックと `NavDisplay` で一覧と詳細の画面遷移を作り、`rememberNavBackStack` で回転とプロセスの再生成の後も開いていた画面を復元できる | 60分 |
 | 09 | [Ktor と serialization で API 取得](./09-ktor-serialization/index.html) | Ktor Client と kotlinx.serialization で API から一覧を取得し、読み込み中・成功・失敗（再試行）を表示できる | 60分 |
-| 10 | MockEngine でネットワークのテスト | `MockEngine` で、API・ViewModel の失敗と再試行・失敗表示を、ネットワークに出ずにテストできる | 60分 |
+| 10 | [MockEngine でネットワークのテスト](./10-mockengine-testing/index.html) | `MockEngine` で、API の成功と失敗・ViewModel の失敗と再試行とキャンセル・失敗表示を、ネットワークに出ずにテストできる | 60分 |
 | 11 | Room 3 と DataStore | Room 3 でのローカル DB 操作と DataStore での設定保存を実装できる | 45分 |
 | 12 | Hilt | Hilt を使った依存性注入を実装できる | 45分 |
 | 13 | WorkManager | WorkManager を使ったバックグラウンド処理を実装できる | 45分 |

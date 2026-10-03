@@ -1219,7 +1219,7 @@ class FakeTodoApiRule(val server: FakeTodoServer = FakeTodoServer(demoTodos(20))
         Ktor Client（Android エンジン）と <code>ContentNegotiation</code> で、Web API から JSON を取得しました。JSON は <code>@Serializable</code> な <code>TodoDto</code> にデコードしてから、アプリの <code>Todo</code> に変換しました。
         ViewModel では、例外の種類から画面の文言を作りました。<code>CancellationException</code> は投げ直し、失敗の状態は <code>SavedStateHandle</code> に保存しません。失敗中はエラーの文言と「再試行」を出します。
         <code>HttpClient</code> は外から渡す形なので、<code>MockEngine</code> 入りのものと差し替えられます。この仕組みで、既存のテストを偽のサーバーへつなぎ替え、ネットワークへ出ない形にしました。機内モードで失敗表示と再試行を確かめ、release の APK でも、keep ルールを足さずに動くことを確かめました。</p>
-      <p>次の項目（10: MockEngine でネットワークのテスト）では、この偽のサーバーを使って、API・ViewModel の失敗と再試行・失敗表示のテストを、ネットワークに出ない形で書きます。</p>
+      <p>次の項目（<a href="../10-mockengine-testing/index.html">10: MockEngine でネットワークのテスト</a>）では、この偽のサーバーを使って、API・ViewModel の失敗と再試行・失敗表示のテストを、ネットワークに出ない形で書きます。</p>
 
       <div class="callout callout--note">
         <span class="callout__icon" aria-hidden="true">ℹ️</span>
@@ -1235,10 +1235,10 @@ class FakeTodoApiRule(val server: FakeTodoServer = FakeTodoServer(demoTodos(20))
           <span class="lesson-nav__direction">← 前のレッスン</span>
           <span class="lesson-nav__title">08: Navigation 3</span>
         </a>
-        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
-          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../10-mockengine-testing/index.html">
+          <span class="lesson-nav__direction">次のレッスン →</span>
           <span class="lesson-nav__title">10: MockEngine でネットワークのテスト</span>
-        </span>
+        </a>
       </nav>
 
     </div>
