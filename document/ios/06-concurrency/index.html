@@ -1,0 +1,1144 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06: async/await と @MainActor | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">06</li>
+        </ol>
+        <h1 class="lesson-title">async/await と @MainActor</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: SwiftUI で一覧と詳細画面のアプリを作れ、次にデータの読み込みのような時間のかかる処理を画面を止めずに書きたい人</li>
+          <li class="lesson-meta__item">📋 前提: 05 で <code>List</code> と <code>NavigationStack</code> を使った <code>HandsonApp</code> プロジェクトが手元にあること。<code>@Observable</code> の <code>TodoStore</code> を <code>@Environment</code> で注入する構成と、Swift Testing の <code>@Test</code>・<code>#expect</code> を知っていること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../05-list-navigation/index.html">05 List と NavigationStack</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>async</code> 関数を <code>await</code> で呼び、画面の表示と同時に <code>.task</code> で読み込みを始める</li>
+          <li>同期のクロージャ（<code>Button</code> の action）から <code>Task { }</code> で非同期処理を始め、<code>.refreshable</code> を付ける</li>
+          <li><code>@MainActor</code> の既定のもとで、<code>@concurrent</code> を使って処理をメインアクターの外で動かす。<code>Sendable</code> な値だけがアクターの境界を越えられることを知る</li>
+          <li><code>async let</code> で 2 つの処理を並行に待ち、直列との所要時間の違いをテストで測る</li>
+          <li>タスクのキャンセルとエラーを区別して扱う</li>
+          <li><code>actor</code> で、複数のタスクから安全に読み書きできるキャッシュを作る</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        05 までの ToDo アプリは、起動時に決まったデータを持っていました。この項目では、データを「ネットワークから取ってくる」形に変えます。
+        通信の代わりに <code>Task.sleep</code> で 1 秒待ってから固定のデータを返す <code>TodoRepository</code> を作り、<code>TodoStore</code> がそこから読み込みます。
+        完成すると、起動直後に「読み込み中…」が表示されたあとで一覧が現れます。左上の「再読み込み」ボタンで読み込み直すことができ、一覧の下に「1 / 3 件完了」のような集計が表示されます。
+      </p>
+      <p>
+        <code>async</code> / <code>await</code> と <code>.task</code> → <code>Task { }</code> と <code>.refreshable</code> → <code>@MainActor</code> と <code>@concurrent</code> → <code>async let</code> → キャンセルとエラー → <code>actor</code>、の順に進めます。1 ステップで扱う概念は 1 つです。
+        途中で、つまずきやすい誤りを意図的に起こして、コンパイラのエラーを確かめます。
+        05 と同じく、Xcode の画面での操作と、同じ結果をターミナルで確かめるコマンドの両方を載せています。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョンと並行処理の設定</p>
+          <p>
+            macOS 26.6.2 / Xcode 27.0 / Swift 6.4 / iPhone 17（iOS 27.0）のシミュレータは 05 と同じです。バージョンは執筆時点（2026年10月）のものです。
+          </p>
+          <p>
+            この項目の動作は、01 で確認したアプリターゲットの 2 つの設定に依存します。1 つは <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> で、アプリの型や関数は何も書かなければメインアクターに分離されます。
+            もう 1 つは <code>SWIFT_APPROACHABLE_CONCURRENCY = YES</code> です。この設定により、コンパイラに <code>NonisolatedNonsendingByDefault</code> などの機能が渡されます（ビルド時のコンパイルコマンドで確認）。その効果はステップ 4 で確かめます。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">05 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            05 の完成コードをそのまま出発点にします。<code>05-list-navigation</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>06-concurrency</code> にコピーします。
+            プロジェクト名・ターゲット名・Bundle Identifier（<code>com.example.HandsonApp</code>）は変えません。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 05-list-navigation 06-concurrency</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 06-concurrency/HandsonApp</span></pre>
+</div>
+
+          <p>以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。コピーしたプロジェクトがそのままビルドでき、05 までの 24 テストが通ることを確かめます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 24 tests in 7 suites passed after 0.040 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <p>Xcode の場合は、<code>06-concurrency/HandsonApp/HandsonApp.xcodeproj</code> を開き、<kbd>⌘</kbd> + <kbd>U</kbd>（<code>Product</code> &gt; <code>Test</code>）でテストを実行します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> と <code>Test run with 24 tests in 7 suites passed</code> が表示されれば準備完了です。この項目では、テストを 10 個追加して 34 テストにします。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">async 関数を await で呼び、.task で読み込む</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            まず、データを取ってくる役の <code>TodoRepository</code> を作ります。<code>Models</code> フォルダに Swift ファイル <code>TodoRepository.swift</code> を追加します。Xcode では <code>Models</code> を右クリックし、<code>New File from Template…</code> で <code>iOS</code> &gt; <code>Swift File</code> を選びます（<code>Targets</code> は <code>HandsonApp</code>）。
+            中身を次の内容にします。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRepository.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+
+struct TodoRepository {
+    // ネットワークの代わりに 1 秒待って固定のデータを返す
+    func fetchAll() async throws -&gt; [TodoItem] {
+        try await Task.sleep(for: .seconds(1))
+        return [
+            TodoItem(title: "牛乳を買う", priority: .high),
+            TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),
+            TodoItem(title: "SwiftUI を勉強する"),
+        ]
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>func fetchAll() async throws</code>: <code>async</code> は「途中で一時停止することがある関数」の印です。<code>throws</code> と並べて書きます。</li>
+            <li><code>try await Task.sleep(for: .seconds(1))</code>: 1 秒待ちます。ネットワーク通信の代わりで、07 で <code>URLSession</code> に置き換えます。<code>Task.sleep(for:)</code> 自体が <code>async throws</code> なので、呼ぶ側に <code>try await</code> が要ります。</li>
+            <li>待っている間、スレッドは止まりません。<code>await</code> の地点で処理が一時停止し、その間メインスレッドは画面の更新などの別の仕事をします。</li>
+          </ul>
+
+          <p>次に、<code>TodoStore</code> に読み込み中かどうかの状態と、読み込みのメソッドを足します。<code>Models/TodoStore.swift</code> を次のように変更します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoStore.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Observation</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @Observable</span><span class="diff-line">  final class TodoStore {</span><span class="diff-line">      var items: [TodoItem]</span><span class="diff-line diff-line--add">+     var isLoading = false</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     init(items: [TodoItem] = []) {</span><span class="diff-line diff-line--add">+     private let repository: TodoRepository</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     init(items: [TodoItem] = [], repository: TodoRepository = TodoRepository()) {</span><span class="diff-line">          self.items = items</span><span class="diff-line diff-line--add">+         self.repository = repository</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     func load() async {</span><span class="diff-line diff-line--add">+         isLoading = true</span><span class="diff-line diff-line--add">+         defer { isLoading = false }</span><span class="diff-line diff-line--add">+         items = (try? await repository.fetchAll()) ?? []</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func add(title: String, priority: Priority = .medium) {</span><span class="diff-line">          items.append(TodoItem(title: title, priority: priority))</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func toggle(_ item: TodoItem) {</span><span class="diff-line">          guard let index = items.firstIndex(where: { $0.title == item.title }) else { return }</span><span class="diff-line">          items[index].toggle()</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func remove(at offsets: IndexSet) {</span><span class="diff-line">          items.remove(atOffsets: offsets)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func move(from source: IndexSet, to destination: Int) {</span><span class="diff-line">          items.move(fromOffsets: source, toOffset: destination)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      static let sample = TodoStore(items: [</span><span class="diff-line">          TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">          TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">          TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">      ])</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>func load() async</code>: <code>async</code> 関数を呼ぶ関数は、自分も <code>async</code> にします。</li>
+            <li><code>defer { isLoading = false }</code>: 関数を抜けるときに必ず実行されます。読み込みが終われば <code>isLoading</code> は <code>false</code> に戻ります。</li>
+            <li><code>try?</code>: ここではエラーを握りつぶして空の配列にしています。これは暫定で、ステップ 6 で <code>do</code> / <code>catch</code> に直します。</li>
+            <li><code>repository</code> の引数にはデフォルト値があるので、既存のテストの <code>TodoStore(items:)</code> はそのまま動きます。</li>
+          </ul>
+
+          <p>アプリ起動時のストアは、サンプルデータ入りではなく空の状態から始めて、読み込みで埋めるようにします。<code>HandsonAppApp.swift</code> を次のように変更します（<code>TodoStore.sample</code> はプレビュー用に残します）。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/HandsonAppApp.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  HandsonAppApp.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @main</span><span class="diff-line">  struct HandsonAppApp: App {</span><span class="diff-line diff-line--remove">-     @State private var store = TodoStore.sample</span><span class="diff-line diff-line--add">+     @State private var store = TodoStore()</span><span class="diff-line"> </span><span class="diff-line">      var body: some Scene {</span><span class="diff-line">          WindowGroup {</span><span class="diff-line">              ContentView()</span><span class="diff-line">                  .environment(store)</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>ContentView.swift</code> では、読み込み中の表示と、画面が表示されたときに読み込みを始める <code>.task</code> を足します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line">                      ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("Todo") {</span><span class="diff-line diff-line--add">+                     if store.isLoading {</span><span class="diff-line diff-line--add">+                         ProgressView("読み込み中…")</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line">                      ForEach($store.items) { $item in</span><span class="diff-line">                          if showsDone || !item.isDone {</span><span class="diff-line">                              NavigationLink(value: item) {</span><span class="diff-line">                                  TodoRow(item: $item)</span><span class="diff-line">                              }</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .onDelete { offsets in</span><span class="diff-line">                          store.remove(at: offsets)</span><span class="diff-line">                      }</span><span class="diff-line">                      .onMove { source, destination in</span><span class="diff-line">                          store.move(from: source, to: destination)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">                          TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line">                              store.add(title: newTitle)</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line">                          }</span><span class="diff-line">                          .buttonStyle(.borderless)</span><span class="diff-line">                          .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .navigationDestination(for: TodoItem.self) { item in</span><span class="diff-line">                  TodoDetailView(item: item)</span><span class="diff-line">              }</span><span class="diff-line diff-line--add">+             .task {</span><span class="diff-line diff-line--add">+                 await store.load()</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line">              .toolbar {</span><span class="diff-line">                  EditButton()</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>ProgressView("読み込み中…")</code>: 回るインジケーターと文字を表示します。<code>isLoading</code> が <code>true</code> の間だけ表示します。</li>
+            <li><code>.task { await store.load() }</code>: View が表示されたときに、非同期の処理を始めます。<code>.task</code> のクロージャは <code>async</code> なので、中で <code>await</code> を書けます。View が消えたときの扱いはステップ 6 で説明します。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>await</code> を付け忘れるとビルドが失敗する</p>
+              <p><code>TodoStore.swift</code> の <code>try? await repository.fetchAll()</code> から <code>await</code> を一時的に外してビルドします。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/TodoStore.swift:20:17: error: expression is 'async' but is not marked with 'await'</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                <code>expression is 'async' but is not marked with 'await'</code>（式は <code>async</code> だが <code>await</code> が付いていない）のエラーです。<code>.task</code> の中の <code>await store.load()</code> から <code>await</code> を外しても、<code>…/ContentView.swift:71:17</code> で同じ文言のエラーになります。
+                <code>await</code> は「ここで一時停止して、他の仕事に順番を譲る可能性がある」ことを示す印です。付け忘れはコンパイル時に見つかるので、実行してから気付くことはありません。確認したら <code>await</code> を戻してください。
+              </p>
+            </div>
+          </div>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 24 tests in 7 suites passed after … seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl boot 'iPhone 17'</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <p>シミュレータがすでに起動している場合は <code>boot</code> を飛ばしてください。Xcode の場合は <kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示できます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              起動直後、見出し「Todo」のブロックに、回るインジケーターと「読み込み中…」が表示されます。ナビゲーションバーは右上の「Edit」だけで、プロフィールと「追加」のブロックは 05 と同じです。
+              約 1 秒後にインジケーターが消え、「牛乳を買う」「メールを返す（完了）」「SwiftUI を勉強する」の 3 行に置き換わります。
+            </p>
+            <p>
+              読み込み中の表示は 1 秒ほどしか見えないので、見逃したらもう一度 <code>launch</code> してください（執筆時は、待ち時間を一時的に 6 秒に延ばして画面を確かめました）。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">Task { } と .refreshable で再読み込みする</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            一覧を読み込み直す手段を 2 つ付けます。一覧を下に引っ張る操作（<code>.refreshable</code>）と、ナビゲーションバー左上の「再読み込み」ボタンです。
+            「Edit」ボタンは <code>ToolbarItem</code> で右上に置き直します。<code>ContentView.swift</code> を次のように変更します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line">                      ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("Todo") {</span><span class="diff-line">                      if store.isLoading {</span><span class="diff-line">                          ProgressView("読み込み中…")</span><span class="diff-line">                      }</span><span class="diff-line">                      ForEach($store.items) { $item in</span><span class="diff-line">                          if showsDone || !item.isDone {</span><span class="diff-line">                              NavigationLink(value: item) {</span><span class="diff-line">                                  TodoRow(item: $item)</span><span class="diff-line">                              }</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .onDelete { offsets in</span><span class="diff-line">                          store.remove(at: offsets)</span><span class="diff-line">                      }</span><span class="diff-line">                      .onMove { source, destination in</span><span class="diff-line">                          store.move(from: source, to: destination)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">                          TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line">                              store.add(title: newTitle)</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line">                          }</span><span class="diff-line">                          .buttonStyle(.borderless)</span><span class="diff-line">                          .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .navigationDestination(for: TodoItem.self) { item in</span><span class="diff-line">                  TodoDetailView(item: item)</span><span class="diff-line">              }</span><span class="diff-line">              .task {</span><span class="diff-line">                  await store.load()</span><span class="diff-line">              }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line diff-line--add">+             .refreshable {</span><span class="diff-line diff-line--add">+                 await store.load()</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line">              .toolbar {</span><span class="diff-line diff-line--remove">-                 EditButton()</span><span class="diff-line diff-line--add">+                 ToolbarItem(placement: .topBarLeading) {</span><span class="diff-line diff-line--add">+                     Button("再読み込み") {</span><span class="diff-line diff-line--add">+                         Task {</span><span class="diff-line diff-line--add">+                             await store.load()</span><span class="diff-line diff-line--add">+                         }</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                     .disabled(store.isLoading)</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line diff-line--add">+                 ToolbarItem(placement: .topBarTrailing) {</span><span class="diff-line diff-line--add">+                     EditButton()</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>.refreshable { … }</code>: <code>List</code> を下に引っ張ったときの処理を指定します。クロージャは <code>async</code> で、引っ張ると <code>load()</code> が呼ばれます。</li>
+            <li><code>Button</code> の action は<strong>同期</strong>のクロージャです。中で <code>await</code> を書くには、<code>Task { … }</code> で新しいタスクを作り、非同期の処理の入口にします。</li>
+            <li><code>.disabled(store.isLoading)</code>: 読み込み中にもう一度押すと <code>load()</code> が重ねて走るので、その間はボタンを無効にします。</li>
+            <li><code>ToolbarItem(placement:)</code>: <code>.topBarLeading</code> は左上、<code>.topBarTrailing</code> は右上です。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Button</code> の action で直接 <code>await</code> する</p>
+              <p><code>Task {</code> と対応する <code>}</code> を一時的に外し、action を <code>await store.load()</code> の 1 行だけにしてビルドします。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/ContentView.swift:79:47: error: cannot pass function of type '@concurrent () async -&gt; Void' to parameter expecting synchronous function type</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                <code>cannot pass function of type '@concurrent () async -> Void' to parameter expecting synchronous function type</code>（<code>async</code> の関数型を、同期の関数型を期待する引数に渡せない）のエラーです。
+                <code>await</code> を含むクロージャは <code>async</code> の関数型と推論されますが、<code>Button</code> の action は同期の関数型を要求するので渡せません。<code>do { await … }</code> で囲んでも同じエラーになります（<code>do</code> は非同期の入口になりません）。
+                確認したら <code>Task { }</code> を戻してください。
+              </p>
+            </div>
+          </div>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 24 tests in 7 suites passed after … seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              ナビゲーションバーの左上に「再読み込み」、右上に「Edit」が表示されます。一覧が表示されたあとで「再読み込み」をタップすると、ボタンが薄い灰色（無効）になります。
+              「Todo」のブロックの先頭に「読み込み中…」が表示され、その下には<strong>前回の 3 行が残ったまま</strong>です。<code>items</code> が置き換わるのは <code>fetchAll()</code> から戻ったときだからです。約 1 秒後に「読み込み中…」が消え、ボタンが元に戻ります。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">@MainActor と @concurrent で、集計をメインアクターの外で動かす</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            このプロジェクトでは、アプリの型や関数は既定で <code>@MainActor</code>（メインアクターに分離）です。<code>TodoRepository</code> と <code>TodoStore</code> は、何も書かなくてもメインスレッドで動きます。
+            <code>async</code> 関数にしただけでは、別のスレッドでは動きません。<code>Task.sleep</code> で一時停止している間はメインアクターが空くので、画面は止まりません。しかし、待ち時間ではなく重い計算をメインアクターで行うと、その間は画面が止まります。
+          </p>
+          <p>
+            そこで、一覧の完了件数を数える「集計」を、メインアクターの外で動かしてみます。<code>Models</code> フォルダに <code>TodoSummary.swift</code> を追加します。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoSummary.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+
+// async の中では Thread.isMainThread を直接呼べないので、同期関数に切り出す
+nonisolated func runningOnMainThread() -&gt; Bool {
+    Thread.isMainThread
+}
+
+nonisolated struct TodoSummary {
+    let doneCount: Int
+    let totalCount: Int
+    let ranOnMainThread: Bool
+
+    var text: String {
+        "\(doneCount) / \(totalCount) 件完了"
+    }
+}
+
+struct TodoSummarizer {
+    // @concurrent: メインアクターの外（グローバルな並行プール）で実行する
+    @concurrent
+    func summarize(_ items: [TodoItem]) async -&gt; TodoSummary {
+        try? await Task.sleep(for: .milliseconds(300))  // 重い計算の代わり
+        let done = items.filter { $0.isDone }.count
+        return TodoSummary(
+            doneCount: done,
+            totalCount: items.count,
+            ranOnMainThread: runningOnMainThread()
+        )
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>@concurrent</code>: この <code>async</code> 関数を、メインアクターの外（グローバルな並行の実行環境）で動かします。<code>@concurrent</code> は <code>async</code> 関数にだけ付けられます。</li>
+            <li><code>try? await Task.sleep(for: .milliseconds(300))</code>: 重い計算の代わりに 0.3 秒待ちます。</li>
+            <li><code>ranOnMainThread</code>: 集計がメインスレッドで動いたかどうかを記録し、テストで確かめるためのプロパティです。</li>
+            <li><code>nonisolated func runningOnMainThread()</code>: <code>Thread.isMainThread</code> を <code>async</code> 関数の中で直接呼ぶと、<code>error: class property 'isMainThread' is unavailable from asynchronous contexts</code> で始まるエラーになります。そのため、同期関数に切り出しています。</li>
+            <li><code>nonisolated struct TodoSummary</code>: <code>nonisolated</code> は「メインアクターに分離しない」指定です。<code>@concurrent</code> の関数の中で作るので付けています。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@concurrent</code> の関数から、メインアクターのプロパティに触る</p>
+              <p>この時点でビルドすると、次のエラーで失敗します。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/TodoSummary.swift:23:38: error: main actor-isolated property 'isDone' can not be referenced from a nonisolated context</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                <code>main actor-isolated property 'isDone' can not be referenced from a nonisolated context</code>（メインアクターに分離されたプロパティ <code>isDone</code> は、分離されていない文脈から参照できない）のエラーです。
+                既定の分離で <code>TodoItem</code> もメインアクターに分離されているため、メインアクターの外で動く <code>summarize</code> からは <code>isDone</code> に触れません。
+                <code>TodoItem</code> だけに <code>nonisolated</code> を付けると、今度は次のエラーになります。
+              </p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">&lt;unknown&gt;:0: error: main actor-isolated conformance of 'Status' to 'Equatable' cannot be used in nonisolated context [#IsolatedConformances]</span><span class="terminal__line">&lt;unknown&gt;:0: error: main actor-isolated conformance of 'Status' to 'Hashable' cannot be used in nonisolated context [#IsolatedConformances]</span></pre>
+</div>
+              <p>
+                <code>TodoItem</code> の <code>Hashable</code> は、プロパティの型 <code>Status</code> の <code>Hashable</code> を使います。その <code>Status</code> の準拠がメインアクターに分離されたままなので使えません。
+                同じように、<code>TodoStore</code> を引数で受け取って <code>store.items</code> を読もうとすると、<code>error: main actor-isolated property 'items' cannot be accessed from outside of the actor</code> になります。<code>@concurrent</code> の関数には、ストアごとではなく値（<code>[TodoItem]</code>）を渡します。
+              </p>
+            </div>
+          </div>
+
+          <p><code>Models/TodoItem.swift</code> の <code>Priority</code>・<code>Status</code>・<code>TodoItem</code> の 3 つに <code>nonisolated</code> を付けます。中身は変えません。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoItem.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- enum Priority: Int, CaseIterable {</span><span class="diff-line diff-line--add">+ nonisolated enum Priority: Int, CaseIterable {</span><span class="diff-line">      case low = 1</span><span class="diff-line">      case medium</span><span class="diff-line">      case high</span><span class="diff-line"> </span><span class="diff-line">      var label: String {</span><span class="diff-line">          switch self {</span><span class="diff-line">          case .low: "低"</span><span class="diff-line">          case .medium: "中"</span><span class="diff-line">          case .high: "高"</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  // 関連値付きの enum</span><span class="diff-line diff-line--remove">- enum Status: Hashable {</span><span class="diff-line diff-line--add">+ nonisolated enum Status: Hashable {</span><span class="diff-line">      case todo</span><span class="diff-line">      case done(Date)</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- struct TodoItem: Identifiable, Hashable {</span><span class="diff-line diff-line--add">+ nonisolated struct TodoItem: Identifiable, Hashable {</span><span class="diff-line">      let id = UUID()</span><span class="diff-line">      let title: String</span><span class="diff-line">      var priority: Priority = .medium</span><span class="diff-line">      var status: Status = .todo</span><span class="diff-line"> </span><span class="diff-line">      var isDone: Bool {</span><span class="diff-line">          if case .done = status {</span><span class="diff-line">              return true</span><span class="diff-line">          }</span><span class="diff-line">          return false</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      mutating func toggle() {</span><span class="diff-line">          switch status {</span><span class="diff-line">          case .todo:</span><span class="diff-line">              status = .done(Date())</span><span class="diff-line">          case .done:</span><span class="diff-line">              status = .todo</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var statusText: String {</span><span class="diff-line">          switch status {</span><span class="diff-line">          case .todo:</span><span class="diff-line">              "未完了"</span><span class="diff-line">          case .done(let date):</span><span class="diff-line">              "完了 (\(date.formatted(.iso8601.year().month().day())))"</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>TodoStore</code> では、読み込みのあとに集計を呼んで結果を持ちます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoStore.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Observation</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @Observable</span><span class="diff-line">  final class TodoStore {</span><span class="diff-line">      var items: [TodoItem]</span><span class="diff-line">      var isLoading = false</span><span class="diff-line diff-line--add">+     var summary: TodoSummary?</span><span class="diff-line"> </span><span class="diff-line">      private let repository: TodoRepository</span><span class="diff-line"> </span><span class="diff-line">      init(items: [TodoItem] = [], repository: TodoRepository = TodoRepository()) {</span><span class="diff-line">          self.items = items</span><span class="diff-line">          self.repository = repository</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func load() async {</span><span class="diff-line">          isLoading = true</span><span class="diff-line">          defer { isLoading = false }</span><span class="diff-line">          items = (try? await repository.fetchAll()) ?? []</span><span class="diff-line diff-line--add">+         summary = await TodoSummarizer().summarize(items)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func add(title: String, priority: Priority = .medium) {</span><span class="diff-line">          items.append(TodoItem(title: title, priority: priority))</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func toggle(_ item: TodoItem) {</span><span class="diff-line">          guard let index = items.firstIndex(where: { $0.title == item.title }) else { return }</span><span class="diff-line">          items[index].toggle()</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func remove(at offsets: IndexSet) {</span><span class="diff-line">          items.remove(atOffsets: offsets)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func move(from source: IndexSet, to destination: Int) {</span><span class="diff-line">          items.move(fromOffsets: source, toOffset: destination)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      static let sample = TodoStore(items: [</span><span class="diff-line">          TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">          TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">          TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">      ])</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>ContentView.swift</code> では、「Todo」のブロックの下（フッター）に集計を表示します。<code>Section("Todo")</code> を、<code>header:</code> と <code>footer:</code> を持つ形に書き換えます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line"> </span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line">                      ProfileHeader(profile: profile)</span><span class="diff-line"> </span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-                 Section("Todo") {</span><span class="diff-line diff-line--add">+                 Section {</span><span class="diff-line">                      if store.isLoading {</span><span class="diff-line">                          ProgressView("読み込み中…")</span><span class="diff-line">                      }</span><span class="diff-line">                      ForEach($store.items) { $item in</span><span class="diff-line">                          if showsDone || !item.isDone {</span><span class="diff-line">                              NavigationLink(value: item) {</span><span class="diff-line">                                  TodoRow(item: $item)</span><span class="diff-line">                              }</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .onDelete { offsets in</span><span class="diff-line">                          store.remove(at: offsets)</span><span class="diff-line">                      }</span><span class="diff-line">                      .onMove { source, destination in</span><span class="diff-line">                          store.move(from: source, to: destination)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                 } header: {</span><span class="diff-line diff-line--add">+                     Text("Todo")</span><span class="diff-line diff-line--add">+                 } footer: {</span><span class="diff-line diff-line--add">+                     if let summary = store.summary {</span><span class="diff-line diff-line--add">+                         Text(summary.text)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">                          TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line">                              store.add(title: newTitle)</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line">                          }</span><span class="diff-line">                          .buttonStyle(.borderless)</span><span class="diff-line">                          .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .navigationDestination(for: TodoItem.self) { item in</span><span class="diff-line">                  TodoDetailView(item: item)</span><span class="diff-line">              }</span><span class="diff-line">              .task {</span><span class="diff-line">                  await store.load()</span><span class="diff-line">              }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line">              .refreshable {</span><span class="diff-line">                  await store.load()</span><span class="diff-line">              }</span><span class="diff-line">              .toolbar {</span><span class="diff-line">                  ToolbarItem(placement: .topBarLeading) {</span><span class="diff-line">                      Button("再読み込み") {</span><span class="diff-line">                          Task {</span><span class="diff-line">                              await store.load()</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .disabled(store.isLoading)</span><span class="diff-line">                  }</span><span class="diff-line">                  ToolbarItem(placement: .topBarTrailing) {</span><span class="diff-line">                      EditButton()</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            集計がメインアクターの外で動いたことをテストで確かめます。<code>HandsonAppTests</code> フォルダに <code>ConcurrencyTests.swift</code> を追加します（<code>Targets</code> は <code>HandsonAppTests</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/ConcurrencyTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import Testing
+@testable import HandsonApp
+
+@MainActor
+struct ConcurrencyTests {
+
+    @Test func summarizerRunsOffTheMainThread() async {
+        // テスト関数は @MainActor。ここはメインスレッド
+        MainActor.assertIsolated()
+        #expect(runningOnMainThread())
+
+        let items = [
+            TodoItem(title: "a", status: .done(Date())),
+            TodoItem(title: "b"),
+        ]
+        let summary = await TodoSummarizer().summarize(items)
+
+        // @concurrent の関数はメインアクターの外で動く
+        #expect(!summary.ranOnMainThread)
+        #expect(summary.text == "1 / 2 件完了")
+
+        // await から戻ると再びメインアクター
+        MainActor.assertIsolated()
+        #expect(runningOnMainThread())
+    }
+
+    @Test func loadFillsItemsAndSummary() async {
+        let store = TodoStore()
+        #expect(store.items.isEmpty)
+        await store.load()
+        #expect(store.items.count == 3)
+        #expect(store.summary?.text == "1 / 3 件完了")
+        #expect(!store.isLoading)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>@MainActor struct ConcurrencyTests</code>: テストもメインアクターで動かします。<code>MainActor.assertIsolated()</code> は、メインアクターで動いていなければ実行時に止まる確認用の関数です。</li>
+            <li><code>#expect(!summary.ranOnMainThread)</code>: <code>@concurrent</code> の <code>summarize</code> は、メインスレッドの外で動きます。</li>
+            <li><code>await</code> から戻ったあとは、再びメインアクターで動きます。<code>await</code> の前後で <code>MainActor.assertIsolated()</code> が両方とも通ります。</li>
+          </ul>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 26 tests in 8 suites passed after 1.678 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>nonisolated</code> だけでは、メインアクターの外に出ない</p>
+              <p>
+                執筆時に、<code>@concurrent</code> の代わりに <code>nonisolated</code> を付けた関数を <code>@MainActor</code> のテストから呼んで比べました。結果は <code>@concurrent</code> が <code>main: false</code>、<code>nonisolated</code> が <code>main: true</code> でした。
+                Approachable Concurrency では <code>NonisolatedNonsendingByDefault</code>（SE-0461）が有効です。このとき <code>nonisolated</code> な <code>async</code> 関数は<strong>呼び出し元のアクターで動きます</strong>。メインアクターの外で動かすには <code>@concurrent</code> を付けます。
+              </p>
+            </div>
+          </div>
+
+          <p>
+            <strong><code>Sendable</code>: アクターの境界を越えられる値</strong><br>
+            <code>summarize</code> には、メインアクターから <code>[TodoItem]</code> を渡し、<code>TodoSummary</code> を受け取っています。このようにアクターの境界を越えてやり取りできる型を <code>Sendable</code> と呼びます。
+            <code>TodoItem</code> と <code>TodoSummary</code> には <code>Sendable</code> と書いていません。どちらもモジュール内の構造体で、プロパティが全て <code>Sendable</code>（<code>UUID</code>・<code>String</code>・<code>Date</code>・enum など）です。この場合、構造体は暗黙のうちに <code>Sendable</code> として扱われます。
+            一方、<code>nonisolated</code> を付けたクラス（参照型）は <code>Sendable</code> ではありません。そのインスタンスを <code>async let</code> で <code>@concurrent</code> の関数に渡し、待つ前に呼び出し側でも書き換えると <code>error: sending 'box' risks causing data races</code>（<code>box</code> を渡すとデータ競合の恐れがある）になります。
+            アクターの境界を越えるデータは、構造体のような値型にするか、ステップ 7 の <code>actor</code> にします。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Test run with 26 tests in 8 suites passed</code> と表示されることを確かめます（24 + <code>ConcurrencyTests</code> の 2 テスト）。<code>summarizerRunsOffTheMainThread</code> が通れば、<code>@concurrent</code> の関数がメインスレッドの外で動いたことになります。</p>
+            <p>Xcode では、テストナビゲーター（<kbd>⌘</kbd> + <kbd>6</kbd>）から <code>summarizerRunsOffTheMainThread</code> だけを実行できます。<code>load()</code> は <code>fetchAll</code> の 1 秒と集計の 0.3 秒で、約 1.3 秒かかります。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">async let で 2 つの取得を並行に待つ</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            これまで <code>ContentView</code> に直接書いていたプロフィールも、<code>TodoRepository</code> から取得する形にします。<code>Models/TodoRepository.swift</code> に <code>fetchProfile()</code> を追加します。これも 1 秒待ちます。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRepository.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line"> </span><span class="diff-line">  struct TodoRepository {</span><span class="diff-line">      // ネットワークの代わりに 1 秒待って固定のデータを返す</span><span class="diff-line">      func fetchAll() async throws -&gt; [TodoItem] {</span><span class="diff-line">          try await Task.sleep(for: .seconds(1))</span><span class="diff-line">          return [</span><span class="diff-line">              TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">              TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">              TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">          ]</span><span class="diff-line">      }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     func fetchProfile() async throws -&gt; Profile {</span><span class="diff-line diff-line--add">+         try await Task.sleep(for: .seconds(1))</span><span class="diff-line diff-line--add">+         return Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>TodoStore</code> では、ToDo とプロフィールの 2 つの取得を <code>async let</code> で同時に始めます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoStore.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Observation</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @Observable</span><span class="diff-line">  final class TodoStore {</span><span class="diff-line">      var items: [TodoItem]</span><span class="diff-line">      var isLoading = false</span><span class="diff-line diff-line--add">+     var profile: Profile?</span><span class="diff-line">      var summary: TodoSummary?</span><span class="diff-line"> </span><span class="diff-line">      private let repository: TodoRepository</span><span class="diff-line"> </span><span class="diff-line">      init(items: [TodoItem] = [], repository: TodoRepository = TodoRepository()) {</span><span class="diff-line">          self.items = items</span><span class="diff-line">          self.repository = repository</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func load() async {</span><span class="diff-line">          isLoading = true</span><span class="diff-line">          defer { isLoading = false }</span><span class="diff-line diff-line--remove">-         items = (try? await repository.fetchAll()) ?? []</span><span class="diff-line diff-line--add">+         // 2 つの取得を同時に始める。待つのはここ（await）</span><span class="diff-line diff-line--add">+         async let fetchedItems = repository.fetchAll()</span><span class="diff-line diff-line--add">+         async let fetchedProfile = repository.fetchProfile()</span><span class="diff-line diff-line--add">+         items = (try? await fetchedItems) ?? []</span><span class="diff-line diff-line--add">+         profile = try? await fetchedProfile</span><span class="diff-line">          summary = await TodoSummarizer().summarize(items)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func add(title: String, priority: Priority = .medium) {</span><span class="diff-line">          items.append(TodoItem(title: title, priority: priority))</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func toggle(_ item: TodoItem) {</span><span class="diff-line">          guard let index = items.firstIndex(where: { $0.title == item.title }) else { return }</span><span class="diff-line">          items[index].toggle()</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func remove(at offsets: IndexSet) {</span><span class="diff-line">          items.remove(atOffsets: offsets)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func move(from source: IndexSet, to destination: Int) {</span><span class="diff-line">          items.move(fromOffsets: source, toOffset: destination)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      static let sample = TodoStore(items: [</span><span class="diff-line">          TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">          TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">          TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">      ])</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>async let fetchedItems = repository.fetchAll()</code>: 右辺の処理を<strong>すぐに子タスクとして開始</strong>し、結果を待たずに次の行へ進みます。</li>
+            <li><code>try? await fetchedItems</code>: 結果を使う地点で <code>await</code> して待ちます。2 つとも先に開始しているので、待ち時間は合わせて約 1 秒で済みます。</li>
+            <li><code>TodoStore</code> も <code>TodoRepository</code> もメインアクターですが、2 つの取得は並行に進みます。<code>Task.sleep</code> で一時停止している間はメインアクターが空くからです。</li>
+          </ul>
+
+          <p><code>ContentView.swift</code> では、固定のプロフィールを削除し、取得したプロフィールを表示します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line diff-line--remove">-     let profile = Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line diff-line--remove">- </span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line diff-line--remove">-                     ProfileHeader(profile: profile)</span><span class="diff-line diff-line--add">+                     if let profile = store.profile {</span><span class="diff-line diff-line--add">+                         ProfileHeader(profile: profile)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line"> </span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section {</span><span class="diff-line">                      if store.isLoading {</span><span class="diff-line">                          ProgressView("読み込み中…")</span><span class="diff-line">                      }</span><span class="diff-line">                      ForEach($store.items) { $item in</span><span class="diff-line">                          if showsDone || !item.isDone {</span><span class="diff-line">                              NavigationLink(value: item) {</span><span class="diff-line">                                  TodoRow(item: $item)</span><span class="diff-line">                              }</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .onDelete { offsets in</span><span class="diff-line">                          store.remove(at: offsets)</span><span class="diff-line">                      }</span><span class="diff-line">                      .onMove { source, destination in</span><span class="diff-line">                          store.move(from: source, to: destination)</span><span class="diff-line">                      }</span><span class="diff-line">                  } header: {</span><span class="diff-line">                      Text("Todo")</span><span class="diff-line">                  } footer: {</span><span class="diff-line">                      if let summary = store.summary {</span><span class="diff-line">                          Text(summary.text)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">                          TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line">                              store.add(title: newTitle)</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line">                          }</span><span class="diff-line">                          .buttonStyle(.borderless)</span><span class="diff-line">                          .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .navigationDestination(for: TodoItem.self) { item in</span><span class="diff-line">                  TodoDetailView(item: item)</span><span class="diff-line">              }</span><span class="diff-line">              .task {</span><span class="diff-line">                  await store.load()</span><span class="diff-line">              }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line">              .refreshable {</span><span class="diff-line">                  await store.load()</span><span class="diff-line">              }</span><span class="diff-line">              .toolbar {</span><span class="diff-line">                  ToolbarItem(placement: .topBarLeading) {</span><span class="diff-line">                      Button("再読み込み") {</span><span class="diff-line">                          Task {</span><span class="diff-line">                              await store.load()</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .disabled(store.isLoading)</span><span class="diff-line">                  }</span><span class="diff-line">                  ToolbarItem(placement: .topBarTrailing) {</span><span class="diff-line">                      EditButton()</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>読み込みが終わるまで <code>store.profile</code> は <code>nil</code> なので、プロフィールの行は読み込み後に表示されます。</p>
+
+          <p>直列に待つ場合と並行に待つ場合の所要時間を、<code>ContinuousClock</code> で測るテストを <code>ConcurrencyTests.swift</code> に追加します。<code>loadFillsItemsAndSummary</code> には、プロフィールの確認を足します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/ConcurrencyTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Testing</span><span class="diff-line">  @testable import HandsonApp</span><span class="diff-line"> </span><span class="diff-line">  @MainActor</span><span class="diff-line">  struct ConcurrencyTests {</span><span class="diff-line"> </span><span class="diff-line">      @Test func summarizerRunsOffTheMainThread() async {</span><span class="diff-line">          // テスト関数は @MainActor。ここはメインスレッド</span><span class="diff-line">          MainActor.assertIsolated()</span><span class="diff-line">          #expect(runningOnMainThread())</span><span class="diff-line"> </span><span class="diff-line">          let items = [</span><span class="diff-line">              TodoItem(title: "a", status: .done(Date())),</span><span class="diff-line">              TodoItem(title: "b"),</span><span class="diff-line">          ]</span><span class="diff-line">          let summary = await TodoSummarizer().summarize(items)</span><span class="diff-line"> </span><span class="diff-line">          // @concurrent の関数はメインアクターの外で動く</span><span class="diff-line">          #expect(!summary.ranOnMainThread)</span><span class="diff-line">          #expect(summary.text == "1 / 2 件完了")</span><span class="diff-line"> </span><span class="diff-line">          // await から戻ると再びメインアクター</span><span class="diff-line">          MainActor.assertIsolated()</span><span class="diff-line">          #expect(runningOnMainThread())</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+     @Test func sequentialFetchTakesTwoSeconds() async throws {</span><span class="diff-line diff-line--add">+         let repository = TodoRepository()</span><span class="diff-line diff-line--add">+         let clock = ContinuousClock()</span><span class="diff-line diff-line--add">+         let start = clock.now</span><span class="diff-line diff-line--add">+         _ = try await repository.fetchAll()</span><span class="diff-line diff-line--add">+         _ = try await repository.fetchProfile()</span><span class="diff-line diff-line--add">+         let elapsed = clock.now - start</span><span class="diff-line diff-line--add">+         print("DEBUG sequential:", elapsed)</span><span class="diff-line diff-line--add">+         #expect(elapsed &gt;= .seconds(2))</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     @Test func concurrentFetchTakesOneSecond() async throws {</span><span class="diff-line diff-line--add">+         let repository = TodoRepository()</span><span class="diff-line diff-line--add">+         let clock = ContinuousClock()</span><span class="diff-line diff-line--add">+         let start = clock.now</span><span class="diff-line diff-line--add">+         async let items = repository.fetchAll()</span><span class="diff-line diff-line--add">+         async let profile = repository.fetchProfile()</span><span class="diff-line diff-line--add">+         _ = try await (items, profile)</span><span class="diff-line diff-line--add">+         let elapsed = clock.now - start</span><span class="diff-line diff-line--add">+         print("DEBUG concurrent:", elapsed)</span><span class="diff-line diff-line--add">+         #expect(elapsed &gt;= .seconds(1))</span><span class="diff-line diff-line--add">+         #expect(elapsed &lt; .milliseconds(1800))</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      @Test func loadFillsItemsAndSummary() async {</span><span class="diff-line">          let store = TodoStore()</span><span class="diff-line">          #expect(store.items.isEmpty)</span><span class="diff-line diff-line--add">+         #expect(store.profile == nil)</span><span class="diff-line">          await store.load()</span><span class="diff-line">          #expect(store.items.count == 3)</span><span class="diff-line diff-line--add">+         #expect(store.profile?.displayName == "Taro")</span><span class="diff-line">          #expect(store.summary?.text == "1 / 3 件完了")</span><span class="diff-line">          #expect(!store.isLoading)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>
+            テストの出力で <code>print</code> の結果も見られるように、<code>grep</code> のパターンに <code>DEBUG</code> を足して実行します。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:|^DEBUG"</span><span class="terminal__line">…</span><span class="terminal__line">DEBUG sequential: 2.020714666 seconds</span><span class="terminal__line">DEBUG concurrent: 1.01490625 seconds</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 28 tests in 8 suites passed after 4.684 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">閾値に余裕を持たせている理由</p>
+              <p>
+                計測する経過時間は、マシンの負荷によって実行のたびに揺れます。そのため、並行の場合の閾値は揺れを見込んで 1.8 秒にしています。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>DEBUG sequential</code> が約 2 秒、<code>DEBUG concurrent</code> が約 1 秒になることを確かめます（執筆時の実測は直列 約 2.02 秒、並行 約 1.01 秒）。値は実行するたびに少し変わります。
+              <code>Test run with 28 tests in 8 suites passed</code> と表示されれば OK です。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">キャンセルとエラーを区別して扱う</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ステップ 2 から <code>try?</code> でエラーを握りつぶしていたところを直します。まず、テストから待ち時間を変えたり、わざと失敗させたりできるように、<code>TodoRepository</code> に 2 つのプロパティを足します。
+            既定値は「1 秒待つ」「失敗しない」なので、アプリの動作は変わりません。<code>Models/TodoRepository.swift</code> を次のように変更します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRepository.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ enum RepositoryError: Error {</span><span class="diff-line diff-line--add">+     case failed</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  struct TodoRepository {</span><span class="diff-line diff-line--add">+     var delay: Duration = .seconds(1)</span><span class="diff-line diff-line--add">+     var shouldFail = false</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      // ネットワークの代わりに 1 秒待って固定のデータを返す</span><span class="diff-line">      func fetchAll() async throws -&gt; [TodoItem] {</span><span class="diff-line diff-line--remove">-         try await Task.sleep(for: .seconds(1))</span><span class="diff-line diff-line--add">+         try await Task.sleep(for: delay)</span><span class="diff-line diff-line--add">+         if shouldFail { throw RepositoryError.failed }</span><span class="diff-line">          return [</span><span class="diff-line">              TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">              TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">              TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">          ]</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func fetchProfile() async throws -&gt; Profile {</span><span class="diff-line diff-line--remove">-         try await Task.sleep(for: .seconds(1))</span><span class="diff-line diff-line--add">+         try await Task.sleep(for: delay)</span><span class="diff-line">          return Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>TodoStore</code> には <code>errorMessage</code> を足し、<code>load()</code> を <code>do</code> / <code>catch</code> で書き直します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoStore.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Observation</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @Observable</span><span class="diff-line">  final class TodoStore {</span><span class="diff-line">      var items: [TodoItem]</span><span class="diff-line">      var isLoading = false</span><span class="diff-line">      var profile: Profile?</span><span class="diff-line">      var summary: TodoSummary?</span><span class="diff-line diff-line--add">+     var errorMessage: String?</span><span class="diff-line"> </span><span class="diff-line">      private let repository: TodoRepository</span><span class="diff-line"> </span><span class="diff-line">      init(items: [TodoItem] = [], repository: TodoRepository = TodoRepository()) {</span><span class="diff-line">          self.items = items</span><span class="diff-line">          self.repository = repository</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func load() async {</span><span class="diff-line">          isLoading = true</span><span class="diff-line diff-line--add">+         errorMessage = nil</span><span class="diff-line">          defer { isLoading = false }</span><span class="diff-line diff-line--remove">-         // 2 つの取得を同時に始める。待つのはここ（await）</span><span class="diff-line diff-line--remove">-         async let fetchedItems = repository.fetchAll()</span><span class="diff-line diff-line--remove">-         async let fetchedProfile = repository.fetchProfile()</span><span class="diff-line diff-line--remove">-         items = (try? await fetchedItems) ?? []</span><span class="diff-line diff-line--remove">-         profile = try? await fetchedProfile</span><span class="diff-line diff-line--remove">-         summary = await TodoSummarizer().summarize(items)</span><span class="diff-line diff-line--add">+         do {</span><span class="diff-line diff-line--add">+             // 2 つの取得を同時に始める。待つのはここ（await）</span><span class="diff-line diff-line--add">+             async let fetchedItems = repository.fetchAll()</span><span class="diff-line diff-line--add">+             async let fetchedProfile = repository.fetchProfile()</span><span class="diff-line diff-line--add">+             items = try await fetchedItems</span><span class="diff-line diff-line--add">+             profile = try await fetchedProfile</span><span class="diff-line diff-line--add">+             summary = await TodoSummarizer().summarize(items)</span><span class="diff-line diff-line--add">+         } catch is CancellationError {</span><span class="diff-line diff-line--add">+             // キャンセルはエラーではない。画面は前の状態のままにする</span><span class="diff-line diff-line--add">+         } catch {</span><span class="diff-line diff-line--add">+             errorMessage = "読み込みに失敗しました"</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func add(title: String, priority: Priority = .medium) {</span><span class="diff-line">          items.append(TodoItem(title: title, priority: priority))</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func toggle(_ item: TodoItem) {</span><span class="diff-line">          guard let index = items.firstIndex(where: { $0.title == item.title }) else { return }</span><span class="diff-line">          items[index].toggle()</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func remove(at offsets: IndexSet) {</span><span class="diff-line">          items.remove(atOffsets: offsets)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func move(from source: IndexSet, to destination: Int) {</span><span class="diff-line">          items.move(fromOffsets: source, toOffset: destination)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      static let sample = TodoStore(items: [</span><span class="diff-line">          TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">          TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">          TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">      ])</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>Task.sleep</code> は、タスクがキャンセルされると <code>CancellationError</code> を投げます。</li>
+            <li><code>catch is CancellationError</code> を先に書き、キャンセルはエラーとして表示しません。それ以外のエラーは次の <code>catch</code> で受けて、<code>errorMessage</code> を設定します。2 つの順序を逆にすると、キャンセルもエラー表示になります。</li>
+            <li><code>defer { isLoading = false }</code> があるので、成功・失敗・キャンセルのどれでも <code>isLoading</code> は <code>false</code> に戻ります。</li>
+          </ul>
+
+          <p><code>ContentView.swift</code> では、<code>errorMessage</code> があるときだけ、赤い文字のブロックを一覧の上に表示します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line">                      if let profile = store.profile {</span><span class="diff-line">                          ProfileHeader(profile: profile)</span><span class="diff-line">                      }</span><span class="diff-line"> </span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+                 if let message = store.errorMessage {</span><span class="diff-line diff-line--add">+                     Section {</span><span class="diff-line diff-line--add">+                         Text(message)</span><span class="diff-line diff-line--add">+                             .foregroundStyle(.red)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section {</span><span class="diff-line">                      if store.isLoading {</span><span class="diff-line">                          ProgressView("読み込み中…")</span><span class="diff-line">                      }</span><span class="diff-line">                      ForEach($store.items) { $item in</span><span class="diff-line">                          if showsDone || !item.isDone {</span><span class="diff-line">                              NavigationLink(value: item) {</span><span class="diff-line">                                  TodoRow(item: $item)</span><span class="diff-line">                              }</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .onDelete { offsets in</span><span class="diff-line">                          store.remove(at: offsets)</span><span class="diff-line">                      }</span><span class="diff-line">                      .onMove { source, destination in</span><span class="diff-line">                          store.move(from: source, to: destination)</span><span class="diff-line">                      }</span><span class="diff-line">                  } header: {</span><span class="diff-line">                      Text("Todo")</span><span class="diff-line">                  } footer: {</span><span class="diff-line">                      if let summary = store.summary {</span><span class="diff-line">                          Text(summary.text)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">                          TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line">                              store.add(title: newTitle)</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line">                          }</span><span class="diff-line">                          .buttonStyle(.borderless)</span><span class="diff-line">                          .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .navigationDestination(for: TodoItem.self) { item in</span><span class="diff-line">                  TodoDetailView(item: item)</span><span class="diff-line">              }</span><span class="diff-line">              .task {</span><span class="diff-line">                  await store.load()</span><span class="diff-line">              }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line">              .refreshable {</span><span class="diff-line">                  await store.load()</span><span class="diff-line">              }</span><span class="diff-line">              .toolbar {</span><span class="diff-line">                  ToolbarItem(placement: .topBarLeading) {</span><span class="diff-line">                      Button("再読み込み") {</span><span class="diff-line">                          Task {</span><span class="diff-line">                              await store.load()</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .disabled(store.isLoading)</span><span class="diff-line">                  }</span><span class="diff-line">                  ToolbarItem(placement: .topBarTrailing) {</span><span class="diff-line">                      EditButton()</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>キャンセルと失敗のテストを <code>ConcurrencyTests.swift</code> の末尾に追加します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppTests/ConcurrencyTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Testing</span><span class="diff-line">  @testable import HandsonApp</span><span class="diff-line"> </span><span class="diff-line">  @MainActor</span><span class="diff-line">  struct ConcurrencyTests {</span><span class="diff-line"> </span><span class="diff-line">      @Test func summarizerRunsOffTheMainThread() async {</span><span class="diff-line">          // テスト関数は @MainActor。ここはメインスレッド</span><span class="diff-line">          MainActor.assertIsolated()</span><span class="diff-line">          #expect(runningOnMainThread())</span><span class="diff-line"> </span><span class="diff-line">          let items = [</span><span class="diff-line">              TodoItem(title: "a", status: .done(Date())),</span><span class="diff-line">              TodoItem(title: "b"),</span><span class="diff-line">          ]</span><span class="diff-line">          let summary = await TodoSummarizer().summarize(items)</span><span class="diff-line"> </span><span class="diff-line">          // @concurrent の関数はメインアクターの外で動く</span><span class="diff-line">          #expect(!summary.ranOnMainThread)</span><span class="diff-line">          #expect(summary.text == "1 / 2 件完了")</span><span class="diff-line"> </span><span class="diff-line">          // await から戻ると再びメインアクター</span><span class="diff-line">          MainActor.assertIsolated()</span><span class="diff-line">          #expect(runningOnMainThread())</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      @Test func sequentialFetchTakesTwoSeconds() async throws {</span><span class="diff-line">          let repository = TodoRepository()</span><span class="diff-line">          let clock = ContinuousClock()</span><span class="diff-line">          let start = clock.now</span><span class="diff-line">          _ = try await repository.fetchAll()</span><span class="diff-line">          _ = try await repository.fetchProfile()</span><span class="diff-line">          let elapsed = clock.now - start</span><span class="diff-line">          print("DEBUG sequential:", elapsed)</span><span class="diff-line">          #expect(elapsed &gt;= .seconds(2))</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      @Test func concurrentFetchTakesOneSecond() async throws {</span><span class="diff-line">          let repository = TodoRepository()</span><span class="diff-line">          let clock = ContinuousClock()</span><span class="diff-line">          let start = clock.now</span><span class="diff-line">          async let items = repository.fetchAll()</span><span class="diff-line">          async let profile = repository.fetchProfile()</span><span class="diff-line">          _ = try await (items, profile)</span><span class="diff-line">          let elapsed = clock.now - start</span><span class="diff-line">          print("DEBUG concurrent:", elapsed)</span><span class="diff-line">          #expect(elapsed &gt;= .seconds(1))</span><span class="diff-line">          #expect(elapsed &lt; .milliseconds(1800))</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      @Test func loadFillsItemsAndSummary() async {</span><span class="diff-line">          let store = TodoStore()</span><span class="diff-line">          #expect(store.items.isEmpty)</span><span class="diff-line">          #expect(store.profile == nil)</span><span class="diff-line">          await store.load()</span><span class="diff-line">          #expect(store.items.count == 3)</span><span class="diff-line">          #expect(store.profile?.displayName == "Taro")</span><span class="diff-line">          #expect(store.summary?.text == "1 / 3 件完了")</span><span class="diff-line">          #expect(!store.isLoading)</span><span class="diff-line">      }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     @Test func sleepThrowsCancellationErrorWhenCancelled() async {</span><span class="diff-line diff-line--add">+         let clock = ContinuousClock()</span><span class="diff-line diff-line--add">+         let start = clock.now</span><span class="diff-line diff-line--add">+         let task = Task {</span><span class="diff-line diff-line--add">+             try await Task.sleep(for: .seconds(10))</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+         task.cancel()</span><span class="diff-line diff-line--add">+         await #expect(throws: CancellationError.self) {</span><span class="diff-line diff-line--add">+             try await task.value</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+         // 10 秒待たずにすぐ終わる</span><span class="diff-line diff-line--add">+         #expect(clock.now - start &lt; .seconds(2))</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     @Test func cancelledLoadStopsEarlyAndResetsLoading() async throws {</span><span class="diff-line diff-line--add">+         let store = TodoStore(repository: TodoRepository(delay: .seconds(5)))</span><span class="diff-line diff-line--add">+         let task = Task { await store.load() }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         try await Task.sleep(for: .milliseconds(200))</span><span class="diff-line diff-line--add">+         #expect(store.isLoading)</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         let clock = ContinuousClock()</span><span class="diff-line diff-line--add">+         let start = clock.now</span><span class="diff-line diff-line--add">+         task.cancel()</span><span class="diff-line diff-line--add">+         await task.value</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         #expect(clock.now - start &lt; .seconds(2))  // 5 秒待たずに終わる</span><span class="diff-line diff-line--add">+         #expect(!store.isLoading)</span><span class="diff-line diff-line--add">+         #expect(store.items.isEmpty)</span><span class="diff-line diff-line--add">+         #expect(store.errorMessage == nil)  // キャンセルはエラー扱いにしない</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     @Test func failedLoadSetsErrorMessage() async {</span><span class="diff-line diff-line--add">+         let store = TodoStore(repository: TodoRepository(delay: .milliseconds(10), shouldFail: true))</span><span class="diff-line diff-line--add">+         await store.load()</span><span class="diff-line diff-line--add">+         #expect(store.errorMessage == "読み込みに失敗しました")</span><span class="diff-line diff-line--add">+         #expect(store.items.isEmpty)</span><span class="diff-line diff-line--add">+         #expect(!store.isLoading)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>task.cancel()</code>: <code>Task { }</code> で作ったタスクにキャンセルを依頼します。<code>await task.value</code> は <code>CancellationError</code> を投げます。<code>#expect(throws:)</code> のクロージャが <code>async</code> なので、<code>await #expect(throws:)</code> と前に <code>await</code> を付けます。</li>
+            <li><code>cancelledLoadStopsEarlyAndResetsLoading</code>: 5 秒待つ設定のリポジトリで読み込みを始め、0.2 秒後にキャンセルします。5 秒待たずに終わり、<code>isLoading</code> が戻り、<code>errorMessage</code> は <code>nil</code> のままです。</li>
+            <li><code>failedLoadSetsErrorMessage</code>: <code>shouldFail: true</code> で失敗させ、<code>errorMessage</code> が設定されることを確かめます。</li>
+          </ul>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:|^DEBUG"</span><span class="terminal__line">…</span><span class="terminal__line">DEBUG sequential: 2.066263084 seconds</span><span class="terminal__line">DEBUG concurrent: 1.014174667 seconds</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test failedLoadSetsErrorMessage() passed after 0.012 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 31 tests in 8 suites passed after 4.952 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>cancel()</code> はキャンセルを「依頼する」だけ</p>
+              <p>
+                実際に止まるのは、<code>Task.sleep</code> のようにキャンセルに対応した <code>await</code> の地点です。キャンセルを確かめない計算のループは、<code>cancel()</code> しても最後まで走ります。そうした処理では、途中に <code>try Task.checkCancellation()</code> を挟みます。
+              </p>
+              <p>
+                <code>.task</code> で始めた処理は、View が画面から消えると自動でキャンセルされます。執筆時に、<code>.task</code> の中で 10 秒の <code>Task.sleep</code> を待つ View を表示してから取り除き、<code>Task.sleep</code> が <code>CancellationError</code> を投げることを確かめました。
+                自分で <code>Task { }</code> を作った場合とは違い、<code>cancel()</code> を呼ぶ必要はありません。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Test run with 31 tests in 8 suites passed</code> と表示されることを確かめます。キャンセルのテスト 2 つは、それぞれ 10 秒・5 秒待たずに終わります。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">actor で読み込み結果をキャッシュする</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            一度取得した ToDo を覚えておき、次の取得ではすぐに返すキャッシュを作ります。キャッシュは複数のタスクから同時に読み書きされる可能性があるので、<code>actor</code> にします。<code>Models</code> フォルダに <code>TodoCache.swift</code> を追加します。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoCache.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+
+actor TodoCache {
+    private var storage: [String: [TodoItem]] = [:]
+
+    func value(for key: String) -&gt; [TodoItem]? {
+        storage[key]
+    }
+
+    func store(_ items: [TodoItem], for key: String) {
+        storage[key] = items
+    }
+}</code></pre>
+</div>
+
+          <p>
+            <code>actor</code> は、中の状態に同時に 1 つの処理しか触れない参照型です。<code>storage</code> への読み書きは自動で順番に並べられるので、クラスに自前のロックを書く必要はありません。
+            <code>TodoItem</code> は <code>Sendable</code> なので、アクターに出し入れできます。
+          </p>
+
+          <p><code>TodoRepository</code> の <code>fetchAll</code> から使います。<code>useCache</code> が <code>true</code> でキャッシュがあれば、待たずにそれを返します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRepository.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line"> </span><span class="diff-line">  enum RepositoryError: Error {</span><span class="diff-line">      case failed</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  struct TodoRepository {</span><span class="diff-line">      var delay: Duration = .seconds(1)</span><span class="diff-line">      var shouldFail = false</span><span class="diff-line diff-line--add">+     let cache = TodoCache()</span><span class="diff-line"> </span><span class="diff-line">      // ネットワークの代わりに 1 秒待って固定のデータを返す</span><span class="diff-line diff-line--remove">-     func fetchAll() async throws -&gt; [TodoItem] {</span><span class="diff-line diff-line--add">+     func fetchAll(useCache: Bool = true) async throws -&gt; [TodoItem] {</span><span class="diff-line diff-line--add">+         if useCache, let cached = await cache.value(for: "items") {</span><span class="diff-line diff-line--add">+             return cached</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">          try await Task.sleep(for: delay)</span><span class="diff-line">          if shouldFail { throw RepositoryError.failed }</span><span class="diff-line diff-line--remove">-         return [</span><span class="diff-line diff-line--add">+         let items = [</span><span class="diff-line">              TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">              TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">              TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">          ]</span><span class="diff-line diff-line--add">+         await cache.store(items, for: "items")</span><span class="diff-line diff-line--add">+         return items</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func fetchProfile() async throws -&gt; Profile {</span><span class="diff-line">          try await Task.sleep(for: delay)</span><span class="diff-line">          return Profile(name: "Taro Yamada", nickname: "Taro")</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>await cache.value(for: "items")</code>: アクターの外からメソッドを呼ぶときは <code>await</code> が要ります。「アクターが空くまで待つ可能性がある」という印です。</li>
+            <li><code>TodoRepository</code> は構造体ですが、<code>cache</code> は <code>actor</code>（参照型）です。<code>TodoRepository</code> がコピーされても、同じキャッシュを共有します。</li>
+          </ul>
+
+          <p>
+            <code>TodoStore.load</code> に <code>useCache</code> の引数を足します。<code>ContentView</code> では、画面表示時の <code>.task</code> はキャッシュを使い、<code>.refreshable</code> と「再読み込み」ボタンは <code>useCache: false</code> で取得し直します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoStore.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import Observation</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @Observable</span><span class="diff-line">  final class TodoStore {</span><span class="diff-line">      var items: [TodoItem]</span><span class="diff-line">      var isLoading = false</span><span class="diff-line">      var profile: Profile?</span><span class="diff-line">      var summary: TodoSummary?</span><span class="diff-line">      var errorMessage: String?</span><span class="diff-line"> </span><span class="diff-line">      private let repository: TodoRepository</span><span class="diff-line"> </span><span class="diff-line">      init(items: [TodoItem] = [], repository: TodoRepository = TodoRepository()) {</span><span class="diff-line">          self.items = items</span><span class="diff-line">          self.repository = repository</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     func load() async {</span><span class="diff-line diff-line--add">+     func load(useCache: Bool = true) async {</span><span class="diff-line">          isLoading = true</span><span class="diff-line">          errorMessage = nil</span><span class="diff-line">          defer { isLoading = false }</span><span class="diff-line">          do {</span><span class="diff-line">              // 2 つの取得を同時に始める。待つのはここ（await）</span><span class="diff-line diff-line--remove">-             async let fetchedItems = repository.fetchAll()</span><span class="diff-line diff-line--add">+             async let fetchedItems = repository.fetchAll(useCache: useCache)</span><span class="diff-line">              async let fetchedProfile = repository.fetchProfile()</span><span class="diff-line">              items = try await fetchedItems</span><span class="diff-line">              profile = try await fetchedProfile</span><span class="diff-line">              summary = await TodoSummarizer().summarize(items)</span><span class="diff-line">          } catch is CancellationError {</span><span class="diff-line">              // キャンセルはエラーではない。画面は前の状態のままにする</span><span class="diff-line">          } catch {</span><span class="diff-line">              errorMessage = "読み込みに失敗しました"</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func add(title: String, priority: Priority = .medium) {</span><span class="diff-line">          items.append(TodoItem(title: title, priority: priority))</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func toggle(_ item: TodoItem) {</span><span class="diff-line">          guard let index = items.firstIndex(where: { $0.title == item.title }) else { return }</span><span class="diff-line">          items[index].toggle()</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func remove(at offsets: IndexSet) {</span><span class="diff-line">          items.remove(atOffsets: offsets)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      func move(from source: IndexSet, to destination: Int) {</span><span class="diff-line">          items.move(fromOffsets: source, toOffset: destination)</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      static let sample = TodoStore(items: [</span><span class="diff-line">          TodoItem(title: "牛乳を買う", priority: .high),</span><span class="diff-line">          TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),</span><span class="diff-line">          TodoItem(title: "SwiftUI を勉強する"),</span><span class="diff-line">      ])</span><span class="diff-line">  }</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      @Environment(TodoStore.self) private var store</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          @Bindable var store = store</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line">                      if let profile = store.profile {</span><span class="diff-line">                          ProfileHeader(profile: profile)</span><span class="diff-line">                      }</span><span class="diff-line"> </span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  if let message = store.errorMessage {</span><span class="diff-line">                      Section {</span><span class="diff-line">                          Text(message)</span><span class="diff-line">                              .foregroundStyle(.red)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section {</span><span class="diff-line">                      if store.isLoading {</span><span class="diff-line">                          ProgressView("読み込み中…")</span><span class="diff-line">                      }</span><span class="diff-line">                      ForEach($store.items) { $item in</span><span class="diff-line">                          if showsDone || !item.isDone {</span><span class="diff-line">                              NavigationLink(value: item) {</span><span class="diff-line">                                  TodoRow(item: $item)</span><span class="diff-line">                              }</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .onDelete { offsets in</span><span class="diff-line">                          store.remove(at: offsets)</span><span class="diff-line">                      }</span><span class="diff-line">                      .onMove { source, destination in</span><span class="diff-line">                          store.move(from: source, to: destination)</span><span class="diff-line">                      }</span><span class="diff-line">                  } header: {</span><span class="diff-line">                      Text("Todo")</span><span class="diff-line">                  } footer: {</span><span class="diff-line">                      if let summary = store.summary {</span><span class="diff-line">                          Text(summary.text)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">                          TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line">                              store.add(title: newTitle)</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line">                          }</span><span class="diff-line">                          .buttonStyle(.borderless)</span><span class="diff-line">                          .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .navigationDestination(for: TodoItem.self) { item in</span><span class="diff-line">                  TodoDetailView(item: item)</span><span class="diff-line">              }</span><span class="diff-line">              .task {</span><span class="diff-line">                  await store.load()</span><span class="diff-line">              }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line">              .refreshable {</span><span class="diff-line diff-line--remove">-                 await store.load()</span><span class="diff-line diff-line--add">+                 await store.load(useCache: false)</span><span class="diff-line">              }</span><span class="diff-line">              .toolbar {</span><span class="diff-line">                  ToolbarItem(placement: .topBarLeading) {</span><span class="diff-line">                      Button("再読み込み") {</span><span class="diff-line">                          Task {</span><span class="diff-line diff-line--remove">-                             await store.load()</span><span class="diff-line diff-line--add">+                             await store.load(useCache: false)</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line">                      .disabled(store.isLoading)</span><span class="diff-line">                  }</span><span class="diff-line">                  ToolbarItem(placement: .topBarTrailing) {</span><span class="diff-line">                      EditButton()</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #Preview {</span><span class="diff-line">      ContentView()</span><span class="diff-line">          .environment(TodoStore.sample)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>actor</code> に <code>await</code> 無しで触る</p>
+              <p><code>storage</code> の <code>private</code> を一時的に外します。メインアクターの同期関数から <code>cache.storage</code> や <code>cache.value(for:)</code> を <code>await</code> 無しで使ってビルドすると、次のエラーになります。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">error: actor-isolated property 'storage' can not be referenced from the main actor</span><span class="terminal__line">error: call to actor-isolated instance method 'value(for:)' in a synchronous main actor-isolated context [#ActorIsolatedCall]</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p><code>async</code> 関数の中から <code>await</code> 無しで使った場合は、次のエラーです。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">error: actor-isolated property 'storage' cannot be accessed from outside of the actor</span><span class="terminal__line">error: actor-isolated instance method 'value(for:)' cannot be called from outside of the actor</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                アクターの外からは、プロパティを直接読み書きできません。<code>await</code> を付けたメソッド呼び出しで触ります。確認したら <code>private</code> を戻してください。
+              </p>
+            </div>
+          </div>
+
+          <p><code>HandsonAppTests</code> に <code>TodoCacheTests.swift</code> を追加します。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/TodoCacheTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import Testing
+@testable import HandsonApp
+
+struct TodoCacheTests {
+
+    @Test func storeAndReadValue() async {
+        let cache = TodoCache()
+        #expect(await cache.value(for: "items") == nil)
+
+        await cache.store([TodoItem(title: "買い物")], for: "items")
+        let cached = await cache.value(for: "items")
+        #expect(cached?.map(\.title) == ["買い物"])
+    }
+
+    @Test func concurrentWritesAreSerialized() async {
+        let cache = TodoCache()
+        await withTaskGroup(of: Void.self) { group in
+            for i in 0..&lt;100 {
+                group.addTask {
+                    await cache.store([TodoItem(title: "item \(i)")], for: "key \(i)")
+                }
+            }
+        }
+        for i in 0..&lt;100 {
+            #expect(await cache.value(for: "key \(i)") != nil)
+        }
+    }
+
+    @Test func repositoryUsesCacheOnSecondFetch() async throws {
+        let repository = TodoRepository(delay: .milliseconds(500))
+        let clock = ContinuousClock()
+
+        let first = clock.now
+        _ = try await repository.fetchAll()
+        #expect(clock.now - first &gt;= .milliseconds(500))
+
+        let second = clock.now
+        _ = try await repository.fetchAll()
+        #expect(clock.now - second &lt; .milliseconds(200))  // キャッシュから即座に返る
+
+        let third = clock.now
+        _ = try await repository.fetchAll(useCache: false)
+        #expect(clock.now - third &gt;= .milliseconds(500))  // 強制再取得は待つ
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>#expect(await cache.value(for: "items") == nil)</code>: アクターのメソッドは <code>await</code> 付きでしか呼べないので、<code>#expect</code> の中に <code>await</code> を書きます。</li>
+            <li><code>concurrentWritesAreSerialized</code>: <code>withTaskGroup</code> で 100 個のタスクから同時に書き込んでも、全てのキーが残ります。</li>
+            <li><code>repositoryUsesCacheOnSecondFetch</code>: 1 回目は 0.5 秒待ち、2 回目はキャッシュからすぐ返ります。<code>useCache: false</code> では再び待ちます。</li>
+          </ul>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 34 tests in 9 suites passed after 5.909 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Test run with 34 tests in 9 suites passed</code> と表示されることを確かめます（31 + <code>TodoCacheTests</code> の 3 テスト）。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">完成状態でビルドとテストを実行する</h3>
+        </div>
+        <div class="step__body">
+          <p>完成状態のファイル構成は次のとおりです。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Text</span>
+  <span class="code-block__filename">HandsonApp/</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-plaintext">HandsonApp/
+  HandsonApp/
+    HandsonAppApp.swift          # この項目で更新（TodoStore() から始める）
+    ContentView.swift            # この項目で更新（.task、.refreshable、再読み込みボタン、集計とエラーの表示）
+    Greeting.swift
+    Models/
+      Profile.swift
+      Counter.swift
+      TodoItem.swift             # この項目で更新（nonisolated を 3 か所）
+      TodoStore.swift            # この項目で更新（load(useCache:)、isLoading / profile / summary / errorMessage）
+      TodoRepository.swift       # この項目で追加（fetchAll / fetchProfile）
+      TodoSummary.swift          # この項目で追加（@concurrent の集計）
+      TodoCache.swift            # この項目で追加（actor）
+      Describable.swift
+      Validation.swift
+    Views/
+      ProfileHeader.swift
+      TodoRow.swift
+      TodoDetailView.swift
+  HandsonAppTests/
+    ConcurrencyTests.swift       # この項目で追加（7 テスト）
+    TodoCacheTests.swift         # この項目で追加（3 テスト）
+    …                            # ほかは 05 のまま（合計 34 テスト）</code></pre>
+</div>
+
+          <p>ビルドと全てのユニットテストを実行し、シミュレータで最終的な画面を確かめてから、シミュレータを止めます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:|^DEBUG"</span><span class="terminal__line">…</span><span class="terminal__line">DEBUG sequential: 2.022349042 seconds</span><span class="terminal__line">DEBUG concurrent: 1.015685084 seconds</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 34 tests in 9 suites passed after 5.953 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+</div>
+
+          <p>Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> で全てのテストを実行し、<kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>** BUILD SUCCEEDED **</code> と <code>Test run with 34 tests in 9 suites passed</code> が表示されることを確かめます。
+              シミュレータでは、起動から約 1.3 秒で読み込みが終わります。左上に「再読み込み」、右上に「Edit」、その下に大きなタイトル「ToDo」が表示されます。
+              プロフィールのカード（Taro / Taro Yamada）と 3 行の ToDo が並び、「Todo」のブロックの下に小さく「1 / 3 件完了」と表示されれば完成です。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">05 のプロジェクトをコピーし、ビルドと 24 テストが通ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>async</code> 関数を <code>await</code> で呼び、<code>.task</code> で画面の表示時に読み込みを始めた。<code>await</code> を付け忘れるとビルドが失敗することを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>Button</code> の action では <code>Task { }</code> が要る理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">メインアクターの外で動かすには <code>nonisolated</code> ではなく <code>@concurrent</code> を付けることと、<code>TodoItem</code> に <code>nonisolated</code> が要った理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">値型は暗黙に <code>Sendable</code> になり、アクターの境界を越えて渡せることを理解した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>async let</code> で並行に待つと、直列の約 2 秒が約 1 秒になることをテストで測った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>CancellationError</code> を先に <code>catch</code> し、キャンセルとエラーを区別した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>actor</code> のキャッシュを作り、外からは <code>await</code> 付きのメソッドでしか触れないことを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">34 テストが全て通り、<code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Thread.isMainThread</code> が使えない</p>
+          <p><code>async</code> 関数の中で <code>Thread.isMainThread</code> を呼ぶと、<code>error: class property 'isMainThread' is unavailable from asynchronous contexts</code> で始まるエラーになります。<code>TodoSummary.swift</code> の <code>runningOnMainThread()</code> のように、同期関数に切り出してください。メインアクターであることを確かめるだけなら、<code>MainActor.assertIsolated()</code> を使います。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>@concurrent</code> を付けたら、メインアクターのプロパティに触れなくなった</p>
+          <p><code>@concurrent</code> の関数はメインアクターの外で動くので、メインアクターに分離された型（既定ではアプリの全ての型）のプロパティに触れません。渡す値の型に <code>nonisolated</code> を付けるか、ストアではなく値を引数で渡してください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">テストの実行に時間がかかる</p>
+          <p>この項目のテストは、<code>Task.sleep</code> で実際に待つので、全体で約 6 秒かかります。テストが失敗すると、05 と同じく <code>xcodebuild</code> の終了まで長く待たされることがあります。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>async</code> 関数と <code>await</code> でデータの読み込みを書き、<code>.task</code> で画面の表示時に始めました。同期の <code>Button</code> の action からは <code>Task { }</code> で非同期の処理を始め、<code>.refreshable</code> も付けました。
+        アプリの型が既定で <code>@MainActor</code> のプロジェクトでは、<code>nonisolated</code> だけではメインアクターの外に出ず、<code>@concurrent</code> が必要なことを確かめました。境界を越える値は <code>Sendable</code> でなければならないことも確かめました。
+        さらに、<code>async let</code> で 2 つの取得を並行に待ち、キャンセルとエラーを区別し、<code>actor</code> でキャッシュを作りました。
+        次の項目では、<code>TodoRepository</code> の <code>Task.sleep</code> を <code>URLSession</code> による実際の通信に置き換え、<code>Codable</code> で JSON を読み込みます。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li><a href="https://docs.swift.org/swift-book/documentation/the-swift-programming-language/concurrency/">The Swift Programming Language: Concurrency</a></li>
+        <li>SwiftUI のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/swiftui/view/task(name:priority:file:line:_:)">task(name:priority:file:line:_:)</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftui/view/refreshable(action:)">refreshable(action:)</a></li>
+          </ul>
+        </li>
+        <li>Swift 標準ライブラリのドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/swift/mainactor">MainActor</a></li>
+            <li><a href="https://developer.apple.com/documentation/swift/task">Task</a> / <a href="https://developer.apple.com/documentation/swift/task/sleep(for:tolerance:clock:)">sleep(for:tolerance:clock:)</a></li>
+          </ul>
+        </li>
+        <li><a href="https://github.com/swiftlang/swift-evolution/blob/main/proposals/0461-async-function-isolation.md">SE-0461</a></li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/06-concurrency</code> の <code>ios/06-concurrency/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/06-concurrency/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../05-list-navigation/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">05: List と NavigationStack</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">07: URLSession と Codable</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
