@@ -35,7 +35,7 @@ Kotlin + Jetpack Compose を使った Android アプリ開発を学ぶトラッ�
 | 03 | [Compose 入門](./03-compose-basics/index.html) | Composable 関数の基本とプレビューを使った UI 構築ができる | 45分 |
 | 04 | [状態と State hoisting](./04-state/index.html) | `remember` / `mutableStateOf` と State hoisting パターンを実装できる | 45分 |
 | 05 | [Material3 と LazyColumn](./05-material3-lazycolumn/index.html) | `LazyColumn` で一覧を表示し、`Scaffold` のスロットでスクロール位置に応じたボタンと、削除の取り消し付き Snackbar を実装できる | 45分 |
-| 06 | Material3 の画面部品 | スワイプ削除・スクロールしても上端に残る見出しとフィルタ・ボトムシートとダイアログで一覧の操作を作れる | 45分 |
+| 06 | [Material3 の画面部品](./06-material3-components/index.html) | `SwipeToDismissBox` のスワイプ削除、`stickyHeader` と `FilterChip` のセクション分けと絞り込み、`ModalBottomSheet` と `AlertDialog` で一覧の操作を作れる | 60分 |
 | 07 | ViewModel と StateFlow | ViewModel と `StateFlow` を使った状態管理を実装できる | 45分 |
 | 08 | Navigation 3 | Navigation 3 で画面遷移とバックスタック管理を実装できる | 45分 |
 | 09 | Ktor と serialization で API 取得 | Ktor Client と kotlinx.serialization を使った API 通信を実装できる | 45分 |
