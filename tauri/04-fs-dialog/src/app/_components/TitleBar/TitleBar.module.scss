@@ -1,0 +1,22 @@
+.titleBar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  // titleBarStyle: "Overlay" はトラフィックライト（赤黄緑ボタン）を
+  // コンテンツの上に重ねて表示する。左側にその分の余白を空ける。
+  padding-left: 78px;
+  background: transparent;
+  user-select: none;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+  opacity: 0.6;
+}
