@@ -1,0 +1,1446 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10: WidgetKit と App Intents | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">10</li>
+        </ol>
+        <h1 class="lesson-title">WidgetKit と App Intents</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 中級</li>
+          <li class="lesson-meta__item">👤 対象: SwiftData で保存する ToDo アプリを作ったことがあり、その内容をホーム画面のウィジェットとショートカットアプリから扱えるようにしたい人</li>
+          <li class="lesson-meta__item">📋 前提: 09 で Swift Testing のテストを整えた <code>HandsonApp</code> プロジェクトが手元にあること。SwiftData の <code>ModelContainer</code>・<code>ModelContext</code>・<code>FetchDescriptor</code> と、Swift Testing の <code>@Suite</code>・<code>@Test</code> を使ったことがあること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../09-swift-testing/index.html">09 Swift Testing</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>AppIntent</code> でアプリの操作を定義し、<code>AppShortcutsProvider</code> でショートカットアプリに登録する</li>
+          <li>Widget Extension のターゲットを追加し、<code>WidgetBundle</code> が拡張の入り口になることを理解する</li>
+          <li><code>StaticConfiguration</code>・<code>TimelineProvider</code>・<code>TimelineEntry</code> でウィジェットの表示内容を組み立てる</li>
+          <li>App Group と <code>ModelConfiguration(groupContainer:)</code> で、アプリとウィジェットが同じデータベースを読む</li>
+          <li><code>WidgetCenter.shared.reloadAllTimelines()</code> で、アプリの変更をウィジェットに反映する</li>
+          <li><code>Button(intent:)</code> で、ウィジェットのボタンから Intent を実行する</li>
+          <li>Intent の処理をユニットテストで確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        08 から SwiftData で保存している ToDo アプリへ、ホーム画面のウィジェットとショートカットを加えます。ウィジェットは未完了の件数と新しい ToDo のタイトルを表示し、最新の ToDo を完了にするボタンも置きます。ショートカットアプリには「ToDo を追加」のショートカットを登録します。
+      </p>
+      <p>
+        ウィジェットは、アプリとは別の「拡張（App Extension）」として、別のプロセスで動きます。そのため、アプリのデータベースをそのままでは読めません。App Group という共有の保存場所を使い、アプリとウィジェットが同じデータベースを開くようにします。
+        1 ステップで扱う概念は 1 つです。完成すると、ユニットテストは 73 から 76 に増えます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョンと並行処理の設定</p>
+          <p>
+            Xcode 27.0 / Swift 6.4 / iPhone 17（iOS 27.0）のシミュレータは 09 と同じです。バージョンは執筆時点（2026年10月）のものです。WidgetKit と App Intents は SDK に含まれているので、追加のパッケージは要りません。
+          </p>
+          <p>
+            アプリターゲットは 09 と同じく、<code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> です。ステップ 2 で追加するウィジェットのターゲットにはこの設定が無く、型は既定でメインアクターの外（nonisolated）にあります。
+            アプリとウィジェットの両方に入れるファイルでは、この違いを意識します（ステップ 4）。
+          </p>
+          <p>この項目の手順は、シミュレータで動かす前提です。開発チーム（<code>Team</code>）を設定していない状態で、App Group を含めて動作を確かめました。</p>
+        </div>
+      </div>
+
+      <h2 id="preparation">準備</h2>
+      <p>
+        09 の完成コードをそのまま出発点にします。<code>09-swift-testing</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>10-widget-intents</code> にコピーします。
+        プロジェクト名・ターゲット名・Bundle Identifier（<code>com.example.HandsonApp</code>）は変えません。
+      </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 09-swift-testing 10-widget-intents</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 10-widget-intents/HandsonApp</span><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span></pre>
+</div>
+
+      <p>以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。Xcode の場合は、<code>10-widget-intents/HandsonApp/HandsonApp.xcodeproj</code> を開きます。</p>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">AppIntent と AppShortcutsProvider でショートカットを作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            App Intents は、アプリの操作を「Intent」という型で宣言し、ショートカットアプリや Siri、ウィジェットから呼べるようにする仕組みです。まず、ToDo を 1 件追加する Intent を作ります。
+            <code>HandsonApp</code> フォルダに <code>Intents</code> フォルダを作り、<code>AddTodoIntent.swift</code> を追加して次の内容にします（<code>Targets</code> は <code>HandsonApp</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Intents/AddTodoIntent.swift（ステップ 1 の版）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import AppIntents
+import SwiftData
+
+// ショートカットや Siri から ToDo を追加する
+struct AddTodoIntent: AppIntent {
+    static let title: LocalizedStringResource = "ToDo を追加"
+
+    @Parameter(title: "タイトル")
+    var todoTitle: String
+
+    @MainActor
+    func perform() async throws -&gt; some IntentResult &amp; ProvidesDialog {
+        let container = try ModelContainer(for: TodoRecord.self)
+        try addTodo(title: todoTitle, in: container.mainContext)
+        return .result(dialog: "「\(todoTitle)」を追加しました")
+    }
+}
+
+// テストからも呼べるよう、保存処理は関数に分ける
+func addTodo(title: String, in context: ModelContext) throws {
+    context.insert(TodoRecord(title: title))
+    try context.save()
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>AppIntent</code> に準拠した型が 1 つの操作です。<code>title</code> はショートカットアプリなどに表示される名前です。</li>
+            <li><code>@Parameter(title: "タイトル")</code>: Intent が実行時に受け取る値です。<code>title</code> は、ショートカットアプリなどで値を表す名前になります。</li>
+            <li><code>perform()</code>: Intent の本体です。戻り値の <code>ProvidesDialog</code> は、実行後にダイアログ（ここでは「「…」を追加しました」）を表示することを表します。</li>
+            <li>この時点では、08 と同じ <code>ModelContainer(for:)</code>（アプリの保存場所）を開きます。ステップ 4 で、ウィジェットと共有する保存場所に切り替えます。</li>
+            <li>保存の処理は <code>addTodo(title:in:)</code> という関数に分けます。ステップ 7 で、この関数をメモリ上のコンテナに対してテストします。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>perform()</code> の <code>@MainActor</code> を付け忘れると、ビルドが通らない</p>
+              <p><code>@MainActor</code> の行を消してビルドすると、次の 2 つのエラーになります。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">AddTodoIntent.swift:13:53: error: non-Sendable type 'ModelContext' of property 'mainContext' cannot exit main actor-isolated context [#NonSendableExitingActor]</span><span class="terminal__line">AddTodoIntent.swift:13:9: error: expression is 'async' but is not marked with 'await'</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                <code>ModelContainer</code> の <code>mainContext</code> はメインアクターに分離されています。アプリターゲットは既定でメインアクターですが、<code>AppIntent</code> の <code>perform()</code> はプロトコルの要件の都合で既定では分離されず、そこから <code>mainContext</code> に触れないためです。
+                <code>@MainActor</code> を戻すとビルドが通ります。
+              </p>
+            </div>
+          </div>
+
+          <p>次に、この Intent をショートカットとして登録します。同じ <code>Intents</code> フォルダに <code>TodoShortcuts.swift</code> を追加します（<code>Targets</code> は <code>HandsonApp</code>）。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Intents/TodoShortcuts.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import AppIntents
+
+struct TodoShortcuts: AppShortcutsProvider {
+    static var appShortcuts: [AppShortcut] {
+        AppShortcut(
+            intent: AddTodoIntent(),
+            phrases: ["\(.applicationName) に ToDo を追加"],
+            shortTitle: "ToDo を追加",
+            systemImageName: "plus.circle"
+        )
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>AppShortcutsProvider</code> に準拠した型の <code>appShortcuts</code> に並べた Intent は、アプリをインストールしただけでショートカットアプリに表示されます。利用者がショートカットを自分で作る必要はありません。</li>
+            <li><code>phrases</code> は Siri に話しかけるときの言い回しです。<code>\(.applicationName)</code>（アプリ名）を必ず含めます。</li>
+            <li><code>shortTitle</code> と <code>systemImageName</code> は、ショートカットアプリのタイルに表示される名前と SF Symbols のアイコンです。</li>
+            <li><code>AppShortcutsProvider</code> はアプリに 1 つだけ置きます。この型はアプリ専用で、ステップ 2 で追加するウィジェットには入れません。</li>
+          </ul>
+
+          <p>
+            ビルドすると、Intent とショートカットの情報が <code>.app</code> の中の <code>Metadata.appintents/extract.actionsdata</code>（JSON）に書き出されます。中身を <code>python3</code> で表示して確かめます。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(list(d["actions"])); print(json.dumps(d["autoShortcuts"], ensure_ascii=False))' $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app/Metadata.appintents/extract.actionsdata</span><span class="terminal__line">['AddTodoIntent']</span><span class="terminal__line">[{"actionIdentifier": "AddTodoIntent", …, "phraseTemplates": [{"alternatives": [], "key": "${applicationName} に ToDo を追加"}], "shortTitle": {"alternatives": [], "key": "ToDo を追加"}, "systemImageName": "plus.circle"}]</span></pre>
+</div>
+
+          <ul>
+            <li><code>actions</code> に <code>AddTodoIntent</code> があり、<code>autoShortcuts</code>（アプリが用意するショートカット）にフレーズ・<code>shortTitle</code>・アイコンが入っています。</li>
+            <li>フレーズの <code>\(.applicationName)</code> は <code>${applicationName}</code> という置き換え用の記号になります。</li>
+            <li>ショートカットアプリでの表示は、完成後のステップ 7 で確かめます。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ビルドが <code>** BUILD SUCCEEDED **</code> で終わることを確かめます。<code>extract.actionsdata</code> の <code>actions</code> が <code>AddTodoIntent</code> を含むことも確かめます。<code>autoShortcuts</code> のフレーズが <code>${applicationName} に ToDo を追加</code> なら OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">Widget Extension のターゲットを追加する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ウィジェットは、アプリに埋め込む拡張（App Extension）として作ります。拡張はアプリとは別のターゲットで、ビルドすると <code>.appex</code> というバンドルになり、アプリの <code>.app</code> の中に入ります。
+            Xcode で次の順に操作して、ターゲットを追加します。
+          </p>
+
+          <ol>
+            <li>メニューの <code>File</code> &gt; <code>New</code> &gt; <code>Target…</code> を選びます。</li>
+            <li><code>iOS</code> の一覧から <code>Widget Extension</code> を選びます。</li>
+            <li>設定を次のとおりにします。
+              <ul>
+                <li><code>Product Name</code>: <code>TodoWidget</code></li>
+                <li><code>Include Live Activity</code>: オフ</li>
+                <li><code>Include Control</code>: オフ</li>
+                <li><code>Include Configuration App Intent</code>: オフ</li>
+                <li><code>Embed in Application</code>: <code>HandsonApp</code></li>
+              </ul>
+            </li>
+            <li><code>Finish</code> をクリックしてターゲットを作成します。</li>
+          </ol>
+
+          <ul>
+            <li>3 つの <code>Include …</code> は、既定では全てオンです。この項目ではホーム画面のウィジェットだけを作るので、全てオフにします。オンのままにすると、この項目で使わないファイルが追加されます。</li>
+            <li><code>Product Name</code> に <code>TodoWidget</code> と入れると、<strong>ターゲット名は <code>TodoWidgetExtension</code></strong>、フォルダは <code>TodoWidget/</code>、成果物は <code>TodoWidgetExtension.appex</code> になります。名前が 2 種類あるので注意してください。</li>
+            <li>作成後に、新しいターゲットのスキームに切り替えるかを尋ねるダイアログが出ることがあります。この項目のビルドと実行は、全てアプリの <code>HandsonApp</code> スキームで行います。ツールバーのスキームが <code>HandsonApp</code> になっていることを確かめてください。</li>
+          </ul>
+
+          <p>テンプレートは、<code>TodoWidget</code> フォルダに次の 4 つを作ります。この項目では、<code>TodoWidget.swift</code> だけをステップ 3 で書き換え、残りはそのまま使います。消すファイルはありません。</p>
+
+          <ul>
+            <li><code>TodoWidgetBundle.swift</code>: 拡張の入り口（そのまま使う）</li>
+            <li><code>TodoWidget.swift</code>: ウィジェットの雛形。絵文字と時刻を表示する <code>Provider</code> / <code>SimpleEntry(date:emoji:)</code> / <code>StaticConfiguration</code> が書かれている（ステップ 3 で全体を書き換える）</li>
+            <li><code>Assets.xcassets</code>: <code>AccentColor</code>・<code>WidgetBackground</code>・<code>AppIcon</code>（そのまま使う）</li>
+            <li><code>Info.plist</code>: 拡張の種類を表すキーだけを持つ（そのまま使う）</li>
+          </ul>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">TodoWidget/TodoWidgetBundle.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">//
+//  TodoWidgetBundle.swift
+//  TodoWidget
+//
+
+import WidgetKit
+import SwiftUI
+
+@main
+struct TodoWidgetBundle: WidgetBundle {
+    var body: some Widget {
+        TodoWidget()
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li>拡張には <code>App</code> がありません。代わりに、<code>@main</code> を付けた <code>WidgetBundle</code> が入り口になります。</li>
+            <li><code>body</code> に、この拡張が提供するウィジェットを並べます。ウィジェットを増やすときは、ここに 1 行ずつ足します。</li>
+          </ul>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">XML</span>
+  <span class="code-block__filename">TodoWidget/Info.plist</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-xml">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+&lt;plist version="1.0"&gt;
+&lt;dict&gt;
+	&lt;key&gt;NSExtension&lt;/key&gt;
+	&lt;dict&gt;
+		&lt;key&gt;NSExtensionPointIdentifier&lt;/key&gt;
+		&lt;string&gt;com.apple.widgetkit-extension&lt;/string&gt;
+	&lt;/dict&gt;
+&lt;/dict&gt;
+&lt;/plist&gt;</code></pre>
+</div>
+
+          <p><code>NSExtensionPointIdentifier</code> の <code>com.apple.widgetkit-extension</code> が、この拡張がウィジェットであることを表します。</p>
+
+          <p>
+            この操作で <code>project.pbxproj</code> に追加される主なものを抜粋します。手で書く必要はありません。ID（<code>A1000…</code>）は Xcode が作る値なので、手元のプロジェクトとは違います。細部（<code>INFOPLIST_KEY_*</code> の有無など）も、Xcode のバージョンによって違うことがあります。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">pbxproj</span>
+  <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（追加される部分の抜粋）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-plaintext">/* 新しいターゲット */
+		A10000000000000000000040 /* TodoWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000805 /* Build configuration list for PBXNativeTarget "TodoWidgetExtension" */;
+			buildPhases = (
+				A10000000000000000000604 /* Sources */,
+				A10000000000000000000404 /* Frameworks */,
+				A10000000000000000000704 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000304 /* TodoWidget */,
+			);
+			name = TodoWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = TodoWidgetExtension;
+			productReference = A10000000000000000000204 /* TodoWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+…
+/* アプリターゲットの buildPhases に追加される。拡張をアプリの中へコピーする */
+		A10000000000000000001101 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A10000000000000000001001 /* TodoWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+…
+/* 同期フォルダ TodoWidget。Info.plist はリソースとしてコピーしない（例外） */
+		A10000000000000000000304 /* TodoWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A10000000000000000001201 /* Exceptions for "TodoWidget" folder in "TodoWidgetExtension" target */,
+			);
+			path = TodoWidget;
+			sourceTree = "&lt;group&gt;";
+		};
+		A10000000000000000001201 /* Exceptions for "TodoWidget" folder in "TodoWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A10000000000000000000040 /* TodoWidgetExtension */;
+		};
+…
+/* TodoWidgetExtension の Debug の build settings（Release も同じ） */
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = TodoWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = TodoWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.HandsonApp.TodoWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};</code></pre>
+</div>
+
+          <ul>
+            <li><code>productType = "com.apple.product-type.app-extension"</code>: 拡張のターゲットです。<code>fileSystemSynchronizedGroups</code> に <code>TodoWidget</code> フォルダがあり、フォルダに置いたファイルが自動でターゲットに入ります（01 から使っている同期フォルダ）。</li>
+            <li><code>Embed Foundation Extensions</code>: アプリのビルドの最後に、<code>TodoWidgetExtension.appex</code> を <code>HandsonApp.app/PlugIns/</code> にコピーするフェーズです（<code>dstSubfolderSpec = 13</code> が PlugIns を指す）。アプリのターゲットには、拡張への依存（<code>PBXTargetDependency</code>）も加わるので、<code>HandsonApp</code> スキームをビルドすると拡張も一緒にビルドされます。</li>
+            <li><code>PRODUCT_BUNDLE_IDENTIFIER = com.example.HandsonApp.TodoWidget</code>: 拡張の Bundle Identifier は、アプリの ID の後ろに名前を付けた形です。</li>
+            <li><code>SWIFT_VERSION = 5.0</code>: <strong>新しいターゲットは Swift 5 言語モードで作られます</strong>。<code>SWIFT_DEFAULT_ACTOR_ISOLATION</code> も無いので、ウィジェットの型は既定で nonisolated です。</li>
+          </ul>
+
+          <p>01 と同じ手順で、拡張のターゲットを Swift 6 言語モードに切り替えます。</p>
+
+          <ol>
+            <li>左のナビゲータの一番上にある青い <code>HandsonApp</code>（プロジェクト）を選びます。</li>
+            <li><code>TARGETS</code> の <code>TodoWidgetExtension</code> を選び、<code>Build Settings</code> タブの検索欄に <code>Swift Language Version</code> と入力して、値を <code>Swift 6</code> にします。</li>
+          </ol>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（TodoWidgetExtension の Debug / Release の 2 か所）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line diff-line--remove">- 				SWIFT_VERSION = 5.0;</span><span class="diff-line diff-line--add">+ 				SWIFT_VERSION = 6.0;</span></pre>
+</div>
+
+          <p>テンプレートのコードのまま、Swift 6 言語モードでもビルドが通ります。ビルドして、<code>.app</code> の中に拡張が入ったことを確かめます。続けてシミュレータにインストールし、<code>pluginkit</code> で拡張が登録されたかを調べます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app/PlugIns</span><span class="terminal__line">TodoWidgetExtension.appex</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl boot 'iPhone 17'</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl spawn booted pluginkit -m -v -i com.example.HandsonApp.TodoWidget</span><span class="terminal__line">     com.example.HandsonApp.TodoWidget(1.0)	AC004BBE-…	2026-10-03 16:52:23 +0000	…/HandsonApp.app/PlugIns/TodoWidgetExtension.appex</span><span class="terminal__line"> (1 plug-in)</span></pre>
+</div>
+
+          <ul>
+            <li>シミュレータを起動済みの場合は、<code>simctl boot</code> は失敗します。その場合は飛ばしてください。</li>
+            <li><code>pluginkit -m</code> は、シミュレータに登録された拡張を一覧します。<code>-i</code> で Bundle Identifier を指定しています。UUID・日時・パスは環境ごとに違います。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> になり、<code>HandsonApp.app/PlugIns</code> に <code>TodoWidgetExtension.appex</code> があることを確かめます。<code>pluginkit</code> の出力が <code>(1 plug-in)</code> で終われば、シミュレータに拡張が登録されています。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">StaticConfiguration と TimelineProvider で静的なウィジェットを書く</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            テンプレートの <code>TodoWidget.swift</code> を、ToDo の件数とタイトルを表示するウィジェットに書き換えます。この時点では、データベースはまだ読まず、決まったデータを表示します。
+            ファイル全体を次の内容に置き換えます。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">TodoWidget/TodoWidget.swift（ステップ 3 の版）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">//
+//  TodoWidget.swift
+//  TodoWidget
+//
+
+import SwiftUI
+import WidgetKit
+
+// ウィジェットに表示する内容（ステップ 4 で共有ファイルへ移す）
+struct TodoSnapshot: Equatable, Sendable {
+    let remaining: Int
+    let titles: [String]
+}
+
+struct TodoEntry: TimelineEntry {
+    let date: Date
+    let snapshot: TodoSnapshot
+}
+
+struct Provider: TimelineProvider {
+    func placeholder(in context: Context) -&gt; TodoEntry {
+        loadEntry()
+    }
+
+    func getSnapshot(in context: Context, completion: @escaping (TodoEntry) -&gt; Void) {
+        completion(loadEntry())
+    }
+
+    func getTimeline(in context: Context, completion: @escaping (Timeline&lt;TodoEntry&gt;) -&gt; Void) {
+        // 更新は自分で依頼する（.never）。ここでは固定のデータを 1 件だけ返す
+        completion(Timeline(entries: [loadEntry()], policy: .never))
+    }
+
+    private func loadEntry() -&gt; TodoEntry {
+        TodoEntry(date: .now, snapshot: TodoSnapshot(remaining: 2, titles: ["牛乳を買う", "本を返す"]))
+    }
+}
+
+struct TodoWidgetEntryView: View {
+    var entry: TodoEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("残り \(entry.snapshot.remaining) 件")
+                .font(.headline)
+            ForEach(entry.snapshot.titles.indices, id: \.self) { index in
+                Text(entry.snapshot.titles[index])
+                    .font(.caption)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct TodoWidget: Widget {
+    let kind: String = "TodoWidget"
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: Provider()) { entry in
+            TodoWidgetEntryView(entry: entry)
+                .containerBackground(.fill.tertiary, for: .widget)
+        }
+        .configurationDisplayName("ToDo")
+        .description("未完了の ToDo を表示します。")
+        .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
+
+#Preview(as: .systemSmall) {
+    TodoWidget()
+} timeline: {
+    TodoEntry(date: .now, snapshot: TodoSnapshot(remaining: 2, titles: ["牛乳を買う", "本を返す"]))
+}</code></pre>
+</div>
+
+          <p>ウィジェットは、次の 3 つの部品で組み立てます。</p>
+
+          <ul>
+            <li><strong><code>TimelineEntry</code></strong>（<code>TodoEntry</code>）: ある時刻に表示する内容です。<code>date</code>（表示を始める時刻）が必須で、表示に使う値（ここでは <code>TodoSnapshot</code>）を自由に足します。</li>
+            <li><strong><code>TimelineProvider</code></strong>（<code>Provider</code>）: エントリーを作ってシステムに渡します。<code>placeholder</code> はデータが届く前の仮の表示、<code>getSnapshot</code> はウィジェットギャラリーなどで使う 1 件、<code>getTimeline</code> はホーム画面に表示するエントリーの並び（タイムライン）です。ここでは 3 つとも <code>loadEntry()</code> の結果を返します。</li>
+            <li><strong><code>StaticConfiguration</code></strong>: 利用者が設定する項目の無いウィジェットの構成です。<code>kind</code> はウィジェットを識別する文字列で、<code>provider</code> が作ったエントリーを、クロージャーで View（<code>TodoWidgetEntryView</code>）に渡します。</li>
+          </ul>
+
+          <ul>
+            <li><code>Timeline(entries:policy: .never)</code>: <code>policy</code> は、次にいつタイムラインを作り直すかの指定です。<code>.never</code> は、システムからは作り直さず、アプリから依頼したときだけ作り直します（ステップ 5）。</li>
+            <li><code>.containerBackground(.fill.tertiary, for: .widget)</code>: ウィジェットの背景の指定です。テンプレートと同じ書き方です。</li>
+            <li><code>.configurationDisplayName</code> と <code>.description</code> は、ウィジェットギャラリーに表示される名前と説明です。<code>.supportedFamilies</code> で、小（<code>.systemSmall</code>）と中（<code>.systemMedium</code>）のサイズに対応します。</li>
+            <li><code>TodoSnapshot</code> は、表示する内容（未完了の件数とタイトル）をまとめた型です。ステップ 4 で、アプリと共有するファイルに移します。</li>
+            <li>末尾の <code>#Preview(as: .systemSmall)</code> は、Canvas でウィジェットをプレビューするためのものです。テンプレートにも付いています。</li>
+          </ul>
+
+          <p>
+            ビルドして、アプリをシミュレータで実行します（Xcode では、スキームを <code>HandsonApp</code>、実行先を <code>iPhone 17</code> にして <kbd>⌘</kbd> + <kbd>R</kbd>）。アプリと一緒に、拡張もシミュレータにインストールされます。
+            続けて、シミュレータのホーム画面にウィジェットを置きます。ボタンの表記は、シミュレータの言語が英語のときのものです。
+          </p>
+
+          <ol>
+            <li>シミュレータでホーム画面に戻ります。</li>
+            <li>ホーム画面の何も無いところを長押しし、<code>Edit</code> から <code>Add Widget</code> を選びます。</li>
+            <li>ウィジェットギャラリーの一覧から <code>HandsonApp</code> を選びます。</li>
+            <li><code>Add Widget</code> ボタンを押し、<code>Done</code> で編集を終えます。</li>
+          </ol>
+
+          <p>
+            ギャラリーで <code>HandsonApp</code> を選ぶと、<code>.configurationDisplayName</code> の <code>ToDo</code> と、<code>.description</code> の <code>未完了の ToDo を表示します。</code> が表示されます。プレビューには <code>残り 2 件</code>・<code>牛乳を買う</code>・<code>本を返す</code> が並びます。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ギャラリーで <code>ToDo</code> と <code>未完了の ToDo を表示します。</code> が表示され、ホーム画面のウィジェットが <code>残り 2 件</code>・<code>牛乳を買う</code>・<code>本を返す</code> を表示することを確かめます。ギャラリーにテンプレートの古いウィジェットが出る場合は、<a href="#troubleshooting">つまずきポイント</a>を参照してください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">App Group と ModelConfiguration(groupContainer:) でデータを共有する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ウィジェットの拡張は、アプリとは別のプロセスで動き、アプリのコンテナ（保存場所）を読めません。両方から読み書きできる共有の場所として、App Group を使います。
+            App Group は <code>group.</code> で始まる ID で識別し、同じ ID を持つアプリと拡張が、同じ共有コンテナを使えます。この項目の ID は <code>group.com.example.HandsonApp</code> です。
+          </p>
+
+          <p>
+            Xcode では、ターゲットの <code>Signing &amp; Capabilities</code> タブにある <code>+ Capability</code> から <code>App Groups</code> を追加し、ID を登録するのが一般的な手順です。<code>HandsonApp</code> と <code>TodoWidgetExtension</code> の両方のターゲットで行います。
+            開発チームを設定していない場合の画面の動きは確かめていません。うまく追加できない場合は、次のとおりファイルと設定を直接作ります。結果は同じです。
+          </p>
+
+          <p>App Group を宣言する entitlements ファイルを 2 つ作ります。中身は同じです。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">XML</span>
+  <span class="code-block__filename">HandsonApp/HandsonApp.entitlements</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-xml">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+&lt;plist version="1.0"&gt;
+&lt;dict&gt;
+	&lt;key&gt;com.apple.security.application-groups&lt;/key&gt;
+	&lt;array&gt;
+		&lt;string&gt;group.com.example.HandsonApp&lt;/string&gt;
+	&lt;/array&gt;
+&lt;/dict&gt;
+&lt;/plist&gt;</code></pre>
+</div>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">XML</span>
+  <span class="code-block__filename">TodoWidgetExtension.entitlements（HandsonApp.xcodeproj と同じフォルダ）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-xml">&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+&lt;plist version="1.0"&gt;
+&lt;dict&gt;
+	&lt;key&gt;com.apple.security.application-groups&lt;/key&gt;
+	&lt;array&gt;
+		&lt;string&gt;group.com.example.HandsonApp&lt;/string&gt;
+	&lt;/array&gt;
+&lt;/dict&gt;
+&lt;/plist&gt;</code></pre>
+</div>
+
+          <p>
+            それぞれのターゲットの <code>Build Settings</code> で、<code>Code Signing Entitlements</code> にファイルのパスを設定します。<code>project.pbxproj</code> では <code>CODE_SIGN_ENTITLEMENTS</code> という設定になります。
+          </p>
+
+          <ul>
+            <li><code>HandsonApp</code>: <code>HandsonApp/HandsonApp.entitlements</code></li>
+            <li><code>TodoWidgetExtension</code>: <code>TodoWidgetExtension.entitlements</code></li>
+          </ul>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（各ターゲットの Debug / Release）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;</span><span class="diff-line diff-line--add">+ 				CODE_SIGN_ENTITLEMENTS = HandsonApp/HandsonApp.entitlements;</span><span class="diff-line">  				CODE_SIGN_STYLE = Automatic;</span><span class="diff-line">  …</span><span class="diff-line">  				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;</span><span class="diff-line diff-line--add">+ 				CODE_SIGN_ENTITLEMENTS = TodoWidgetExtension.entitlements;</span><span class="diff-line">  				CODE_SIGN_STYLE = Automatic;</span></pre>
+</div>
+
+          <p>
+            次に、アプリとウィジェットが同じデータベースを開くための設定を 1 つのファイルにまとめます。<code>HandsonApp</code> フォルダに <code>Shared</code> フォルダを作り、<code>SharedStore.swift</code> を追加します。
+            ステップ 3 で <code>TodoWidget.swift</code> に置いた <code>TodoSnapshot</code> も、このファイルに移します。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Shared/SharedStore.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import SwiftData
+
+// アプリとウィジェットで同じデータベースを開くための設定
+nonisolated enum SharedStore {
+    static let appGroupID = "group.com.example.HandsonApp"
+
+    static func makeContainer(inMemory: Bool = false) throws -&gt; ModelContainer {
+        let configuration = inMemory
+            ? ModelConfiguration(isStoredInMemoryOnly: true)
+            : ModelConfiguration(groupContainer: .identifier(appGroupID))
+        return try ModelContainer(for: TodoRecord.self, configurations: configuration)
+    }
+}
+
+// ウィジェットに表示する内容
+nonisolated struct TodoSnapshot: Equatable, Sendable {
+    let remaining: Int
+    let titles: [String]
+
+    static let empty = TodoSnapshot(remaining: 0, titles: [])
+}
+
+extension SharedStore {
+    // 未完了の件数と、新しい順の先頭 limit 件のタイトル
+    static func snapshot(in context: ModelContext, limit: Int = 3) throws -&gt; TodoSnapshot {
+        var descriptor = FetchDescriptor&lt;TodoRecord&gt;(
+            predicate: #Predicate { !$0.isDone },
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        let remaining = try context.fetchCount(descriptor)
+        descriptor.fetchLimit = limit
+        let titles = try context.fetch(descriptor).map(\.title)
+        return TodoSnapshot(remaining: remaining, titles: titles)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><strong><code>ModelConfiguration(groupContainer: .identifier(appGroupID))</code></strong>: データベースを、App Group の共有コンテナに作ります。アプリとウィジェットがこの設定でコンテナを作れば、同じファイルを読み書きします。</li>
+            <li>App Group の ID は <code>appGroupID</code> の 1 か所にまとめます。entitlements の ID と 1 文字でも違うと、共有コンテナを開けません（<a href="#troubleshooting">つまずきポイント</a>）。</li>
+            <li><code>inMemory: true</code> のときは、09 と同じくメモリ上だけのコンテナを作ります。UI テストとユニットテストで使います。</li>
+            <li><code>snapshot(in:limit:)</code>: 未完了の件数（<code>fetchCount</code>）と、新しい順の先頭 <code>limit</code> 件のタイトルを返します。</li>
+            <li>このファイルは、既定がメインアクターのアプリターゲットと、既定が nonisolated のウィジェットのターゲットの両方でコンパイルされます。<code>nonisolated</code> を明示し、どちらのターゲットでも同じく、メインアクターに縛られない型にしています。</li>
+          </ul>
+
+          <p>アプリは、<code>SharedStore</code> でコンテナを作るように変えます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/HandsonAppApp.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">      init() {</span><span class="diff-line">          // UI テストは起動引数 -uiTesting を付けて起動する。</span><span class="diff-line">          // そのときはメモリ上だけのコンテナを使い、テストごとにまっさらな状態で始める</span><span class="diff-line">          let isUITesting = ProcessInfo.processInfo.arguments.contains("-uiTesting")</span><span class="diff-line diff-line--remove">-         let configuration = ModelConfiguration(isStoredInMemoryOnly: isUITesting)</span><span class="diff-line">          do {</span><span class="diff-line diff-line--remove">-             container = try ModelContainer(for: TodoRecord.self, configurations: configuration)</span><span class="diff-line diff-line--add">+             container = try SharedStore.makeContainer(inMemory: isUITesting)</span><span class="diff-line">          } catch {</span><span class="diff-line">              fatalError("ModelContainer を作れませんでした: \(error)")</span><span class="diff-line">          }</span><span class="diff-line">      }</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Intents/AddTodoIntent.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">      @MainActor</span><span class="diff-line">      func perform() async throws -&gt; some IntentResult &amp; ProvidesDialog {</span><span class="diff-line diff-line--remove">-         let container = try ModelContainer(for: TodoRecord.self)</span><span class="diff-line diff-line--add">+         let container = try SharedStore.makeContainer()</span><span class="diff-line">          try addTodo(title: todoTitle, in: container.mainContext)</span><span class="diff-line">          return .result(dialog: "「\(todoTitle)」を追加しました")</span><span class="diff-line">      }</span></pre>
+</div>
+
+          <p>ウィジェットは、固定のデータの代わりに、共有のデータベースから読みます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">TodoWidget/TodoWidget.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  TodoWidget.swift</span><span class="diff-line">  //  TodoWidget</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line">  import WidgetKit</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- // ウィジェットに表示する内容（ステップ 4 で共有ファイルへ移す）</span><span class="diff-line diff-line--remove">- struct TodoSnapshot: Equatable, Sendable {</span><span class="diff-line diff-line--remove">-     let remaining: Int</span><span class="diff-line diff-line--remove">-     let titles: [String]</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--remove">- </span><span class="diff-line">  struct TodoEntry: TimelineEntry {</span><span class="diff-line">      let date: Date</span><span class="diff-line">      let snapshot: TodoSnapshot</span><span class="diff-line">  }</span><span class="diff-line">  …</span><span class="diff-line">      func getTimeline(in context: Context, completion: @escaping (Timeline&lt;TodoEntry&gt;) -&gt; Void) {</span><span class="diff-line diff-line--remove">-         // 更新は自分で依頼する（.never）。ここでは固定のデータを 1 件だけ返す</span><span class="diff-line diff-line--add">+         // 更新はアプリ側から依頼する（.never）</span><span class="diff-line">          completion(Timeline(entries: [loadEntry()], policy: .never))</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     private func loadEntry() -&gt; TodoEntry {</span><span class="diff-line diff-line--remove">-         TodoEntry(date: .now, snapshot: TodoSnapshot(remaining: 2, titles: ["牛乳を買う", "本を返す"]))</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--add">+     // ウィジェットはアプリとは別のプロセス。App Group のストアを開いて読む</span><span class="diff-line diff-line--add">+     private func loadEntry() -&gt; TodoEntry {</span><span class="diff-line diff-line--add">+         do {</span><span class="diff-line diff-line--add">+             let container = try SharedStore.makeContainer()</span><span class="diff-line diff-line--add">+             let snapshot = try SharedStore.snapshot(in: ModelContext(container))</span><span class="diff-line diff-line--add">+             return TodoEntry(date: .now, snapshot: snapshot)</span><span class="diff-line diff-line--add">+         } catch {</span><span class="diff-line diff-line--add">+             return TodoEntry(date: .now, snapshot: .empty)</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  }</span><span class="diff-line">  …</span></pre>
+</div>
+
+          <ul>
+            <li><code>ModelContext(container)</code>: <code>mainContext</code>（メインアクター専用）ではなく、新しいコンテキストを作って読みます。<code>getTimeline</code> などがメインスレッドで呼ばれるとは限らないためです。</li>
+            <li>読み込みに失敗したときは <code>.empty</code>（0 件）を返します。そのため、ウィジェットの表示だけでは、読み込みの失敗と、本当に 0 件のときとを見分けられません。</li>
+          </ul>
+
+          <p>
+            最後に、ウィジェットのターゲットでも使うアプリのファイルを、<code>TodoWidgetExtension</code> のターゲットに入れます。ファイルを選び、右側のインスペクタの <code>Target Membership</code> で <code>TodoWidgetExtension</code> にチェックを付けます。
+            対象は次の 3 つです。
+          </p>
+
+          <ul>
+            <li><code>Shared/SharedStore.swift</code></li>
+            <li><code>Models/TodoRecord.swift</code>（<code>SharedStore</code> が使う <code>@Model</code>）</li>
+            <li><code>Models/TodoItem.swift</code>（<code>TodoRecord</code> が使う <code>Priority</code> がこのファイルにある）</li>
+          </ul>
+
+          <p><code>project.pbxproj</code> では、<code>HandsonApp</code> の同期フォルダに対する「<code>TodoWidgetExtension</code> 向けの例外」として記録されます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（抜粋）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line diff-line--add">+ 		A10000000000000000001202 /* Exceptions for "HandsonApp" folder in "TodoWidgetExtension" target */ = {</span><span class="diff-line diff-line--add">+ 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;</span><span class="diff-line diff-line--add">+ 			membershipExceptions = (</span><span class="diff-line diff-line--add">+ 				Models/TodoItem.swift,</span><span class="diff-line diff-line--add">+ 				Models/TodoRecord.swift,</span><span class="diff-line diff-line--add">+ 				Shared/SharedStore.swift,</span><span class="diff-line diff-line--add">+ 			);</span><span class="diff-line diff-line--add">+ 			target = A10000000000000000000040 /* TodoWidgetExtension */;</span><span class="diff-line diff-line--add">+ 		};</span><span class="diff-line">  …</span><span class="diff-line">  		A10000000000000000000301 /* HandsonApp */ = {</span><span class="diff-line">  			isa = PBXFileSystemSynchronizedRootGroup;</span><span class="diff-line diff-line--add">+ 			exceptions = (</span><span class="diff-line diff-line--add">+ 				A10000000000000000001202 /* Exceptions for "HandsonApp" folder in "TodoWidgetExtension" target */,</span><span class="diff-line diff-line--add">+ 			);</span><span class="diff-line">  			path = HandsonApp;</span><span class="diff-line">  			sourceTree = "&lt;group&gt;";</span><span class="diff-line">  		};</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>TodoRecord.swift</code> をウィジェットのターゲットに入れ忘れると、<code>cannot find 'TodoRecord' in scope</code></p>
+              <p><code>TodoItem.swift</code> と <code>SharedStore.swift</code> だけを <code>TodoWidgetExtension</code> に入れてビルドすると、次のエラーが続けて出ます。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">SharedStore.swift:12:40: error: cannot find 'TodoRecord' in scope</span><span class="terminal__line">SharedStore.swift:27:42: error: cannot find type 'TodoRecord' in scope</span><span class="terminal__line">SharedStore.swift:28:24: error: generic parameter 'each Input' could not be inferred</span><span class="terminal__line">SharedStore.swift:29:37: error: cannot infer key path type from context; consider explicitly specifying a root type</span><span class="terminal__line">SharedStore.swift:31:37: error: generic parameter 'T' could not be inferred</span><span class="terminal__line">SharedStore.swift:33:34: error: generic parameter 'T' could not be inferred</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                先頭の <code>cannot find 'TodoRecord' in scope</code> に注目します。後ろの <code>could not be inferred</code> は、型が見つからないことから連鎖したエラーです。
+                エラーは、共有した <code>SharedStore.swift</code> を拡張のターゲットとしてコンパイルしたときに出ます。アプリのターゲットでは <code>TodoRecord</code> が見えるので、ファイルの中身ではなく Target Membership を疑います。<code>TodoRecord.swift</code> にもチェックを付けると直ります。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">これまでに追加した ToDo は表示されなくなる</p>
+              <p>
+                データベースの場所が、アプリのコンテナから App Group の共有コンテナに変わります。08・09 で保存した ToDo は元の場所に残り、新しい場所へは移しません。アプリを起動すると一覧は空になるので、ToDo を入れ直してください。
+              </p>
+            </div>
+          </div>
+
+          <p>ビルドしてアプリを起動し、ToDo を 1 件（ここでは「ID確認」）追加します。その後、共有コンテナにデータベースができたかを調べます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl get_app_container booted com.example.HandsonApp groups</span><span class="terminal__line">group.com.example.HandsonApp	/Users/&lt;ユーザー名&gt;/Library/Developer/CoreSimulator/Devices/&lt;デバイス ID&gt;/data/Containers/Shared/AppGroup/&lt;UUID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> G=$(xcrun simctl get_app_container booted com.example.HandsonApp groups | awk '{print $2}')</span><span class="terminal__line"><span class="terminal__prompt">$</span> find "$G" -name 'default.store*'</span><span class="terminal__line">…/AppGroup/&lt;UUID&gt;/Library/Application Support/default.store</span><span class="terminal__line">…/AppGroup/&lt;UUID&gt;/Library/Application Support/default.store-wal</span><span class="terminal__line">…/AppGroup/&lt;UUID&gt;/Library/Application Support/default.store-shm</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 "$G/Library/Application Support/default.store" 'SELECT ZTITLE, ZISDONE FROM ZTODORECORD;'</span><span class="terminal__line">ID確認|0</span></pre>
+</div>
+
+          <ul>
+            <li><code>get_app_container … groups</code> は、アプリが使える App Group の ID と、その共有コンテナのパスを表示します。08 で使った <code>data</code>（<code>Containers/Data/Application/…</code>）とは別の場所（<code>Containers/Shared/AppGroup/…</code>）です。</li>
+            <li>共有コンテナの <code>Library/Application Support/default.store</code> に、アプリで追加した「ID確認」が保存されています。</li>
+          </ul>
+
+          <p>
+            ホーム画面のウィジェットを見ると、再インストールで共有のデータベース（空）を読んだため <code>残り 0 件</code> になり、ToDo を追加してもそのまま変わりません。ステップ 3 で <code>policy: .never</code> を指定したので、データベースが変わっても、ウィジェットは自分からはタイムラインを作り直さないためです。次のステップで、アプリから作り直しを依頼します。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> になり、<code>get_app_container … groups</code> に <code>group.com.example.HandsonApp</code> が表示されることを確かめます。共有コンテナの <code>default.store</code> に、アプリで追加した ToDo が入っていれば、アプリが App Group のデータベースを使っています。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">reloadAllTimelines でアプリの変更をウィジェットに反映する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            アプリでデータを保存したら、<code>WidgetCenter.shared.reloadAllTimelines()</code> でウィジェットにタイムラインの作り直しを依頼します。依頼を受けると、システムが <code>Provider</code> の <code>getTimeline</code> を呼び直し、ウィジェットが共有のデータベースを読み直します。
+            保存している 4 か所（追加・完了の切り替え・削除・ショートカットからの追加）に入れます。どのファイルにも <code>import WidgetKit</code> を追加します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line diff-line--add">+ import WidgetKit</span><span class="diff-line">  …</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line">                              modelContext.insert(TodoRecord(title: newTitle))</span><span class="diff-line">                              // 自動保存を待たず、追加の直後に保存する</span><span class="diff-line">                              try? modelContext.save()</span><span class="diff-line diff-line--add">+                             // ウィジェットの表示を更新してもらう</span><span class="diff-line diff-line--add">+                             WidgetCenter.shared.reloadAllTimelines()</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line">                          }</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoRow.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line diff-line--add">+ import WidgetKit</span><span class="diff-line">  …</span><span class="diff-line">              Button {</span><span class="diff-line">                  record.toggle()</span><span class="diff-line">                  try? modelContext.save()</span><span class="diff-line diff-line--add">+                 WidgetCenter.shared.reloadAllTimelines()</span><span class="diff-line">              } label: {</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoSection.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line diff-line--add">+ import WidgetKit</span><span class="diff-line">  …</span><span class="diff-line">              .onDelete { offsets in</span><span class="diff-line">                  for index in offsets {</span><span class="diff-line">                      modelContext.delete(items[index])</span><span class="diff-line">                  }</span><span class="diff-line">                  // 自動保存を待たず、削除の直後に保存する</span><span class="diff-line">                  try? modelContext.save()</span><span class="diff-line diff-line--add">+                 WidgetCenter.shared.reloadAllTimelines()</span><span class="diff-line">              }</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Intents/AddTodoIntent.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import AppIntents</span><span class="diff-line">  import SwiftData</span><span class="diff-line diff-line--add">+ import WidgetKit</span><span class="diff-line">  …</span><span class="diff-line">          let container = try SharedStore.makeContainer()</span><span class="diff-line">          try addTodo(title: todoTitle, in: container.mainContext)</span><span class="diff-line diff-line--add">+         WidgetCenter.shared.reloadAllTimelines()</span><span class="diff-line">          return .result(dialog: "「\(todoTitle)」を追加しました")</span></pre>
+</div>
+
+          <ul>
+            <li><code>reloadAllTimelines()</code> は、このアプリの全てのウィジェットに作り直しを依頼します。この項目のウィジェットは 1 種類なので、全てを対象にしています。</li>
+            <li>保存（<code>save()</code>）の<strong>後</strong>に呼びます。ウィジェットは別のプロセスで、保存済みのデータベースを読むからです。</li>
+          </ul>
+
+          <p>ビルドしてアプリを実行し、ToDo を 1 件（ここでは「再読み込み確認」）追加してから、ホーム画面に戻ってウィジェットを見ます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ステップ 4 で <code>残り 0 件</code> のままだったウィジェットが、アプリで追加した後に <code>残り 2 件</code>（「ID確認」と「再読み込み確認」）になることを確かめます。件数は、それまでに追加した ToDo の数によって変わります。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">Button(intent:) でインタラクティブなウィジェットにする</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ウィジェットにボタンを置き、タップで ToDo を完了にします。ウィジェットのボタンは、クロージャーではなく <code>AppIntent</code> を実行します。
+            <code>Intents</code> フォルダに <code>CompleteLatestTodoIntent.swift</code> を追加します。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Intents/CompleteLatestTodoIntent.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import AppIntents
+import SwiftData
+import WidgetKit
+
+// ウィジェットのボタンから、いちばん新しい未完了の ToDo を完了にする。
+// ウィジェット拡張のプロセスで実行されるので、このファイルは両方のターゲットに入れる
+struct CompleteLatestTodoIntent: AppIntent {
+    static let title: LocalizedStringResource = "最新の ToDo を完了"
+
+    @MainActor
+    func perform() async throws -&gt; some IntentResult {
+        let container = try SharedStore.makeContainer()
+        try completeLatest(in: container.mainContext)
+        WidgetCenter.shared.reloadAllTimelines()
+        return .result()
+    }
+}
+
+@MainActor
+func completeLatest(in context: ModelContext) throws {
+    var descriptor = FetchDescriptor&lt;TodoRecord&gt;(
+        predicate: #Predicate { !$0.isDone },
+        sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+    )
+    descriptor.fetchLimit = 1
+    try context.fetch(descriptor).first?.toggle()
+    try context.save()
+}</code></pre>
+</div>
+
+          <ul>
+            <li>いちばん新しい未完了の ToDo を 1 件取り出し（<code>fetchLimit = 1</code>）、<code>toggle()</code> で完了にして保存します。</li>
+            <li>ウィジェットから実行した Intent は、<code>perform()</code> から戻るとシステムがタイムラインを読み直します。ここでは保存の後に <code>reloadAllTimelines()</code> を呼び、明示的にも再読み込みを依頼しています。</li>
+            <li><code>completeLatest(in:)</code> は、<code>addTodo</code> と同じく、テストから呼べるように関数に分けています。</li>
+          </ul>
+
+          <p>
+            ウィジェットのボタンから実行した Intent は、<strong>ウィジェットの拡張のプロセスで</strong>動きます。そのため、このファイルは <code>Target Membership</code> で <code>TodoWidgetExtension</code> にもチェックを付け、両方のターゲットに入れます。ステップ 4 の 3 つと合わせて、ウィジェットと共有するファイルは 4 つになります。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp.xcodeproj/project.pbxproj（抜粋）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  			membershipExceptions = (</span><span class="diff-line diff-line--add">+ 				Intents/CompleteLatestTodoIntent.swift,</span><span class="diff-line">  				Models/TodoItem.swift,</span><span class="diff-line">  				Models/TodoRecord.swift,</span><span class="diff-line">  				Shared/SharedStore.swift,</span><span class="diff-line">  			);</span></pre>
+</div>
+
+          <p>ウィジェットの View に、ボタンを追加します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">TodoWidget/TodoWidget.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  TodoWidget.swift</span><span class="diff-line">  //  TodoWidget</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ import AppIntents</span><span class="diff-line">  import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line">  import WidgetKit</span><span class="diff-line">  …</span><span class="diff-line">              ForEach(entry.snapshot.titles.indices, id: \.self) { index in</span><span class="diff-line">                  Text(entry.snapshot.titles[index])</span><span class="diff-line">                      .font(.caption)</span><span class="diff-line">                      .lineLimit(1)</span><span class="diff-line">              }</span><span class="diff-line diff-line--add">+             if !entry.snapshot.titles.isEmpty {</span><span class="diff-line diff-line--add">+                 // タップすると、ウィジェットのプロセスで Intent が実行される</span><span class="diff-line diff-line--add">+                 Button(intent: CompleteLatestTodoIntent()) {</span><span class="diff-line diff-line--add">+                     Label("完了", systemImage: "checkmark.circle")</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line diff-line--add">+                 .font(.caption)</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line">          }</span><span class="diff-line">          .frame(maxWidth: .infinity, alignment: .leading)</span></pre>
+</div>
+
+          <ul>
+            <li><strong><code>Button(intent:)</code></strong>: タップすると、渡した Intent の <code>perform()</code> を実行します。ウィジェットのボタンには、処理をクロージャーではなく Intent として渡します。</li>
+            <li>未完了の ToDo が無いときは、ボタンを表示しません。</li>
+            <li><code>AddTodoIntent</code> と <code>TodoShortcuts</code> はアプリ専用のままです。ウィジェットで使う <code>CompleteLatestTodoIntent</code> だけを共有します。</li>
+          </ul>
+
+          <p>完成した <code>TodoWidget.swift</code> の全文です。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">TodoWidget/TodoWidget.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">//
+//  TodoWidget.swift
+//  TodoWidget
+//
+
+import AppIntents
+import SwiftData
+import SwiftUI
+import WidgetKit
+
+struct TodoEntry: TimelineEntry {
+    let date: Date
+    let snapshot: TodoSnapshot
+}
+
+struct Provider: TimelineProvider {
+    func placeholder(in context: Context) -&gt; TodoEntry {
+        loadEntry()
+    }
+
+    func getSnapshot(in context: Context, completion: @escaping (TodoEntry) -&gt; Void) {
+        completion(loadEntry())
+    }
+
+    func getTimeline(in context: Context, completion: @escaping (Timeline&lt;TodoEntry&gt;) -&gt; Void) {
+        // 更新はアプリ側から依頼する（.never）
+        completion(Timeline(entries: [loadEntry()], policy: .never))
+    }
+
+    // ウィジェットはアプリとは別のプロセス。App Group のストアを開いて読む
+    private func loadEntry() -&gt; TodoEntry {
+        do {
+            let container = try SharedStore.makeContainer()
+            let snapshot = try SharedStore.snapshot(in: ModelContext(container))
+            return TodoEntry(date: .now, snapshot: snapshot)
+        } catch {
+            return TodoEntry(date: .now, snapshot: .empty)
+        }
+    }
+}
+
+struct TodoWidgetEntryView: View {
+    var entry: TodoEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("残り \(entry.snapshot.remaining) 件")
+                .font(.headline)
+            ForEach(entry.snapshot.titles.indices, id: \.self) { index in
+                Text(entry.snapshot.titles[index])
+                    .font(.caption)
+                    .lineLimit(1)
+            }
+            if !entry.snapshot.titles.isEmpty {
+                // タップすると、ウィジェットのプロセスで Intent が実行される
+                Button(intent: CompleteLatestTodoIntent()) {
+                    Label("完了", systemImage: "checkmark.circle")
+                }
+                .font(.caption)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct TodoWidget: Widget {
+    let kind: String = "TodoWidget"
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: Provider()) { entry in
+            TodoWidgetEntryView(entry: entry)
+                .containerBackground(.fill.tertiary, for: .widget)
+        }
+        .configurationDisplayName("ToDo")
+        .description("未完了の ToDo を表示します。")
+        .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
+
+#Preview(as: .systemSmall) {
+    TodoWidget()
+} timeline: {
+    TodoEntry(date: .now, snapshot: TodoSnapshot(remaining: 2, titles: ["牛乳を買う", "本を返す"]))
+}</code></pre>
+</div>
+
+          <p>ビルドしてアプリを実行し、ホーム画面に戻ります。ウィジェットの「完了」をタップしてから、アプリでもう 1 件追加して、件数の変化を見ます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ウィジェットの「完了」をタップすると、<code>残り 2 件</code> が <code>残り 1 件</code> に減ることを確かめます。続けてアプリで ToDo を追加し、ホーム画面に戻ると <code>残り 2 件</code> に増えれば、ウィジェットとアプリの両方向でデータが共有されています。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">Intent の処理をテストし、完成状態を確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            Intent の処理を、<code>perform()</code> から分けた関数（<code>addTodo</code>・<code>completeLatest</code>）と <code>SharedStore.snapshot</code> を通してテストします。
+            <code>HandsonAppTests</code> フォルダに <code>WidgetIntentTests.swift</code> を追加します（<code>Targets</code> は <code>HandsonAppTests</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/WidgetIntentTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import SwiftData
+import Testing
+@testable import HandsonApp
+
+@MainActor
+@Suite("ウィジェットと App Intents")
+struct WidgetIntentTests {
+    // テストごとにメモリ上のコンテナを作る（App Group のストアには触れない）
+    let container: ModelContainer
+
+    init() throws {
+        container = try SharedStore.makeContainer(inMemory: true)
+    }
+
+    @Test func スナップショットは未完了だけを数える() throws {
+        let context = container.mainContext
+        let done = TodoRecord(title: "済み", createdAt: .now.addingTimeInterval(-30))
+        done.toggle()
+        context.insert(done)
+        context.insert(TodoRecord(title: "古い", createdAt: .now.addingTimeInterval(-20)))
+        context.insert(TodoRecord(title: "新しい", createdAt: .now.addingTimeInterval(-10)))
+
+        let snapshot = try SharedStore.snapshot(in: context, limit: 1)
+        #expect(snapshot == TodoSnapshot(remaining: 2, titles: ["新しい"]))
+    }
+
+    @Test func addTodoで1件増える() throws {
+        try addTodo(title: "牛乳を買う", in: container.mainContext)
+        let titles = try container.mainContext.fetch(FetchDescriptor&lt;TodoRecord&gt;()).map(\.title)
+        #expect(titles == ["牛乳を買う"])
+    }
+
+    @Test func completeLatestは最新の未完了を完了にする() throws {
+        let context = container.mainContext
+        context.insert(TodoRecord(title: "古い", createdAt: .now.addingTimeInterval(-20)))
+        context.insert(TodoRecord(title: "新しい", createdAt: .now.addingTimeInterval(-10)))
+        try completeLatest(in: context)
+        #expect(try SharedStore.snapshot(in: context).titles == ["古い"])
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>SharedStore.makeContainer(inMemory: true)</code> で、テストごとにメモリ上のコンテナを作ります。App Group のデータベースには触れません。09 で学んだとおり、<code>init</code> はテストごとに実行されます。</li>
+            <li>テストは、ウィジェットの拡張そのものではなく、アプリのターゲットにある共有のコード（<code>@testable import HandsonApp</code>）を呼びます。ウィジェットに表示する内容は <code>SharedStore.snapshot</code> が決めるので、ここをテストすれば表示する件数とタイトルを確かめられます。</li>
+            <li><code>import Foundation</code> は、<code>.now.addingTimeInterval</code> などを使うために要ります（<code>SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY</code> が有効なため）。</li>
+          </ul>
+
+          <p>ユニットテスト、UI テスト、ビルドを実行します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "◇|✔|✘|➜|━|↳|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">◇ Suite "ウィジェットと App Intents" started.</span><span class="terminal__line">✔ Suite "ウィジェットと App Intents" passed after 0.009 seconds.</span><span class="terminal__line">━ Test run with 76 tests in 22 suites passed after 6.400 seconds with 1 known issue.</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppUITests test 2&gt;&amp;1 | grep -E "Test Case|Executed|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">	 Executed 2 tests, with 0 failures (0 unexpected) in 22.893 (22.913) seconds</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+</div>
+
+          <ul>
+            <li>ユニットテストは 09 の 73 に 3 つを加えて 76、スイートは 22 になります。<code>1 known issue</code> は、09 で書いた <code>withKnownIssue</code> の分です。</li>
+            <li>UI テストは、09 の 2 つがそのまま通ります。起動引数 <code>-uiTesting</code> のときは <code>SharedStore.makeContainer(inMemory: true)</code> になるので、App Group のデータベースは使いません。</li>
+          </ul>
+
+          <p>
+            最後に、ステップ 1 で登録したショートカットを確かめます。シミュレータでショートカットアプリを開き、<code>Library</code> の <code>Apps</code> から <code>HandsonApp</code> を選ぶと、<code>ToDo を追加</code> のタイルが表示されます。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">シミュレータでは、ショートカットの実行を確かめられていない</p>
+              <p>
+                執筆時、シミュレータで <code>ToDo を追加</code> のタイルをタップすると「Unable to run App Shortcut」と表示され、実行できませんでした。パラメータ（タイトル）を受け取るショートカットで起きており、シミュレータの制約か、パラメータの入力の問題かは切り分けられていません。
+                そのため、この項目の確認はショートカットアプリに表示されるところまでとし、<code>perform()</code> が呼ぶ保存の処理（<code>addTodo</code>）はユニットテストで確かめています。
+                実機や Siri からの実行は、このレッスンでは扱いません。
+              </p>
+            </div>
+          </div>
+
+          <p>完成状態のファイル構成は次のとおりです。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Text</span>
+  <span class="code-block__filename">HandsonApp/</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-plaintext">HandsonApp/
+  HandsonApp/
+    HandsonApp.entitlements                # この項目で追加（App Group）
+    HandsonAppApp.swift                    # この項目で更新（SharedStore でコンテナを作る）
+    ContentView.swift                      # この項目で更新（追加後に reloadAllTimelines）
+    Intents/
+      AddTodoIntent.swift                  # この項目で追加（アプリのみ）
+      TodoShortcuts.swift                  # この項目で追加（アプリのみ）
+      CompleteLatestTodoIntent.swift       # この項目で追加（アプリとウィジェット）
+    Shared/
+      SharedStore.swift                    # この項目で追加（アプリとウィジェット）
+    Models/
+      TodoRecord.swift                     # ウィジェットにも入れる
+      TodoItem.swift                       # ウィジェットにも入れる
+      …                                    # ほかは 09 のまま
+    Views/
+      TodoRow.swift                        # この項目で更新（切り替え後に reloadAllTimelines）
+      TodoSection.swift                    # この項目で更新（削除後に reloadAllTimelines）
+      …
+  TodoWidget/                              # この項目で追加（TodoWidgetExtension ターゲット）
+    TodoWidgetBundle.swift
+    TodoWidget.swift
+    Assets.xcassets
+    Info.plist
+  TodoWidgetExtension.entitlements         # この項目で追加（App Group）
+  HandsonAppTests/
+    WidgetIntentTests.swift                # この項目で追加（3 テスト）
+    …                                      # ほかは 09 のまま（合計 76 テスト）
+  HandsonAppUITests/
+    HandsonAppUITests.swift                # 09 のまま</code></pre>
+</div>
+
+          <p>確かめ終わったら、シミュレータを止めます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              ユニットテストで <code>━ Test run with 76 tests in 22 suites passed … with 1 known issue.</code> が表示されることを確かめます。UI テストは <code>Executed 2 tests, with 0 failures</code> です。
+              ショートカットアプリの <code>HandsonApp</code> に <code>ToDo を追加</code> のタイルが表示されれば完成です。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>AppIntent</code> の <code>perform()</code> に <code>@MainActor</code> を付ける理由を、付け忘れたときのエラーから説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>AppShortcutsProvider</code> で登録したショートカットが <code>extract.actionsdata</code> とショートカットアプリに表示されることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">Widget Extension のターゲットを追加して Swift 6 言語モードに切り替え、<code>PlugIns</code> に <code>TodoWidgetExtension.appex</code> が入ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>TimelineEntry</code>・<code>TimelineProvider</code>・<code>StaticConfiguration</code> の役割を説明でき、ホーム画面にウィジェットを置いた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">App Group と <code>ModelConfiguration(groupContainer:)</code> で、共有コンテナに <code>default.store</code> ができることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">共有するファイル（4 つ）の Target Membership に <code>TodoWidgetExtension</code> を付け、付け忘れたときのエラーを読み取れる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>reloadAllTimelines()</code> を保存の後に呼び、アプリで追加するとウィジェットの件数が増えることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>Button(intent:)</code> の「完了」で件数が 1 減り、76 テストと UI テストが通った後に <code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ギャラリーに、書き換える前のウィジェットが出続ける</p>
+          <p>
+            ステップ 2 のテンプレートのままの拡張をインストールした後にステップ 3 の版をビルドし直すと、執筆時は 2 回続けて、ギャラリーにテンプレートの <code>My Widget</code> が出続けました。
+            アプリをいったん削除してからインストールし直すと、<code>ToDo</code> に変わりました。
+          </p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl uninstall booted com.example.HandsonApp</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span></pre>
+</div>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ウィジェットが表示されない（App Group の ID の食い違い）</p>
+          <p>
+            アプリとウィジェットの entitlements、<code>SharedStore.appGroupID</code> の 3 か所で、App Group の ID が同じかを確かめてください。
+            執筆時にウィジェット側だけ <code>group.com.example.Typo</code> にしたところ、ウィジェットの拡張が SwiftData の中でクラッシュしました。このクラッシュは <code>do</code> / <code>catch</code> では捕まえられません。そのとき、ログに次の行が出ました。
+          </p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl spawn booted log show --last 5m --predicate 'process == "TodoWidgetExtension"' | grep app_group</span><span class="terminal__line">… container_create_or_lookup_app_group_path_by_app_group_identifier: client is not entitled</span></pre>
+</div>
+          <p>ID を正しく戻すと、同じ行が <code>…: success</code> で終わるようになります。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ビルドは成功するのに、インストールで失敗する</p>
+          <p>
+            <code>TodoWidget/Info.plist</code> の <code>NSExtensionPointIdentifier</code> を確かめてください。<code>com.apple.widgetkit-extension</code> を <code>com.apple.widget-extension</code> と書き間違えても、ビルドは成功します。エラーになるのは、シミュレータへのインストールのときです。
+          </p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">App installation failed: Unable to Install "HandsonApp"</span><span class="terminal__line">…</span><span class="terminal__line">Appex bundle … with id com.example.HandsonApp.TodoWidget does not define either an NSExtensionMainStoryboard or NSExtensionPrincipalClass key with a string value in the NSExtension dictionary in its Info.plist</span></pre>
+</div>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ウィジェットの件数が変わらない</p>
+          <p>保存の後に <code>WidgetCenter.shared.reloadAllTimelines()</code> を呼んでいるかを確かめてください。<code>policy: .never</code> のタイムラインは、依頼しない限り作り直されません（ステップ 5）。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>AppIntent</code> で ToDo を追加する操作を定義し、<code>AppShortcutsProvider</code> でショートカットアプリに登録しました。Widget Extension のターゲットを追加し、<code>WidgetBundle</code> を入り口にしました。ウィジェットは <code>StaticConfiguration</code>・<code>TimelineProvider</code>・<code>TimelineEntry</code> で組み立てました。
+        アプリとウィジェットは別のプロセスなので、App Group と <code>ModelConfiguration(groupContainer:)</code> で同じデータベースを開きました。保存の後には <code>reloadAllTimelines()</code> で表示の更新を依頼しました。
+        <code>Button(intent:)</code> でウィジェットからも ToDo を完了にでき、Intent の処理は関数に分けてユニットテストで確かめました。
+        次の項目では、Swift Charts と MapKit を使います。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li>WidgetKit のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/widgetkit">WidgetKit</a> / <a href="https://developer.apple.com/documentation/widgetkit/creating-a-widget-extension">Creating a widget extension</a> / <a href="https://developer.apple.com/documentation/widgetkit/keeping-a-widget-up-to-date">Keeping a widget up to date</a></li>
+            <li><a href="https://developer.apple.com/documentation/widgetkit/adding-interactivity-to-widgets-and-live-activities">Adding interactivity to widgets and Live Activities</a> / <a href="https://developer.apple.com/documentation/widgetkit/making-a-configurable-widget">Making a configurable widget</a></li>
+            <li><a href="https://developer.apple.com/documentation/widgetkit/timelineprovider">TimelineProvider</a> / <a href="https://developer.apple.com/documentation/widgetkit/staticconfiguration">StaticConfiguration</a> / <a href="https://developer.apple.com/documentation/widgetkit/widgetcenter/reloadalltimelines()">reloadAllTimelines()</a></li>
+          </ul>
+        </li>
+        <li>App Intents のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/appintents">App Intents</a> / <a href="https://developer.apple.com/documentation/appintents/appintent">AppIntent</a> / <a href="https://developer.apple.com/documentation/appintents/app-shortcuts">App Shortcuts</a> / <a href="https://developer.apple.com/documentation/appintents/appshortcutsprovider">AppShortcutsProvider</a></li>
+          </ul>
+        </li>
+        <li><a href="https://developer.apple.com/documentation/swiftdata/modelconfiguration/groupcontainer-swift.struct">ModelConfiguration.GroupContainer</a>（SwiftData）</li>
+        <li><a href="https://developer.apple.com/documentation/xcode/configuring-app-groups">Configuring app groups</a>（Xcode）</li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/10-widget-intents</code> の <code>ios/10-widget-intents/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/10-widget-intents/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../09-swift-testing/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">09: Swift Testing</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">11: Charts と MapKit</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
