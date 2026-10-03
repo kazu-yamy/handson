@@ -1,0 +1,1560 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07: ViewModel と StateFlow | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">07</li>
+        </ol>
+        <h1 class="lesson-title">ViewModel と StateFlow</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 06 で Todo の一覧に Material3 の画面部品を足した人</li>
+          <li class="lesson-meta__item">📋 前提: 06 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../06-material3-components/index.html">06: Material3 の画面部品</a></li>
+          <li class="lesson-meta__item">🧩 版: Kotlin 2.4.20 / AGP 9.4.1 / Compose BOM 2026.09.00 / Lifecycle 2.11.0 / kotlinx-coroutines-test 1.11.0</li>
+          <li class="lesson-meta__item">🌿 完成コード: ブランチ <code>android/07-viewmodel-stateflow</code></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>Todo の一覧と絞り込みを <code>ViewModel</code> に移し、<code>StateFlow</code> を <code>collectAsStateWithLifecycle()</code> で画面に渡せる</li>
+          <li>状態を ViewModel と Composable のどちらに置くかを、基準を持って決められる</li>
+          <li>画面回転とプロセスの終了の違いを説明し、<code>SavedStateHandle</code> で状態を復元できる</li>
+          <li><code>viewModelScope</code> の非同期処理を、<code>runTest</code> と <code>Dispatchers.setMain</code> で単体テストできる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        06 までは、Todo の一覧・絞り込み・シートの表示を、stateful な <code>TodoListPage</code> が <code>rememberSaveable</code> で持っていました。
+        この項目では、そのうち「アプリのデータ」にあたる一覧と絞り込みを <code>ViewModel</code> に移します。画面は <code>StateFlow</code> を購読して表示するだけにします。
+        ViewModel は画面回転では残りますが、プロセスが終了されると消えます。その退行を実際に確かめてから、<code>SavedStateHandle</code> で補います。
+        最後に、<code>viewModelScope</code> で動く読み込み処理を足し、ViewModel を JVM 上の単体テストで検証します。</p>
+      <p>前提知識として、02 のコルーチン（<code>suspend</code>・<code>launch</code>・<code>runTest</code>）と、04 の <code>rememberSaveable</code> と State hoisting を使います。</p>
+
+      <h3 id="where-to-put-state">状態をどこに置くか</h3>
+      <p>公式ドキュメント（State holders and UI state）は、状態の置き場所を次のように示しています。「ビジネスロジックと画面の UI 状態は ViewModel、UI 要素の状態と UI ロジックは Composable」に置きます。06 の <code>TodoListPage</code> が持っていた状態を、この指針で ViewModel と Composable に分けます。</p>
+
+          <table>
+            <thead>
+            <tr><th>状態</th><th>置き場所</th><th>理由</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>Todo の一覧</td><td>ViewModel</td><td>アプリのデータ。追加・完了切替・削除・元に戻すという操作を伴う</td></tr>
+            <tr><td>絞り込み（<code>TodoFilter</code>）</td><td>ViewModel</td><td>一覧のうちどれを表示するかを決める、画面の UI 状態</td></tr>
+            <tr><td>追加シートの表示（<code>showAddSheet</code>）</td><td>Composable（<code>rememberSaveable</code>）</td><td>シートという UI 要素の状態</td></tr>
+            <tr><td>入力中の文字（<code>TextFieldState</code>）</td><td>Composable（<code>rememberTextFieldState</code>）</td><td>Compose の部品に依存する</td></tr>
+            <tr><td>Snackbar（<code>SnackbarHostState</code>）</td><td>Composable（<code>remember</code>）</td><td>表示とボタンの結果待ちは UI の仕事</td></tr>
+            <tr><td>スクロール位置・確認ダイアログの表示・スワイプの状態</td><td>Composable</td><td>見た目だけに関わり、Compose の部品に依存する</td></tr>
+            </tbody>
+          </table>
+
+      <ul>
+        <li><strong>ViewModel に置く</strong>: アプリのデータとビジネスロジック（追加・完了切替・削除・元に戻す）、画面に何を表示するかを決める UI 状態（絞り込み）。</li>
+        <li><strong>Composable に置く</strong>: UI 要素の状態と UI ロジック。シートやダイアログの表示、<code>SnackbarHostState</code>・<code>TextFieldState</code>・<code>LazyListState</code>・コルーチンスコープなど、Compose の部品に依存するもの。</li>
+        <li><strong>回転で残るかどうかでは分けない</strong>: シートの表示も <code>rememberSaveable</code> で回転の後に残ります。回転で残ることは、ViewModel に置く理由になりません。</li>
+        <li><strong>迷ったとき</strong>: 「単体テストで ViewModel を作ったとき、その状態を JVM だけで検証したいか」で決めます。Snackbar や <code>TextFieldState</code> は Compose に依存するので、ViewModel には入れません。</li>
+      </ul>
+      <p>削除の「元に戻す」は、操作そのもの（一覧に戻す）は ViewModel のメソッドにします。Snackbar を出し、押されたボタンを待つ部分は UI の仕事なので、<code>TodoListPage</code> に残します。</p>
+
+      <h3 id="what-we-build">この項目で作るもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>作るもの</th><th>主に変えるファイル</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>一覧と絞り込みを <code>TodoListViewModel</code> に移し、<code>collectAsStateWithLifecycle()</code> で購読する</td><td><code>TodoListUiState.kt</code>・<code>TodoListViewModel.kt</code>（新規）・<code>TodoListPage.kt</code>・<code>MainActivity.kt</code></td></tr>
+            <tr><td>2</td><td>プロセスの終了で状態が消えることを確かめ、<code>SavedStateHandle</code> で復元する</td><td><code>TodoListViewModel.kt</code></td></tr>
+            <tr><td>3</td><td><code>viewModelScope</code> で読み込み処理を動かし、読み込み中の表示と ViewModel の単体テストを作る</td><td><code>TodoListViewModel.kt</code>・<code>TodoListScreen.kt</code>・<code>TodoListViewModelTest.kt</code>（新規）</td></tr>
+            <tr><td>4</td><td>完成状態のテスト結果を確かめ、エミュレータで操作する</td><td>なし</td></tr>
+            </tbody>
+          </table>
+
+      <p>UI テストは 06 の 53 件から 56 件に、単体テストは 42 件から 53 件に増えます。</p>
+
+      <h3 id="versions">使用バージョン</h3>
+      <p>01〜06 と同じく、Kotlin 2.4.20 / AGP 9.4.1 / Gradle 9.6.0 / Compose BOM 2026.09.00 で作成しています。この項目では、次の 2 つのライブラリを追加します。</p>
+
+          <table>
+            <thead>
+            <tr><th>ライブラリ</th><th>版</th><th>使うもの</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>androidx.lifecycle:lifecycle-viewmodel-compose</code></td><td>2.11.0</td><td>Composable から ViewModel を取り出す <code>viewModel()</code></td></tr>
+            <tr><td><code>androidx.lifecycle:lifecycle-runtime-compose</code></td><td>2.11.0</td><td>ライフサイクルに合わせて購読する <code>collectAsStateWithLifecycle()</code></td></tr>
+            </tbody>
+          </table>
+
+      <p>どちらも、執筆時点（2026年10月）の Google Maven で最新の安定版です（その次の <code>2.12.0-alpha04</code> は alpha）。01 から入っている <code>lifecycle-runtime-ktx</code> も 2.11.0 なので、Version Catalog では同じ版の指定（<code>lifecycleRuntimeKtx</code>）を共用します。単体テストに使う <code>kotlinx-coroutines-test</code> は、02 で追加した 1.11.0 をそのまま使います。</p>
+
+      <h2 id="prepare">準備</h2>
+      <p>06 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 07 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid06&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid07&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid06&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid07&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span></pre>
+</div>
+
+      <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // Step 1: 変数・関数・文字列テンプレート・when 式</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid06&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid07&quot;</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できる。型は推論されるが、ここでは Int のまま</span><span class="diff-line">  var counter = 0</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          counter = 0</span><span class="diff-line">          assertEquals(1, incrementCounter())</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid06&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid07&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+      <p>パッケージ名（<code>com.handson.android01</code>）は 06 と同じく変えません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">&gt; Task :app:createDebugApkListingFileRedirect</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 16s</span><span class="terminal__line">38 actionable tasks: 38 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+      <p><code>BUILD SUCCESSFUL</code> と表示されれば準備は完了です。かかる時間は、Gradle デーモンが起動済みかどうかで変わります。エミュレータも 06 と同じ手順で起動しておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">emulator-5554	device</span></pre>
+</div>
+
+      <p><code>adb devices</code> に <code>emulator-5554	device</code> と表示されれば、テストとアプリの実行に使えます。</p>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">ViewModel に状態を移す</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Todo の一覧と絞り込みを <code>TodoListViewModel</code> に移します。ViewModel は状態を <code>MutableStateFlow</code> で持ち、外には読み取り専用の <code>StateFlow</code> として公開します。<code>TodoListPage</code> はそれを購読して、06 と同じ <code>TodoListScreen</code> に渡します。</p>
+          <p>まず、依存を追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  junit = { group = &quot;junit&quot;, name = &quot;junit&quot;, version.ref = &quot;junit&quot; }</span><span class="diff-line">  androidx-junit = { group = &quot;androidx.test.ext&quot;, name = &quot;junit&quot;, version.ref = &quot;junitVersion&quot; }</span><span class="diff-line">  androidx-espresso-core = { group = &quot;androidx.test.espresso&quot;, name = &quot;espresso-core&quot;, version.ref = &quot;espressoCore&quot; }</span><span class="diff-line diff-line--add">+ androidx-lifecycle-runtime-compose = { group = &quot;androidx.lifecycle&quot;, name = &quot;lifecycle-runtime-compose&quot;, version.ref = &quot;lifecycleRuntimeKtx&quot; }</span><span class="diff-line">  androidx-lifecycle-runtime-ktx = { group = &quot;androidx.lifecycle&quot;, name = &quot;lifecycle-runtime-ktx&quot;, version.ref = &quot;lifecycleRuntimeKtx&quot; }</span><span class="diff-line diff-line--add">+ androidx-lifecycle-viewmodel-compose = { group = &quot;androidx.lifecycle&quot;, name = &quot;lifecycle-viewmodel-compose&quot;, version.ref = &quot;lifecycleRuntimeKtx&quot; }</span><span class="diff-line">  androidx-activity-compose = { group = &quot;androidx.activity&quot;, name = &quot;activity-compose&quot;, version.ref = &quot;activityCompose&quot; }</span><span class="diff-line">  androidx-compose-bom = { group = &quot;androidx.compose&quot;, name = &quot;compose-bom&quot;, version.ref = &quot;composeBom&quot; }</span><span class="diff-line">  androidx-compose-ui = { group = &quot;androidx.compose.ui&quot;, name = &quot;ui&quot; }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.compose.ui.graphics)</span><span class="diff-line">      implementation(libs.androidx.compose.ui.tooling.preview)</span><span class="diff-line">      implementation(libs.androidx.core.ktx)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.lifecycle.runtime.compose)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.runtime.ktx)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.lifecycle.viewmodel.compose)</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">      testImplementation(libs.kotlinx.coroutines.test)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>画面の状態を 1 つにまとめる <code>TodoListUiState</code> を作ります。<code>ui/screens/TodoListUiState.kt</code> を新しく作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListUiState.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import com.handson.android01.kotlin.Todo
+
+// 一覧画面の「画面状態」。ViewModel が持ち、UI は読むだけ。
+// val だけの data class（immutable）にして、変更は copy で新しい値を作る。StateFlow は値が変わったとき（equals で比べる）だけ通知する
+data class TodoListUiState(
+    val todos: List&lt;Todo&gt; = emptyList(),
+    val filter: TodoFilter = TodoFilter.All,
+)</code></pre>
+</div>
+
+          <p>プロパティが全部 <code>val</code> の data class にします。状態を変えるときは <code>copy</code> で新しい値を作って入れ替えます。<code>StateFlow</code> は、新しい値が前の値と <code>equals</code> で違うときだけ購読側に通知します。</p>
+          <p>次に、ViewModel を作ります。<code>ui/screens/TodoListViewModel.kt</code> を新しく作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListViewModel.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.lifecycle.ViewModel
+import com.handson.android01.kotlin.Todo
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+
+// 画面状態を持つ ViewModel。画面回転（Activity の作り直し）では破棄されず、同じインスタンスが使われ続ける
+class TodoListViewModel(initialTodos: List&lt;Todo&gt;) : ViewModel() {
+
+    // viewModel() の既定のファクトリは、引数なしのコンストラクタを探して呼ぶ。引数付きのままだと実行時に失敗する
+    constructor() : this(demoTodos(20))
+
+    // 書き込めるのは ViewModel の中だけ。外には読み取り専用の StateFlow として公開する
+    private val _uiState = MutableStateFlow(TodoListUiState(todos = initialTodos))
+    val uiState: StateFlow&lt;TodoListUiState&gt; = _uiState.asStateFlow()
+
+    // update: 今の値から新しい値を作って入れ替える（複数の更新が重なっても取りこぼさない）
+    fun addTodo(title: String) {
+        val trimmed = title.trim()
+        if (trimmed.isEmpty()) return
+        _uiState.update { state -&gt;
+            // id は今ある最大値 + 1
+            val id = (state.todos.maxOfOrNull { it.id } ?: 0) + 1
+            state.copy(todos = state.todos + Todo(id = id, title = trimmed))
+        }
+    }
+
+    fun toggleTodo(id: Int, done: Boolean) {
+        _uiState.update { state -&gt;
+            state.copy(todos = state.todos.map { if (it.id == id) it.copy(done = done) else it })
+        }
+    }
+
+    fun deleteTodo(id: Int) {
+        _uiState.update { state -&gt; state.copy(todos = state.todos.filterNot { it.id == id }) }
+    }
+
+    // 削除の「元に戻す」。削除前の位置に戻す（その間に件数が減っていても範囲内に収める）
+    fun restoreTodo(todo: Todo, index: Int) {
+        _uiState.update { state -&gt;
+            val todos = state.todos.toMutableList()
+            todos.add(index.coerceIn(0, todos.size), todo)
+            state.copy(todos = todos)
+        }
+    }
+
+    fun deleteDone() {
+        _uiState.update { state -&gt; state.copy(todos = state.todos.filterNot { it.done }) }
+    }
+
+    fun setFilter(filter: TodoFilter) {
+        _uiState.update { it.copy(filter = filter) }
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>ViewModel()</code> を継承したクラスは、画面回転（Activity の作り直し）では破棄されません。作り直した後の Activity でも、同じインスタンスが使われます。</li>
+            <li><code>_uiState</code>（<code>MutableStateFlow</code>）は <code>private</code> にして、書き換えを ViewModel の中に閉じ込めます。外には <code>asStateFlow()</code> で読み取り専用にした <code>uiState</code> を公開します。</li>
+            <li><code>update { ... }</code> は、今の値から新しい値を作って入れ替えます。複数の更新が重なっても、取りこぼしません。</li>
+            <li>06 で <code>TodoListPage</code> に書いていた追加・完了切替・削除・元に戻す・完了済みの削除の処理を、メソッドとして移しました。<code>restoreTodo</code> は <code>coerceIn(0, todos.size)</code> で、戻す位置を範囲内に収めます。</li>
+            <li><code>constructor() : this(demoTodos(20))</code> は、引数なしで作るためのコンストラクタです。理由は後の注意で説明します。</li>
+          </ul>
+
+          <p><code>MainActivity</code> では、初期データを渡すのをやめます。初期データは ViewModel が用意します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxSize</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line">  import com.handson.android01.ui.screens.TodoListPage</span><span class="diff-line diff-line--remove">- import com.handson.android01.ui.screens.demoTodos</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  </span><span class="diff-line">  class MainActivity : ComponentActivity() {</span><span class="diff-line">  ...</span><span class="diff-line">          enableEdgeToEdge()</span><span class="diff-line">          setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListPage(</span><span class="diff-line diff-line--remove">-                     initialTodos = demoTodos(20),</span><span class="diff-line diff-line--remove">-                     modifier = Modifier.fillMaxSize(),</span><span class="diff-line diff-line--remove">-                 )</span><span class="diff-line diff-line--add">+                 TodoListPage(modifier = Modifier.fillMaxSize())</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>TodoListPage</code> を、ViewModel を購読する形に書き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.runtime.rememberCoroutineScope</span><span class="diff-line">  import androidx.compose.runtime.setValue</span><span class="diff-line">  import androidx.compose.runtime.saveable.rememberSaveable</span><span class="diff-line diff-line--remove">- import androidx.compose.runtime.toMutableStateList</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line diff-line--remove">- import com.handson.android01.kotlin.Todo</span><span class="diff-line diff-line--add">+ import androidx.lifecycle.compose.collectAsStateWithLifecycle</span><span class="diff-line diff-line--add">+ import androidx.lifecycle.viewmodel.compose.viewModel</span><span class="diff-line">  import kotlinx.coroutines.launch</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // stateful（状態を持つ）な画面。Todo の一覧は、ここで mutableStateList として持つ</span><span class="diff-line diff-line--remove">- // rememberSaveable: 画面回転のあとも、チェックの状態が残るようにする。要素の Todo は @Parcelize なので、一覧ごと保存できる</span><span class="diff-line diff-line--add">+ // stateful（状態を持つ）な画面。Todo の一覧と絞り込みは ViewModel が持ち、ここは購読して画面に渡す。</span><span class="diff-line diff-line--add">+ // シートの表示・入力中の文字・Snackbar など「UI だけの状態」は、これまでどおりこの Composable に残す</span><span class="diff-line">  @Composable</span><span class="diff-line">  fun TodoListPage(</span><span class="diff-line diff-line--remove">-     initialTodos: List&lt;Todo&gt;,</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line diff-line--add">+     viewModel: TodoListViewModel = viewModel(),</span><span class="diff-line">  ) {</span><span class="diff-line diff-line--remove">-     val todos = rememberSaveable {</span><span class="diff-line diff-line--remove">-         initialTodos.toMutableStateList()</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--add">+     // collectAsStateWithLifecycle: StateFlow を Compose の State として読む。画面が STARTED より下（バックグラウンド）のあいだは収集を止める</span><span class="diff-line diff-line--add">+     val uiState by viewModel.uiState.collectAsStateWithLifecycle()</span><span class="diff-line">  </span><span class="diff-line">      // rememberTextFieldState: 入力中の文字列の状態を作る。画面回転後も入力の内容は残る</span><span class="diff-line">      val inputState = rememberTextFieldState()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // 追加用ボトムシートの表示フラグ。回転しても開いたままにする</span><span class="diff-line diff-line--add">+     // 追加用ボトムシートの表示フラグ。UI だけの状態なので Composable に残し、回転しても開いたままにする</span><span class="diff-line">      var showAddSheet by rememberSaveable { mutableStateOf(false) }</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-     // 絞り込みの選択。画面回転のあとも残すので rememberSaveable（enum は Serializable なのでそのまま保存できる）</span><span class="diff-line diff-line--remove">-     var filter by rememberSaveable { mutableStateOf(TodoFilter.All) }</span><span class="diff-line">  </span><span class="diff-line">      // Snackbar の状態と、イベントから呼ぶためのコルーチンスコープ</span><span class="diff-line">      val snackbarHostState = remember { SnackbarHostState() }</span><span class="diff-line">      val scope = rememberCoroutineScope()</span><span class="diff-line">  </span><span class="diff-line">      TodoListScreen(</span><span class="diff-line diff-line--remove">-         todos = todos,</span><span class="diff-line diff-line--add">+         todos = uiState.todos,</span><span class="diff-line">          snackbarHostState = snackbarHostState,</span><span class="diff-line diff-line--remove">-         filter = filter,</span><span class="diff-line diff-line--remove">-         onFilterChange = { filter = it },</span><span class="diff-line diff-line--add">+         filter = uiState.filter,</span><span class="diff-line diff-line--add">+         onFilterChange = viewModel::setFilter,</span><span class="diff-line">          onDelete = { todo -&gt;</span><span class="diff-line diff-line--remove">-             val index = todos.indexOf(todo)</span><span class="diff-line diff-line--add">+             val index = uiState.todos.indexOf(todo)</span><span class="diff-line">              if (index &gt;= 0) {</span><span class="diff-line diff-line--remove">-                 todos.removeAt(index)</span><span class="diff-line diff-line--add">+                 viewModel.deleteTodo(todo.id)</span><span class="diff-line">                  // 表示中の Snackbar があれば閉じてから出す（出さないと、前の Snackbar が消えるまで待たされる）</span><span class="diff-line">                  snackbarHostState.currentSnackbarData?.dismiss()</span><span class="diff-line diff-line--remove">-                 // 削除はユーザーの操作（イベント）から起きるので、LaunchedEffect ではなく scope.launch で出す。</span><span class="diff-line diff-line--add">+                 // Snackbar を出すのは UI の仕事なので、ここ（Composable）に残す。</span><span class="diff-line">                  // showSnackbar は Snackbar が消えるまで中断し、押されたボタンを返す</span><span class="diff-line">                  scope.launch {</span><span class="diff-line">                      val result = snackbarHostState.showSnackbar(</span><span class="diff-line">  ...</span><span class="diff-line">                          duration = SnackbarDuration.Short,</span><span class="diff-line">                      )</span><span class="diff-line">                      if (result == SnackbarResult.ActionPerformed) {</span><span class="diff-line diff-line--remove">-                         // 削除前の位置に戻す（その間に件数が減っていても範囲内に収める）</span><span class="diff-line diff-line--remove">-                         todos.add(index.coerceAtMost(todos.size), todo)</span><span class="diff-line diff-line--add">+                         viewModel.restoreTodo(todo, index)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">          showAddSheet = showAddSheet,</span><span class="diff-line">          onAddSheetDismiss = { showAddSheet = false },</span><span class="diff-line">          onDeleteDone = {</span><span class="diff-line diff-line--remove">-             val count = todos.count { it.done }</span><span class="diff-line diff-line--remove">-             todos.removeAll { it.done }</span><span class="diff-line diff-line--add">+             val count = uiState.todos.count { it.done }</span><span class="diff-line diff-line--add">+             viewModel.deleteDone()</span><span class="diff-line">              snackbarHostState.currentSnackbarData?.dismiss()</span><span class="diff-line">              scope.launch { snackbarHostState.showSnackbar(&quot;完了済み $count 件を削除しました&quot;) }</span><span class="diff-line">          },</span><span class="diff-line diff-line--remove">-         onToggle = { id, done -&gt;</span><span class="diff-line diff-line--remove">-             // 完了状態を変えるのは状態の持ち主（ここ）の役目。要素を新しい Todo に置き換えると、読んでいる画面が再コンポーズされる</span><span class="diff-line diff-line--remove">-             val index = todos.indexOfFirst { it.id == id }</span><span class="diff-line diff-line--remove">-             if (index &gt;= 0) {</span><span class="diff-line diff-line--remove">-                 todos[index] = todos[index].copy(done = done)</span><span class="diff-line diff-line--remove">-             }</span><span class="diff-line diff-line--remove">-         },</span><span class="diff-line diff-line--add">+         onToggle = viewModel::toggleTodo,</span><span class="diff-line">          onAddClick = {</span><span class="diff-line diff-line--remove">-             val title = inputState.text.toString().trim()</span><span class="diff-line diff-line--remove">-             if (title.isNotEmpty()) {</span><span class="diff-line diff-line--remove">-                 // id は今ある最大値 + 1。追加したら入力欄を空に戻す</span><span class="diff-line diff-line--remove">-                 todos.add(Todo(id = (todos.maxOfOrNull { it.id } ?: 0) + 1, title = title))</span><span class="diff-line diff-line--add">+             val title = inputState.text.toString()</span><span class="diff-line diff-line--add">+             if (title.isNotBlank()) {</span><span class="diff-line diff-line--add">+                 viewModel.addTodo(title)</span><span class="diff-line">                  inputState.clearText()</span><span class="diff-line">              }</span><span class="diff-line">          },</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>viewModel: TodoListViewModel = viewModel()</code>: <code>viewModel()</code> は、Activity の <code>ViewModelStore</code> から ViewModel を取り出します。無ければ作って保存し、あれば同じインスタンスを返します。引数にしておくと、テストから別の ViewModel を渡せます。</li>
+            <li><code>collectAsStateWithLifecycle()</code>: <code>StateFlow</code> を Compose の <code>State</code> として読みます。値が変わると、読んでいる部分が再コンポーズされます。</li>
+            <li><code>onFilterChange = viewModel::setFilter</code> のように、操作は ViewModel のメソッドへの参照で渡します。</li>
+            <li>シートの表示・入力中の文字・Snackbar は、これまでどおり <code>TodoListPage</code> に残します（概要の表を参照）。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">引数付きのコンストラクタだけでは <code>viewModel()</code> で作れない</p>
+              <p><code>viewModel()</code> の既定のファクトリは、引数なしのコンストラクタを探して呼びます。<code>constructor() : this(demoTodos(20))</code> を消して起動すると、起動の直後にクラッシュしました（logcat）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">logcat</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">10-03 21:51:55.608  4927  4927 E ComposeInternal: java.lang.RuntimeException: Cannot create an instance of class com.handson.android01.ui.screens.TodoListViewModel</span><span class="terminal__line">10-03 21:51:55.610  4927  4927 E ComposeInternal: Caused by: java.lang.NoSuchMethodException: com.handson.android01.ui.screens.TodoListViewModel.&lt;init&gt; []</span><span class="terminal__line">10-03 21:51:55.610  4927  4927 E AndroidRuntime: FATAL EXCEPTION: main</span><span class="terminal__line">10-03 21:51:55.610  4927  4927 E AndroidRuntime: java.lang.RuntimeException: Cannot create an instance of class com.handson.android01.ui.screens.TodoListViewModel</span><span class="terminal__line">10-03 21:51:55.615  4927  4927 E AndroidRuntime: Caused by: java.lang.NoSuchMethodException: com.handson.android01.ui.screens.TodoListViewModel.&lt;init&gt; []</span></pre>
+</div>
+
+              <p>根本原因は <code>NoSuchMethodException: ...TodoListViewModel.&lt;init&gt; []</code>（引数なしのコンストラクタが無い）です。初期データを変えて作りたいテストでは、後で作る <code>testViewModel</code> のようにファクトリを渡します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>collectAsState</code> との違い</p>
+              <p><code>collectAsState()</code> でも <code>StateFlow</code> を読めますが、画面がバックグラウンドにあるあいだも収集を続けます。<code>collectAsStateWithLifecycle()</code> は、画面が STARTED を下回ると収集を止めます。Android では <code>collectAsStateWithLifecycle()</code> を使います。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">購読者数を比べた実験の記録を見る</summary>
+            <div class="disclosure__body">
+              <p>違いを見るため、<code>_uiState</code> の購読者数（<code>subscriptionCount</code>）を logcat に出すコードを一時的に足しました。アプリを起動し、ホームボタンで画面を離れ、もう一度開いたときの記録です（筆者の環境で 1 回測った値。実験後にコードは元に戻しました）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">collectAsStateWithLifecycle() のとき</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">10-03 21:50:15.250  4164  4164 D Exp     : subscribers=0</span><span class="terminal__line">10-03 21:50:15.255  4164  4164 D Exp     : subscribers=1</span><span class="terminal__line">10-03 21:50:18.441  4164  4164 D Exp     : subscribers=0</span><span class="terminal__line">10-03 21:50:19.401  4164  4164 D Exp     : subscribers=1</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">collectAsState() のとき</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">10-03 21:50:30.591  4242  4242 D Exp     : subscribers=0</span><span class="terminal__line">10-03 21:50:30.605  4242  4242 D Exp     : subscribers=1</span></pre>
+</div>
+
+              <p>最初の <code>subscribers=0</code> は、購読が始まる前の値です。<code>collectAsStateWithLifecycle()</code> では、ホームボタンで画面が見えなくなると購読者が 0 に減り、戻ると 1 に戻りました。画面が STARTED を下回るあいだは、収集を止めるためです。<code>collectAsState()</code> では、ホームボタンを押しても 1 のままで、バックグラウンドでも収集を続けました。</p>
+            </div>
+          </details>
+
+          <p>画面回転で状態が残るかを、エミュレータで試します（任意）。アプリをインストールして起動し、先頭の未完了の行にチェックを付けて、サマリを <code>20 件中 8 件完了</code> にします。続けて、自動回転を止めてから横向きにします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system accelerometer_rotation 0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system user_rotation 1</span></pre>
+</div>
+
+          <p>回転して Activity が作り直されても、サマリは <code>20 件中 8 件完了</code> のままです。<code>viewModel()</code> が、作り直した後の Activity にも同じ ViewModel を返すからです。</p>
+          <p>比較のため、<code>TodoListPage</code> の引数の既定値を <code>viewModel()</code> から <code>TodoListViewModel()</code>（コンストラクタの直接の呼び出し）に変えて、同じ操作をしました。回転後のサマリは <code>20 件中 7 件完了</code> に戻りました。Activity が作り直されると Composable が呼ばれ直し、そのたびに新しい ViewModel ができるためです。ViewModel は、必ず <code>viewModel()</code> で取り出します。試したら <code>viewModel()</code> に戻します。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">回転を試したら、向きを元に戻してからテストを実行する</p>
+              <p>横向きのまま UI テストを実行すると、行が画面の外に出て、件数や位置を確かめる複数のテストが毎回失敗します。テストの前に、自動回転と縦向きに戻します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system accelerometer_rotation 1</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system user_rotation 0</span></pre>
+</div>
+
+            </div>
+          </div>
+
+          <p>テストを直します。<code>TodoListPage</code> の引数 <code>initialTodos</code> が無くなったので、UI テストでは初期データを指定した ViewModel を渡します。そのための関数を、<code>androidTest/.../ui/screens/TestViewModels.kt</code> に作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TestViewModels.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.runtime.Composable
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.handson.android01.kotlin.Todo
+
+// テスト用: 初期データを指定して ViewModel を作る。
+// viewModel(factory = ...) は、同じ ViewModelStoreOwner（ここでは Activity）の中では同じインスタンスを返す
+@Composable
+fun testViewModel(initialTodos: List&lt;Todo&gt; = demoTodoList): TodoListViewModel =
+    viewModel(factory = viewModelFactory { initializer { TodoListViewModel(initialTodos) } })</code></pre>
+</div>
+
+          <p><code>viewModelFactory { initializer { ... } }</code> で、ViewModel の作り方を自分で指定します。<code>viewModel(factory = ...)</code> は、同じ <code>ViewModelStoreOwner</code>（ここでは Activity）の中では同じインスタンスを返します。</p>
+          <p><code>TodoListPage(initialTodos = x)</code> を呼んでいる UI テストを、<code>TodoListPage(viewModel = testViewModel(x))</code> に置き換えます。置き換える対象は 5 ファイルです。<code>TodoFilterTest</code> に 2 か所あります。<code>TodoListPageTest</code>・<code>TodoSheetAndDialogTest</code>・<code>TodoSnackbarTest</code>・<code>TodoSwipeTest</code> には 1 か所ずつです。stateless な <code>TodoListScreen</code> のテストは変わりません。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">置き換える 5 ファイルの差分を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoFilterTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListPage(initialTodos = initial)</span><span class="diff-line diff-line--add">+                 TodoListPage(viewModel = testViewModel(initial))</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  ...</span><span class="diff-line">          tester.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListPage(initialTodos = demoTodoList)</span><span class="diff-line diff-line--add">+                 TodoListPage(viewModel = testViewModel(demoTodoList))</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListPageTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListPage(initialTodos = demoTodoList)</span><span class="diff-line diff-line--add">+                 TodoListPage(viewModel = testViewModel(demoTodoList))</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoSheetAndDialogTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListPage(initialTodos = initial)</span><span class="diff-line diff-line--add">+                 TodoListPage(viewModel = testViewModel(initial))</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoSnackbarTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListPage(initialTodos = demoTodoList)</span><span class="diff-line diff-line--add">+                 TodoListPage(viewModel = testViewModel(demoTodoList))</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoSwipeTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListPage(initialTodos = demoTodoList)</span><span class="diff-line diff-line--add">+                 TodoListPage(viewModel = testViewModel(demoTodoList))</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+            </div>
+          </details>
+
+          <p>06 の <code>TodoListPageRestorationTest</code> には、完了状態が回転のあとも残ることを確かめる <code>togglesSurviveRecreation</code> がありました。このテストは削除し、同じ意図の検証を新しいテストクラスに移します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListPageRestorationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- import androidx.compose.ui.test.assertIsDisplayed</span><span class="diff-line">  import androidx.compose.ui.test.assertIsEnabled</span><span class="diff-line diff-line--remove">- import androidx.compose.ui.test.isToggleable</span><span class="diff-line">  import androidx.compose.ui.test.junit4.StateRestorationTester</span><span class="diff-line">  import androidx.compose.ui.test.junit4.v2.createComposeRule</span><span class="diff-line">  import androidx.compose.ui.test.onNodeWithTag</span><span class="diff-line">  ...</span><span class="diff-line">  import org.junit.Test</span><span class="diff-line">  import org.junit.runner.RunWith</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ // 入力中の文字・シートの表示（UI だけの状態）が、rememberSaveable で復元されること。</span><span class="diff-line diff-line--add">+ // 一覧と絞り込み（ViewModel の状態）の回転テストは TodoListViewModelRecreationTest にある</span><span class="diff-line">  @RunWith(AndroidJUnit4::class)</span><span class="diff-line">  class TodoListPageRestorationTest {</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">          val tester = StateRestorationTester(composeTestRule)</span><span class="diff-line">          tester.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListPage(initialTodos = demoTodoList)</span><span class="diff-line diff-line--add">+                 TodoListPage(viewModel = testViewModel(demoTodoList))</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">          // 入力欄は追加用のボトムシートの中にある。FAB で開いてから入力する</span><span class="diff-line">  ...</span><span class="diff-line">          // シートは開いたまま（表示フラグが rememberSaveable）で、入力中の文字も残り、追加ボタンは有効のまま</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsEnabled()</span><span class="diff-line">      }</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-     @Test</span><span class="diff-line diff-line--remove">-     fun togglesSurviveRecreation() {</span><span class="diff-line diff-line--remove">-         val tester = StateRestorationTester(composeTestRule)</span><span class="diff-line diff-line--remove">-         tester.setContent {</span><span class="diff-line diff-line--remove">-             HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListPage(initialTodos = demoTodoList)</span><span class="diff-line diff-line--remove">-             }</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--remove">-         composeTestRule.onAllNodes(isToggleable())[0].performClick()</span><span class="diff-line diff-line--remove">-         composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-         // 画面回転と同じく、保存された状態から作り直す</span><span class="diff-line diff-line--remove">-         tester.emulateSavedInstanceStateRestore()</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-         composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>StateRestorationTester</code> では ViewModel のテストにならない</p>
+              <p><code>StateRestorationTester</code> の <code>emulateSavedInstanceStateRestore()</code> は、composition だけを作り直します。Activity はそのままです。そのため、ViewModel の状態は何もしなくても残ります。<code>togglesSurviveRecreation</code> は、ViewModel の有無にかかわらず通ってしまい、検証になりません。</p>
+            </div>
+          </div>
+
+          <p>Activity ごと作り直すテストを、<code>androidTest/.../ui/screens/TodoListViewModelRecreationTest.kt</code> に作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListViewModelRecreationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.isToggleable
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.MainActivity
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+// Activity を実際に作り直して（画面回転と同じ）、ViewModel の状態が残ることを確かめる。
+// StateRestorationTester は Activity を作り直さないので、ViewModel のテストには向かない
+@RunWith(AndroidJUnit4::class)
+class TodoListViewModelRecreationTest {
+
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()
+
+    @Test
+    fun toggles_surviveActivityRecreation() {
+        // 起動直後は 20 件中 7 件が完了。先頭の未完了の行を完了にする
+        composeTestRule.onNodeWithText(&quot;20 件中 7 件完了&quot;).assertIsDisplayed()
+        composeTestRule.onAllNodes(isToggleable())[0].performClick()
+        composeTestRule.onNodeWithText(&quot;20 件中 8 件完了&quot;).assertIsDisplayed()
+
+        composeTestRule.activityRule.scenario.recreate()
+
+        composeTestRule.onNodeWithText(&quot;20 件中 8 件完了&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun filter_survivesActivityRecreation() {
+        composeTestRule.onNodeWithTag(&quot;filter_Done&quot;).performClick()
+        composeTestRule.onNodeWithTag(&quot;filter_Done&quot;).assertIsSelected()
+
+        composeTestRule.activityRule.scenario.recreate()
+
+        composeTestRule.onNodeWithTag(&quot;filter_Done&quot;).assertIsSelected()
+    }
+}</code></pre>
+</div>
+
+          <p><code>createAndroidComposeRule&lt;MainActivity&gt;()</code> で実際の <code>MainActivity</code> を起動します。<code>activityRule.scenario.recreate()</code> は、画面回転と同じく Activity を作り直します。テスト側で <code>setContent</code> を呼ぶ rule では、<code>recreate()</code> の後に内容が消えます。画面の内容を Activity 自身が <code>setContent</code> する <code>MainActivity</code> を使うのはそのためです。</p>
+          <p>ビルド・lint・単体テスト・UI テストをまとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 40s</span><span class="terminal__line">86 actionable tasks: 15 executed, 71 up-to-date</span></pre>
+</div>
+
+          <p>UI テストは 54 件です。<code>togglesSurviveRecreation</code> を削除し、<code>TodoListViewModelRecreationTest</code> の 2 件を追加しました。単体テストは 42 件で、すべて成功します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>テストが <code>BUILD SUCCESSFUL</code> で終われば OK です。アプリの見た目と操作は 06 と変わりません。回転を試した場合は、チェックと絞り込みが回転のあとも残ることを確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>SavedStateHandle</code> でプロセスの再生成に耐える</h3>
+        </div>
+        <div class="step__body">
+
+          <p>ViewModel は回転では残りますが、アプリのプロセスが終了されると一緒に消えます。バックグラウンドのアプリは、メモリが足りなくなるとシステムに終了されることがあります。まず、ステップ 1 の状態で起きることを確かめます。</p>
+          <p>ステップ 1 のアプリを <code>./gradlew installDebug</code> でインストールして起動し、チェックを 2 つ付けてサマリを <code>20 件中 9 件完了</code> にします。ホームボタンでアプリをバックグラウンドに移してから、プロセスを終了して、もう一度起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line">5025</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am kill com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line">Warning: Activity not started, its current task has been brought to the front</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line">5169</span></pre>
+</div>
+
+          <p><code>am kill</code> を実行した後、<code>pidof</code> は何も出力しません。プロセスは終了しています。起動後の PID は新しい番号です（実行ごとに変わる値です）。<code>Warning: Activity not started, ...</code> は、タスクが残っていたので新しく作らず前面に出した、という意味です。このとき Activity は、保存されていた状態（<code>onSaveInstanceState</code> の Bundle）から作り直されます。</p>
+          <p>起動後の画面のサマリは <code>20 件中 7 件完了</code> に戻りました（9 → 7）。06 までは <code>rememberSaveable</code> が Bundle に保存していたので残っていました。ViewModel に移したことで、<strong>退行</strong>したことになります。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>am kill</code> はバックグラウンドのプロセスだけを終了する</p>
+              <p>アプリが前面にあるまま <code>am kill</code> を実行しても、プロセスは終了しません。先にホームボタンを押すのはそのためです。開発者オプションの「アクティビティを保持しない」は Activity だけを破棄するので、プロセスが消える状況の再現にはなりません。</p>
+            </div>
+          </div>
+
+          <p><code>SavedStateHandle</code> に、ViewModel の状態を保存します。<code>SavedStateHandle</code> は、プロセスが終了されても残したい値の入れ物です。中身は Activity の <code>onSaveInstanceState</code> の Bundle に保存され、プロセスが作り直されたときに、保存した値が入った状態で ViewModel に渡されます。</p>
+          <p>保存するのは、Todo の一覧と絞り込みです。06 の <code>rememberSaveable</code> が保存していたもの（一覧・絞り込み・シートの表示）のうち、ViewModel に移した 2 つです。同じ範囲を保存するので、06 の挙動から退行しません。シートの表示と入力中の文字は Composable に残したので、これまでどおり <code>rememberSaveable</code> と <code>rememberTextFieldState</code> が保存します。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Todo の一覧を <code>SavedStateHandle</code> に入れるのは、教材上の簡略化</p>
+              <p><code>SavedStateHandle</code> の中身は、Activity の保存状態と一緒にプロセス間通信（Binder）で渡されます。Binder のバッファは 1MB をプロセス全体の通信で共有するため、公式ドキュメント（Parcelables and bundles）は保存状態を 50KB 未満に抑えるよう推奨しています。超えると <code>TransactionTooLargeException</code> になります。大きなデータや本物のデータの置き場には向きません。この項目では、06 の挙動を保つために一覧ごと入れています。実際のアプリでは、一覧はデータベース（後の項目で扱う Room）に置き、<code>SavedStateHandle</code> には「選択中の ID」や「検索語」程度の小さな値を入れます。</p>
+            </div>
+          </div>
+
+          <p>追加の依存は要りません。<code>SavedStateHandle</code> だけを受け取るコンストラクタを用意すれば、<code>viewModel()</code> の既定のファクトリがそれを呼び、<code>SavedStateHandle</code> を渡します。必要な <code>lifecycle-viewmodel-savedstate</code> は、ステップ 1 で追加した <code>lifecycle-viewmodel-compose</code> が推移的に連れてきます。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">依存の一覧で確かめる</summary>
+            <div class="disclosure__body">
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:dependencies --configuration debugRuntimeClasspath</span><span class="terminal__line">（中略）</span><span class="terminal__line">+--- androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0</span><span class="terminal__line">（中略）</span><span class="terminal__line">|         +--- androidx.lifecycle:lifecycle-viewmodel-savedstate:2.11.0 (*)</span><span class="terminal__line">（以下略）</span></pre>
+</div>
+
+              <p>出力は長いので、該当する行だけを抜き出しました。<code>lifecycle-viewmodel-compose</code> の下に <code>lifecycle-viewmodel-savedstate:2.11.0</code> があります。</p>
+            </div>
+          </details>
+
+          <p><code>TodoListViewModel</code> を書き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListViewModel.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ import androidx.lifecycle.SavedStateHandle</span><span class="diff-line">  import androidx.lifecycle.ViewModel</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import kotlinx.coroutines.flow.MutableStateFlow</span><span class="diff-line">  import kotlinx.coroutines.flow.StateFlow</span><span class="diff-line">  import kotlinx.coroutines.flow.asStateFlow</span><span class="diff-line diff-line--remove">- import kotlinx.coroutines.flow.update</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.flow.updateAndGet</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // 画面状態を持つ ViewModel。画面回転（Activity の作り直し）では破棄されず、同じインスタンスが使われ続ける</span><span class="diff-line diff-line--remove">- class TodoListViewModel(initialTodos: List&lt;Todo&gt;) : ViewModel() {</span><span class="diff-line diff-line--add">+ // 画面状態を持つ ViewModel。画面回転（Activity の作り直し）では破棄されず、同じインスタンスが使われ続ける。</span><span class="diff-line diff-line--add">+ // SavedStateHandle: プロセスが終了されても残したい値の入れ物。Activity の onSaveInstanceState の Bundle に保存され、</span><span class="diff-line diff-line--add">+ // プロセスが作り直されたときに、保存した値が入った状態で渡される</span><span class="diff-line diff-line--add">+ class TodoListViewModel(</span><span class="diff-line diff-line--add">+     private val savedStateHandle: SavedStateHandle,</span><span class="diff-line diff-line--add">+     initialTodos: List&lt;Todo&gt;,</span><span class="diff-line diff-line--add">+ ) : ViewModel() {</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // viewModel() の既定のファクトリは、引数なしのコンストラクタを探して呼ぶ。引数付きのままだと実行時に失敗する</span><span class="diff-line diff-line--remove">-     constructor() : this(demoTodos(20))</span><span class="diff-line diff-line--add">+     // viewModel() の既定のファクトリは、引数なし、または SavedStateHandle だけのコンストラクタを探して呼ぶ</span><span class="diff-line diff-line--add">+     constructor(savedStateHandle: SavedStateHandle) : this(savedStateHandle, demoTodos(20))</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // 書き込めるのは ViewModel の中だけ。外には読み取り専用の StateFlow として公開する</span><span class="diff-line diff-line--remove">-     private val _uiState = MutableStateFlow(TodoListUiState(todos = initialTodos))</span><span class="diff-line diff-line--add">+     // 書き込めるのは ViewModel の中だけ。外には読み取り専用の StateFlow として公開する。</span><span class="diff-line diff-line--add">+     // 保存されていればそれを使い、無ければ初期値を使う。ArrayList&lt;Todo&gt; は、要素が Parcelable なので保存できる</span><span class="diff-line diff-line--add">+     private val _uiState = MutableStateFlow(</span><span class="diff-line diff-line--add">+         TodoListUiState(</span><span class="diff-line diff-line--add">+             todos = savedStateHandle.get&lt;ArrayList&lt;Todo&gt;&gt;(KEY_TODOS) ?: initialTodos,</span><span class="diff-line diff-line--add">+             filter = savedStateHandle.get&lt;TodoFilter&gt;(KEY_FILTER) ?: TodoFilter.All,</span><span class="diff-line diff-line--add">+         ),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line">      val uiState: StateFlow&lt;TodoListUiState&gt; = _uiState.asStateFlow()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // update: 今の値から新しい値を作って入れ替える（複数の更新が重なっても取りこぼさない）</span><span class="diff-line diff-line--add">+     // 状態の更新はすべてここを通す。updateAndGet は、今の値から新しい値を作って入れ替え、入れ替えたあとの値を返す</span><span class="diff-line diff-line--add">+     // （複数の更新が重なっても取りこぼさない）。その値を SavedStateHandle にも書く</span><span class="diff-line diff-line--add">+     private fun update(transform: (TodoListUiState) -&gt; TodoListUiState) {</span><span class="diff-line diff-line--add">+         val newState = _uiState.updateAndGet(transform)</span><span class="diff-line diff-line--add">+         savedStateHandle[KEY_TODOS] = ArrayList(newState.todos)</span><span class="diff-line diff-line--add">+         savedStateHandle[KEY_FILTER] = newState.filter</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      fun addTodo(title: String) {</span><span class="diff-line">          val trimmed = title.trim()</span><span class="diff-line">          if (trimmed.isEmpty()) return</span><span class="diff-line diff-line--remove">-         _uiState.update { state -&gt;</span><span class="diff-line diff-line--add">+         update { state -&gt;</span><span class="diff-line">              // id は今ある最大値 + 1</span><span class="diff-line">              val id = (state.todos.maxOfOrNull { it.id } ?: 0) + 1</span><span class="diff-line">              state.copy(todos = state.todos + Todo(id = id, title = trimmed))</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      fun toggleTodo(id: Int, done: Boolean) {</span><span class="diff-line diff-line--remove">-         _uiState.update { state -&gt;</span><span class="diff-line diff-line--add">+         update { state -&gt;</span><span class="diff-line">              state.copy(todos = state.todos.map { if (it.id == id) it.copy(done = done) else it })</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      fun deleteTodo(id: Int) {</span><span class="diff-line diff-line--remove">-         _uiState.update { state -&gt; state.copy(todos = state.todos.filterNot { it.id == id }) }</span><span class="diff-line diff-line--add">+         update { state -&gt; state.copy(todos = state.todos.filterNot { it.id == id }) }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      // 削除の「元に戻す」。削除前の位置に戻す（その間に件数が減っていても範囲内に収める）</span><span class="diff-line">      fun restoreTodo(todo: Todo, index: Int) {</span><span class="diff-line diff-line--remove">-         _uiState.update { state -&gt;</span><span class="diff-line diff-line--add">+         update { state -&gt;</span><span class="diff-line">              val todos = state.todos.toMutableList()</span><span class="diff-line">              todos.add(index.coerceIn(0, todos.size), todo)</span><span class="diff-line">              state.copy(todos = todos)</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      fun deleteDone() {</span><span class="diff-line diff-line--remove">-         _uiState.update { state -&gt; state.copy(todos = state.todos.filterNot { it.done }) }</span><span class="diff-line diff-line--add">+         update { state -&gt; state.copy(todos = state.todos.filterNot { it.done }) }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      fun setFilter(filter: TodoFilter) {</span><span class="diff-line diff-line--remove">-         _uiState.update { it.copy(filter = filter) }</span><span class="diff-line diff-line--add">+         update { it.copy(filter = filter) }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     private companion object {</span><span class="diff-line diff-line--add">+         const val KEY_TODOS = &quot;todos&quot;</span><span class="diff-line diff-line--add">+         const val KEY_FILTER = &quot;filter&quot;</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li>コンストラクタの先頭で <code>SavedStateHandle</code> を受け取ります。既定のファクトリ用のコンストラクタも、引数なしから <code>SavedStateHandle</code> だけを受け取る形に変えました。</li>
+            <li>読むときは <code>savedStateHandle.get&lt;ArrayList&lt;Todo&gt;&gt;(KEY_TODOS)</code> です。保存されていればそれを使い、無ければ初期値を使います。<code>Todo</code> は 04 で <code>@Parcelize</code> を付けた Parcelable なので、<code>ArrayList&lt;Todo&gt;</code> は Bundle に入ります。</li>
+            <li>書くときは <code>ArrayList(newState.todos)</code> にします。<code>List</code> は実装クラスによっては受け付けられません（<code>subList</code> の結果など）。型を <code>ArrayList</code> に確定させ、取り出す側の <code>get&lt;ArrayList&lt;Todo&gt;&gt;</code> と揃えるために詰め替えます。<code>TodoFilter</code> は enum で、そのまま保存できます。</li>
+            <li>状態の更新を private な <code>update</code> 関数に集めました。<code>updateAndGet</code> は、新しい値に入れ替えたうえで、その値を返します。返った値を <code>SavedStateHandle</code> にも書くので、更新の書き忘れが起きません。</li>
+          </ul>
+          <p><code>SavedStateHandle</code> には、値を <code>StateFlow</code> として読む <code>getStateFlow</code> もあります。この項目では状態を 1 つの <code>MutableStateFlow&lt;TodoListUiState&gt;</code> にまとめたいので、扱いません。</p>
+          <p>テスト用の ViewModel も、<code>SavedStateHandle</code> を渡す形にします。<code>initializer { ... }</code> の中では、<code>createSavedStateHandle()</code> で <code>SavedStateHandle</code> を作れます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TestViewModels.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line">  import androidx.lifecycle.viewmodel.compose.viewModel</span><span class="diff-line diff-line--add">+ import androidx.lifecycle.createSavedStateHandle</span><span class="diff-line">  import androidx.lifecycle.viewmodel.initializer</span><span class="diff-line">  import androidx.lifecycle.viewmodel.viewModelFactory</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  ...</span><span class="diff-line">  // viewModel(factory = ...) は、同じ ViewModelStoreOwner（ここでは Activity）の中では同じインスタンスを返す</span><span class="diff-line">  @Composable</span><span class="diff-line">  fun testViewModel(initialTodos: List&lt;Todo&gt; = demoTodoList): TodoListViewModel =</span><span class="diff-line diff-line--remove">-     viewModel(factory = viewModelFactory { initializer { TodoListViewModel(initialTodos) } })</span><span class="diff-line diff-line--add">+     viewModel(factory = viewModelFactory { initializer { TodoListViewModel(createSavedStateHandle(), initialTodos) } })</span></pre>
+</div>
+
+          <p>インストールし直して、さきほどと同じ操作をします。今回は、チェックを 2 つ付けたうえで絞り込みを「未完了」に変えてから、ホームボタン → プロセスの終了 → 起動の順に行いました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line">5269</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am kill com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line">Warning: Activity not started, its current task has been brought to the front</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line">5396</span></pre>
+</div>
+
+          <p>プロセスは作り直されました（PID が変わった）が、サマリは <code>20 件中 9 件完了</code> のままで、絞り込みの「未完了」も選ばれた状態に戻りました。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">保存できない型を入れると、操作した瞬間にクラッシュする</p>
+              <p>Bundle に入れられるのは、プリミティブ・<code>String</code>・<code>Parcelable</code>・<code>Serializable</code>・<code>ArrayList</code> などです。それ以外の型でもコンパイルは通ります。しかし、値を書いた瞬間に <code>IllegalArgumentException: Can't put value with type ... into saved state</code> で落ちます。保存する値の型は、書く前に確かめます。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">保存できない型を書いた実験の記録を見る</summary>
+            <div class="disclosure__body">
+              <p>試しに、Parcelable でも Serializable でもない <code>TodoListUiState</code> を書いてみました。<code>savedStateHandle["ui"] = newState</code> を一時的に足し、チェックを切り替えたときの logcat です。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">logcat</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">10-03 21:54:19.543  5606  5606 E MessageQueue-JNI: java.lang.IllegalArgumentException: Can&#x27;t put value with type class com.handson.android01.ui.screens.TodoListUiState into saved state</span><span class="terminal__line">10-03 21:54:19.543  5606  5606 E AndroidRuntime: FATAL EXCEPTION: main</span><span class="terminal__line">10-03 21:54:19.543  5606  5606 E AndroidRuntime: java.lang.IllegalArgumentException: Can&#x27;t put value with type class com.handson.android01.ui.screens.TodoListUiState into saved state</span></pre>
+</div>
+
+              <p>チェックを切り替えた瞬間に落ちました。</p>
+            </div>
+          </details>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">タスクを消すと、保存状態も消える</p>
+              <p><code>am start</code> やアプリのアイコンからの起動では、タスクが残っていれば保存状態から作り直されます。一方、最近使ったアプリの一覧からスワイプでタスクを消すと、保存状態も消えます。<code>SavedStateHandle</code> が想定しているのは、「ユーザーは離れただけなのに、システムがプロセスを回収した」場合です。</p>
+            </div>
+          </div>
+
+          <p>テストをまとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 35s</span><span class="terminal__line">86 actionable tasks: 21 executed, 65 up-to-date</span></pre>
+</div>
+
+          <p>UI テスト 54 件、単体テスト 42 件で、件数はステップ 1 と同じです。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>テストが <code>BUILD SUCCESSFUL</code> で終われば OK です。プロセスの終了を試した場合は、チェックと絞り込みが終了の前と同じに戻ることを確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>viewModelScope</code> の非同期処理と ViewModel の単体テスト</h3>
+        </div>
+        <div class="step__body">
+
+          <p>実際のアプリでは、一覧はサーバーやデータベースから非同期に読み込みます。ここでは <code>delay</code> で読み込みに見立てた処理を <code>viewModelScope</code> で動かし、読み込み中の表示を出します。そのうえで、ViewModel を JVM 上の単体テストで検証します。</p>
+          <p>設計は次のとおりです。</p>
+          <ul>
+            <li><code>SavedStateHandle</code> に保存された一覧があれば（プロセスの再生成の後）、読み込みはしません。</li>
+            <li>無ければ、空の一覧と <code>isLoading = true</code> で始めます。<code>init</code> の中で <code>viewModelScope.launch</code> し、待ち時間の後に初期データを入れます。</li>
+            <li>待ち時間はコンストラクタの引数 <code>loadDelayMillis</code> にして、テストでは 0 や仮想時間で動かします。既定のファクトリ用のコンストラクタは 1000 ミリ秒を渡します。</li>
+          </ul>
+          <p>画面の状態に <code>isLoading</code> を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListUiState.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  data class TodoListUiState(</span><span class="diff-line">      val todos: List&lt;Todo&gt; = emptyList(),</span><span class="diff-line">      val filter: TodoFilter = TodoFilter.All,</span><span class="diff-line diff-line--add">+     // 読み込み中かどうか。true のあいだ、画面は一覧の代わりに読み込み表示を出す</span><span class="diff-line diff-line--add">+     val isLoading: Boolean = false,</span><span class="diff-line">  )</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListViewModel.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import androidx.lifecycle.SavedStateHandle</span><span class="diff-line">  import androidx.lifecycle.ViewModel</span><span class="diff-line diff-line--add">+ import androidx.lifecycle.viewModelScope</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.delay</span><span class="diff-line">  import kotlinx.coroutines.flow.MutableStateFlow</span><span class="diff-line">  import kotlinx.coroutines.flow.StateFlow</span><span class="diff-line">  import kotlinx.coroutines.flow.asStateFlow</span><span class="diff-line">  import kotlinx.coroutines.flow.updateAndGet</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.launch</span><span class="diff-line">  </span><span class="diff-line">  // 画面状態を持つ ViewModel。画面回転（Activity の作り直し）では破棄されず、同じインスタンスが使われ続ける。</span><span class="diff-line">  // SavedStateHandle: プロセスが終了されても残したい値の入れ物。Activity の onSaveInstanceState の Bundle に保存され、</span><span class="diff-line">  // プロセスが作り直されたときに、保存した値が入った状態で渡される</span><span class="diff-line">  class TodoListViewModel(</span><span class="diff-line">      private val savedStateHandle: SavedStateHandle,</span><span class="diff-line diff-line--remove">-     initialTodos: List&lt;Todo&gt;,</span><span class="diff-line diff-line--add">+     private val initialTodos: List&lt;Todo&gt;,</span><span class="diff-line diff-line--add">+     // 読み込みに見立てて待つ時間。テストでは 0 や仮想時間で動かす</span><span class="diff-line diff-line--add">+     private val loadDelayMillis: Long,</span><span class="diff-line">  ) : ViewModel() {</span><span class="diff-line">  </span><span class="diff-line">      // viewModel() の既定のファクトリは、引数なし、または SavedStateHandle だけのコンストラクタを探して呼ぶ</span><span class="diff-line diff-line--remove">-     constructor(savedStateHandle: SavedStateHandle) : this(savedStateHandle, demoTodos(20))</span><span class="diff-line diff-line--add">+     constructor(savedStateHandle: SavedStateHandle) : this(savedStateHandle, demoTodos(20), loadDelayMillis = 1_000L)</span><span class="diff-line">  </span><span class="diff-line">      // 書き込めるのは ViewModel の中だけ。外には読み取り専用の StateFlow として公開する。</span><span class="diff-line diff-line--remove">-     // 保存されていればそれを使い、無ければ初期値を使う。ArrayList&lt;Todo&gt; は、要素が Parcelable なので保存できる</span><span class="diff-line diff-line--add">+     // 保存されていればそれを使う（読み込み済みなので isLoading は false）。無ければ空の一覧と isLoading = true で始め、下の init で読み込む。</span><span class="diff-line diff-line--add">+     // ArrayList&lt;Todo&gt; は、要素が Parcelable なので保存できる</span><span class="diff-line diff-line--add">+     private val restoredTodos = savedStateHandle.get&lt;ArrayList&lt;Todo&gt;&gt;(KEY_TODOS)</span><span class="diff-line">      private val _uiState = MutableStateFlow(</span><span class="diff-line">          TodoListUiState(</span><span class="diff-line diff-line--remove">-             todos = savedStateHandle.get&lt;ArrayList&lt;Todo&gt;&gt;(KEY_TODOS) ?: initialTodos,</span><span class="diff-line diff-line--add">+             todos = restoredTodos ?: emptyList(),</span><span class="diff-line">              filter = savedStateHandle.get&lt;TodoFilter&gt;(KEY_FILTER) ?: TodoFilter.All,</span><span class="diff-line diff-line--add">+             isLoading = restoredTodos == null,</span><span class="diff-line">          ),</span><span class="diff-line">      )</span><span class="diff-line">      val uiState: StateFlow&lt;TodoListUiState&gt; = _uiState.asStateFlow()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     init {</span><span class="diff-line diff-line--add">+         if (restoredTodos == null) {</span><span class="diff-line diff-line--add">+             // viewModelScope: ViewModel が破棄される（onCleared）ときに、中の処理もまとめてキャンセルされるスコープ。</span><span class="diff-line diff-line--add">+             // 既定のディスパッチャーは Dispatchers.Main.immediate</span><span class="diff-line diff-line--add">+             viewModelScope.launch {</span><span class="diff-line diff-line--add">+                 // 読み込みに見立てた待ち時間（実際のアプリでは、ここでサーバーや DB から読む）</span><span class="diff-line diff-line--add">+                 delay(loadDelayMillis)</span><span class="diff-line diff-line--add">+                 update { it.copy(todos = initialTodos, isLoading = false) }</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  </span><span class="diff-line">      // 状態の更新はすべてここを通す。updateAndGet は、今の値から新しい値を作って入れ替え、入れ替えたあとの値を返す</span><span class="diff-line">      // （複数の更新が重なっても取りこぼさない）。その値を SavedStateHandle にも書く</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>restoredTodos</code>: 保存された一覧です。<code>null</code> なら保存が無いので、<code>isLoading = true</code> で始めて <code>init</code> で読み込みます。</li>
+            <li><code>viewModelScope</code>: ViewModel が破棄される（<code>onCleared</code>）ときに、中の処理もまとめてキャンセルされるスコープです。画面が閉じられた後に読み込みが走り続けることはありません。既定のディスパッチャーは <code>Dispatchers.Main.immediate</code> です。</li>
+            <li><code>initialTodos</code> を <code>init</code> の後でも使うので、<code>private val</code> にしました。</li>
+          </ul>
+          <p>画面では、読み込み中は <code>CircularProgressIndicator</code> だけを出します。<code>TodoListScreen</code> に引数 <code>isLoading</code> を足します。既定値を <code>false</code> にしたので、既存の呼び出しとテストは変わりません。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.material3.AlertDialog</span><span class="diff-line">  import androidx.compose.material3.Card</span><span class="diff-line">  import androidx.compose.material3.CardDefaults</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.CircularProgressIndicator</span><span class="diff-line">  import androidx.compose.material3.ExperimentalMaterial3Api</span><span class="diff-line">  import androidx.compose.material3.ExtendedFloatingActionButton</span><span class="diff-line">  import androidx.compose.material3.FilterChip</span><span class="diff-line">  ...</span><span class="diff-line">      showAddSheet: Boolean = false,</span><span class="diff-line">      onAddSheetDismiss: () -&gt; Unit = {},</span><span class="diff-line">      onDeleteDone: () -&gt; Unit = {},</span><span class="diff-line diff-line--add">+     isLoading: Boolean = false,</span><span class="diff-line">  ) {</span><span class="diff-line">      // rememberLazyListState: スクロール位置を覚える。LazyColumn に渡すと、位置を読んだり動かしたりできる</span><span class="diff-line">      val listState = rememberLazyListState()</span><span class="diff-line">  ...</span><span class="diff-line">              TopAppBar(</span><span class="diff-line">                  title = { Text(&quot;Todo&quot;) },</span><span class="diff-line">                  actions = {</span><span class="diff-line diff-line--remove">-                     // 完了済みをまとめて削除する。取り消せない操作なので、確認ダイアログを挟む</span><span class="diff-line diff-line--remove">-                     IconButton(</span><span class="diff-line diff-line--remove">-                         onClick = { showDeleteDoneDialog = true },</span><span class="diff-line diff-line--remove">-                         enabled = todos.any { it.done },</span><span class="diff-line diff-line--remove">-                         modifier = Modifier.testTag(&quot;delete_done_button&quot;),</span><span class="diff-line diff-line--remove">-                     ) {</span><span class="diff-line diff-line--remove">-                         Icon(Icons.Default.Delete, contentDescription = &quot;完了済みをすべて削除&quot;)</span><span class="diff-line diff-line--add">+                     // 読み込み中は、一括削除も件数バッジも出さない（操作できず、「0 件」と誤解させるため）</span><span class="diff-line diff-line--add">+                     if (!isLoading) {</span><span class="diff-line diff-line--add">+                         // 完了済みをまとめて削除する。取り消せない操作なので、確認ダイアログを挟む</span><span class="diff-line diff-line--add">+                         IconButton(</span><span class="diff-line diff-line--add">+                             onClick = { showDeleteDoneDialog = true },</span><span class="diff-line diff-line--add">+                             enabled = todos.any { it.done },</span><span class="diff-line diff-line--add">+                             modifier = Modifier.testTag(&quot;delete_done_button&quot;),</span><span class="diff-line diff-line--add">+                         ) {</span><span class="diff-line diff-line--add">+                             Icon(Icons.Default.Delete, contentDescription = &quot;完了済みをすべて削除&quot;)</span><span class="diff-line diff-line--add">+                         }</span><span class="diff-line diff-line--add">+                         CountBadge(count = todos.count { !it.done })</span><span class="diff-line">                      }</span><span class="diff-line diff-line--remove">-                     CountBadge(count = todos.count { !it.done })</span><span class="diff-line">                  },</span><span class="diff-line">              )</span><span class="diff-line">          },</span><span class="diff-line">  ...</span><span class="diff-line">          snackbarHost = { SnackbarHost(snackbarHostState) },</span><span class="diff-line">          // floatingActionButton: 右下に浮かぶボタンの置き場所。2 つ並べたいときは Column に入れる</span><span class="diff-line">          floatingActionButton = {</span><span class="diff-line diff-line--remove">-             Column(</span><span class="diff-line diff-line--add">+             // 読み込み中は、読み込み表示だけを出す。追加すると、読み込み後の上書きで消えてしまう</span><span class="diff-line diff-line--add">+             if (!isLoading) Column(</span><span class="diff-line">                  horizontalAlignment = Alignment.End,</span><span class="diff-line">                  verticalArrangement = Arrangement.spacedBy(12.dp),</span><span class="diff-line">              ) {</span><span class="diff-line">  ...</span><span class="diff-line">                  .fillMaxSize()</span><span class="diff-line">                  .padding(innerPadding),</span><span class="diff-line">          ) {</span><span class="diff-line diff-line--add">+             if (isLoading) {</span><span class="diff-line diff-line--add">+                 // 読み込み中: サマリ・フィルタ・一覧は出さず、読み込み表示だけにする（「0 件中 0 件完了」や空状態の文言は、「何も無い」と誤解させる）</span><span class="diff-line diff-line--add">+                 Box(</span><span class="diff-line diff-line--add">+                     modifier = Modifier</span><span class="diff-line diff-line--add">+                         .weight(1f)</span><span class="diff-line diff-line--add">+                         .fillMaxWidth()</span><span class="diff-line diff-line--add">+                         .testTag(&quot;loading&quot;),</span><span class="diff-line diff-line--add">+                     contentAlignment = Alignment.Center,</span><span class="diff-line diff-line--add">+                 ) {</span><span class="diff-line diff-line--add">+                     CircularProgressIndicator()</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line diff-line--add">+                 return@Column</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">              // derivedStateOf: todos から計算する完了件数を State として覚える。remember(todos) のキーは、todos の参照が変わったら計算式を作り直すため</span><span class="diff-line">              val doneCount by remember(todos) { derivedStateOf { todos.count { it.done } } }</span><span class="diff-line">              Text(</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>読み込み中は、サマリ・フィルタ・一覧・FAB・一括削除・件数バッジを出さず、読み込み表示だけにします。読み込みが終わると ViewModel が一覧を初期データで上書きするので、読み込み中に Todo を追加できると、その Todo が消えてしまいます。また、<code>0 件中 0 件完了</code> のサマリや「Todo はありません」の空状態は、データが無いと誤解させます。</p>
+          <p><code>TopAppBar</code> の <code>actions</code> と FAB は <code>if (!isLoading)</code> で囲みます。本文の <code>Column</code> では、先頭で読み込み表示を出し、<code>return@Column</code> でその後のサマリ・フィルタ・一覧を描かずに抜けます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      TodoListScreen(</span><span class="diff-line">          todos = uiState.todos,</span><span class="diff-line diff-line--add">+         isLoading = uiState.isLoading,</span><span class="diff-line">          snackbarHostState = snackbarHostState,</span><span class="diff-line">          filter = uiState.filter,</span><span class="diff-line">          onFilterChange = viewModel::setFilter,</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>アプリを起動した直後（筆者の環境では起動から約 1 秒以内のスクリーンショット）は、タイトル「Todo」の下に読み込み表示だけが出ていました。サマリ・フィルタ・FAB・一括削除・件数バッジはありません。数秒後には <code>20 件中 7 件完了</code> のサマリと一覧、FAB が出ます。</p>
+
+          <p>UI テストを直します。テスト用の ViewModel は待ち時間を 0 にして、最初の描画から一覧が出ているようにします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TestViewModels.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.lifecycle.viewmodel.viewModelFactory</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // テスト用: 初期データを指定して ViewModel を作る。</span><span class="diff-line diff-line--add">+ // テスト用: 初期データを指定して ViewModel を作る。待ち時間は 0 にして、最初の描画から一覧が出ているようにする。</span><span class="diff-line">  // viewModel(factory = ...) は、同じ ViewModelStoreOwner（ここでは Activity）の中では同じインスタンスを返す</span><span class="diff-line">  @Composable</span><span class="diff-line diff-line--remove">- fun testViewModel(initialTodos: List&lt;Todo&gt; = demoTodoList): TodoListViewModel =</span><span class="diff-line diff-line--remove">-     viewModel(factory = viewModelFactory { initializer { TodoListViewModel(createSavedStateHandle(), initialTodos) } })</span><span class="diff-line diff-line--add">+ fun testViewModel(initialTodos: List&lt;Todo&gt; = demoTodoList, loadDelayMillis: Long = 0L): TodoListViewModel =</span><span class="diff-line diff-line--add">+     viewModel(factory = viewModelFactory { initializer { TodoListViewModel(createSavedStateHandle(), initialTodos, loadDelayMillis) } })</span></pre>
+</div>
+
+          <p>実際の <code>MainActivity</code> を使う <code>TodoListViewModelRecreationTest</code> は、既定のファクトリ（待ち時間 1 秒）で ViewModel を作ります。2 つのテストとも、<code>waitUntil</code> で読み込みが終わって一覧が出るのを待ってから操作します。読み込み中はサマリとフィルタが出ないので、待たずに <code>filter_Done</code> を押そうとすると、見つからずに失敗します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListViewModelRecreationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.assertIsDisplayed</span><span class="diff-line">  import androidx.compose.ui.test.isToggleable</span><span class="diff-line">  import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.onAllNodesWithTag</span><span class="diff-line">  import androidx.compose.ui.test.onNodeWithTag</span><span class="diff-line">  import androidx.compose.ui.test.onNodeWithText</span><span class="diff-line">  import androidx.compose.ui.test.assertIsSelected</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun toggles_surviveActivityRecreation() {</span><span class="diff-line diff-line--remove">-         // 起動直後は 20 件中 7 件が完了。先頭の未完了の行を完了にする</span><span class="diff-line diff-line--add">+         // 起動直後は読み込み中（疑似の待ち時間は 1 秒）。待ち時間は実時間なので、一覧が出るまで waitUntil で待つ</span><span class="diff-line diff-line--add">+         composeTestRule.waitUntil(timeoutMillis = 5_000L) {</span><span class="diff-line diff-line--add">+             composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).fetchSemanticsNodes().isNotEmpty()</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+         // 読み込み後は 20 件中 7 件が完了。先頭の未完了の行を完了にする</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;20 件中 7 件完了&quot;).assertIsDisplayed()</span><span class="diff-line">          composeTestRule.onAllNodes(isToggleable())[0].performClick()</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;20 件中 8 件完了&quot;).assertIsDisplayed()</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun filter_survivesActivityRecreation() {</span><span class="diff-line diff-line--add">+         // 読み込み中はフィルタが出ないので、一覧が出るまで待つ</span><span class="diff-line diff-line--add">+         composeTestRule.waitUntil(timeoutMillis = 5_000L) {</span><span class="diff-line diff-line--add">+             composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).fetchSemanticsNodes().isNotEmpty()</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;filter_Done&quot;).performClick()</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;filter_Done&quot;).assertIsSelected()</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>viewModelScope</code> の <code>delay</code> は、テスト用のクロックでは進まない</p>
+              <p>Compose の UI テストには、アニメーションなどを進めるテスト用のクロック（<code>mainClock</code>）があります。<code>viewModelScope</code> の <code>delay</code> は実時間で進むので、このクロックの対象外です。<code>waitUntil</code> を入れる前は、<code>TodoListViewModelRecreationTest</code> が失敗しました。<code>20 件中 7 件完了</code> が見つからないという失敗です（<code>... is not displayed!</code>）。実時間の処理は、<code>waitUntil(timeoutMillis) { 条件 }</code> で条件が満たされるまで待ちます。</p>
+            </div>
+          </div>
+
+          <p>読み込み中の表示を確かめる UI テストを、<code>androidTest/.../ui/screens/TodoLoadingTest.kt</code> に作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoLoadingTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+// 読み込み中の表示
+@RunWith(AndroidJUnit4::class)
+class TodoLoadingTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun screen_whenLoading_showsOnlyIndicator() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(
+                    todos = emptyList(),
+                    inputState = rememberTextFieldState(),
+                    onToggle = { _, _ -&gt; },
+                    onAddClick = {},
+                    isLoading = true,
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag(&quot;loading&quot;).assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag(&quot;empty_state&quot;).assertCountEquals(0)
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(0)
+        // 操作部品とサマリは出さない
+        composeTestRule.onAllNodesWithTag(&quot;fab_add&quot;).assertCountEquals(0)
+        composeTestRule.onAllNodesWithTag(&quot;delete_done_button&quot;).assertCountEquals(0)
+        composeTestRule.onAllNodesWithTag(&quot;filter_All&quot;).assertCountEquals(0)
+        composeTestRule.onAllNodesWithText(&quot;0 件中 0 件完了&quot;).assertCountEquals(0)
+    }
+
+    @Test
+    fun page_showsIndicatorUntilLoaded_thenShowsRows() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                // 待ち時間は viewModelScope の delay（実時間）。Compose のテスト用クロックでは進まないので、waitUntil で待つ
+                TodoListPage(viewModel = testViewModel(loadDelayMillis = 500L))
+            }
+        }
+        composeTestRule.onNodeWithTag(&quot;loading&quot;).assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag(&quot;fab_add&quot;).assertCountEquals(0)
+        composeTestRule.onAllNodesWithText(&quot;0 件中 0 件完了&quot;).assertCountEquals(0)
+
+        composeTestRule.waitUntil(timeoutMillis = 5_000L) {
+            composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).fetchSemanticsNodes().isNotEmpty()
+        }
+
+        composeTestRule.onAllNodesWithTag(&quot;loading&quot;).assertCountEquals(0)
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(3)
+        composeTestRule.onNodeWithTag(&quot;fab_add&quot;).assertIsDisplayed()
+        composeTestRule.onNodeWithText(&quot;3 件中 2 件完了&quot;).assertIsDisplayed()
+    }
+}</code></pre>
+</div>
+
+          <p>1 つ目の <code>screen_whenLoading_showsOnlyIndicator</code> は、stateless な <code>TodoListScreen</code> に <code>isLoading = true</code> を渡します。読み込み表示だけが出て、空状態・行・FAB・一括削除・フィルタ・サマリが出ないことを確かめます。2 つ目は待ち時間 500 ミリ秒の ViewModel で <code>TodoListPage</code> を表示します。読み込み中は FAB とサマリが無く、読み込み後に 3 件の行と FAB、<code>3 件中 2 件完了</code> のサマリが出ることを確かめます。</p>
+
+          <p>ViewModel の単体テストを書きます。<code>app/src/test/java/com/handson/android01/ui/screens/TodoListViewModelTest.kt</code> を作ります。<code>test</code> 側（JVM）なので、エミュレータは要りません。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/TodoListViewModelTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.lifecycle.SavedStateHandle
+import com.handson.android01.kotlin.Todo
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+// ViewModel の単体テスト（JVM 上。エミュレータは不要）。
+// viewModelScope は Dispatchers.Main.immediate を使うが、JVM には Main が無いので、setMain でテスト用のディスパッチャーに差し替える
+@OptIn(ExperimentalCoroutinesApi::class)
+class TodoListViewModelTest {
+
+    private val todos = listOf(
+        Todo(1, &quot;write&quot;),
+        Todo(2, &quot;test&quot;, done = true),
+        Todo(3, &quot;ship&quot;),
+    )
+
+    // setMain したら、テストのあとで必ず resetMain する（他のテストに差し替えが残らないように）
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    private fun viewModel(
+        saved: SavedStateHandle = SavedStateHandle(),
+        loadDelayMillis: Long = 1_000L,
+    ) = TodoListViewModel(saved, todos, loadDelayMillis)
+
+    // StandardTestDispatcher: launch した処理はキューに入るだけで、テスト側が進める（runCurrent / advanceTimeBy / advanceUntilIdle）まで動かない。
+    // delay は仮想時間なので、待たずに時間だけ進められる
+    @Test
+    fun standardDispatcher_loadingFinishesWhenVirtualTimeAdvances() = runTest(StandardTestDispatcher()) {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vm = viewModel(loadDelayMillis = 1_000L)
+
+        // 作った直後: 読み込み中で、一覧は空
+        assertTrue(vm.uiState.value.isLoading)
+        assertEquals(emptyList&lt;Todo&gt;(), vm.uiState.value.todos)
+
+        advanceTimeBy(999)
+        runCurrent()
+        assertTrue(vm.uiState.value.isLoading)
+
+        advanceTimeBy(1)
+        runCurrent()
+        assertFalse(vm.uiState.value.isLoading)
+        assertEquals(todos, vm.uiState.value.todos)
+    }
+
+    // 待ち時間が 0 でも、Standard では launch の中身は runCurrent するまで動かない
+    @Test
+    fun standardDispatcher_doesNotRunLaunchedWorkUntilTold() = runTest(StandardTestDispatcher()) {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vm = viewModel(loadDelayMillis = 0L)
+
+        assertTrue(vm.uiState.value.isLoading)
+
+        runCurrent()
+        assertFalse(vm.uiState.value.isLoading)
+    }
+
+    // UnconfinedTestDispatcher: launch した処理は、最初の中断点（delay など）まで、呼び出した場所でそのまま実行される
+    @Test
+    fun unconfinedDispatcher_runsLaunchedWorkEagerly() = runTest {
+        Dispatchers.setMain(UnconfinedTestDispatcher(testScheduler))
+        val vm = viewModel(loadDelayMillis = 0L)
+
+        // runCurrent なしで、もう読み込みが終わっている
+        assertFalse(vm.uiState.value.isLoading)
+        assertEquals(todos, vm.uiState.value.todos)
+    }
+
+    // StateFlow の値の変化を順に集める。collect は終わらないので backgroundScope で起動する（テストの最後に自動でキャンセルされる）。
+    // StateFlow は値が変わったときだけ通知し、collect が追いつく前の途中の値は飛ばされる（conflation）
+    @Test
+    fun uiState_emitsLoadingThenLoadedThenToggled() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vm = viewModel(loadDelayMillis = 1_000L)
+        val states = mutableListOf&lt;TodoListUiState&gt;()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.toList(states) }
+
+        advanceTimeBy(1_000)
+        runCurrent()
+        vm.toggleTodo(1, done = true)
+
+        assertEquals(3, states.size)
+        assertTrue(states[0].isLoading)
+        assertFalse(states[1].isLoading)
+        assertFalse(states[1].todos.first { it.id == 1 }.done)
+        assertTrue(states[2].todos.first { it.id == 1 }.done)
+    }
+
+    // 以降のテストは、読み込み済み（待ち時間 0 + Unconfined）の状態から始める
+    private fun loadedViewModel(saved: SavedStateHandle = SavedStateHandle()): TodoListViewModel {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        return viewModel(saved, loadDelayMillis = 0L)
+    }</code></pre>
+</div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">基本操作のテスト 5 件（完了切替・追加・削除と元に戻す・完了済みの削除・絞り込み）を見る</summary>
+            <div class="disclosure__body">
+              <p>上のコードの続きです。ファイルを作るときは、この部分も上の続きに貼り付けます。読み込み済みの ViewModel に操作をして、<code>uiState</code> の値を確かめます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/TodoListViewModelTest.kt（続き）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">    @Test
+    fun toggleTodo_changesOnlyThatTodo() {
+        val vm = loadedViewModel()
+
+        vm.toggleTodo(1, done = true)
+
+        assertEquals(listOf(true, true, false), vm.uiState.value.todos.map { it.done })
+    }
+
+    @Test
+    fun addTodo_appendsWithNextIdAndIgnoresBlank() {
+        val vm = loadedViewModel()
+
+        vm.addTodo(&quot;  buy milk  &quot;)
+        vm.addTodo(&quot;   &quot;)
+
+        assertEquals(4, vm.uiState.value.todos.size)
+        assertEquals(Todo(4, &quot;buy milk&quot;), vm.uiState.value.todos.last())
+    }
+
+    @Test
+    fun deleteTodo_thenRestoreTodo_putsItBackAtTheSameIndex() {
+        val vm = loadedViewModel()
+        val target = todos[1]
+
+        vm.deleteTodo(target.id)
+        assertEquals(listOf(1, 3), vm.uiState.value.todos.map { it.id })
+
+        vm.restoreTodo(target, index = 1)
+        assertEquals(listOf(1, 2, 3), vm.uiState.value.todos.map { it.id })
+    }
+
+    @Test
+    fun deleteDone_removesDoneTodos() {
+        val vm = loadedViewModel()
+
+        vm.deleteDone()
+
+        assertEquals(listOf(1, 3), vm.uiState.value.todos.map { it.id })
+    }
+
+    @Test
+    fun setFilter_changesFilterOnly() {
+        val vm = loadedViewModel()
+
+        vm.setFilter(TodoFilter.Done)
+
+        assertEquals(TodoFilter.Done, vm.uiState.value.filter)
+        assertEquals(todos, vm.uiState.value.todos)
+    }</code></pre>
+</div>
+
+            </div>
+          </details>
+
+          <p>ファイルの残りです。保存された状態からの復元と、<code>SavedStateHandle</code> への書き込みを確かめます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/TodoListViewModelTest.kt（続き）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">    // SavedStateHandle に保存された値があれば、それを使い、読み込みは行わない（プロセスの再生成を、保存済みのハンドルを渡して再現する）
+    @Test
+    fun restoredState_isUsedWithoutLoading() {
+        val saved = SavedStateHandle(
+            mapOf(
+                &quot;todos&quot; to arrayListOf(Todo(9, &quot;restored&quot;, done = true)),
+                &quot;filter&quot; to TodoFilter.Done,
+            ),
+        )
+
+        val vm = loadedViewModel(saved)
+
+        assertFalse(vm.uiState.value.isLoading)
+        assertEquals(listOf(Todo(9, &quot;restored&quot;, done = true)), vm.uiState.value.todos)
+        assertEquals(TodoFilter.Done, vm.uiState.value.filter)
+    }
+
+    // 更新のたびに SavedStateHandle にも書かれる（保存される値は、Activity が onSaveInstanceState で Bundle に入れる）
+    @Test
+    fun updates_areWrittenToSavedStateHandle() {
+        val saved = SavedStateHandle()
+        val vm = loadedViewModel(saved)
+
+        vm.toggleTodo(1, done = true)
+        vm.setFilter(TodoFilter.Active)
+
+        assertEquals(vm.uiState.value.todos, saved.get&lt;ArrayList&lt;Todo&gt;&gt;(&quot;todos&quot;))
+        assertEquals(TodoFilter.Active, saved.get&lt;TodoFilter&gt;(&quot;filter&quot;))
+    }
+}</code></pre>
+</div>
+
+          <p><code>viewModelScope</code> は <code>Dispatchers.Main.immediate</code> を使いますが、JVM には Main ディスパッチャーがありません。<code>Dispatchers.setMain(...)</code> でテスト用のディスパッチャーに差し替え、テストの後に <code>@After</code> の <code>resetMain()</code> で戻します。差し替えるディスパッチャーは 2 種類あり、動き方が違います。</p>
+
+          <table>
+            <thead>
+            <tr><th>ディスパッチャー</th><th><code>launch</code> した処理</th><th>このテストでの確かめ方</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>StandardTestDispatcher</code></td><td>キューに入るだけで、テストが <code>runCurrent()</code>・<code>advanceTimeBy()</code>・<code>advanceUntilIdle()</code> で進めるまで動かない。<code>delay</code> は仮想時間で、待たずに時間だけ進められる</td><td>999 ミリ秒進めてもまだ <code>isLoading = true</code>、あと 1 ミリ秒進めると <code>false</code>。待ち時間 0 でも、<code>runCurrent()</code> するまで動かない</td></tr>
+            <tr><td><code>UnconfinedTestDispatcher</code></td><td>最初の中断点（<code>delay</code> など）まで、呼び出した場所でそのまま実行される</td><td>待ち時間 0 なら、ViewModel を作った時点で読み込みが終わっている</td></tr>
+            </tbody>
+          </table>
+
+          <ul>
+            <li><code>runTest { ... }</code> の中で <code>StandardTestDispatcher(testScheduler)</code> を <code>setMain</code> すると、<code>runTest</code> と ViewModel が同じ <code>testScheduler</code>（仮想時間）を共有します。</li>
+            <li><code>uiState_emitsLoadingThenLoadedThenToggled</code> は、<code>StateFlow</code> の値の変化を順に集めます。<code>collect</code>（<code>toList</code>）は終わらないので <code>backgroundScope</code> で起動し、テストの終わりに自動でキャンセルさせます。Unconfined で集めると、値が変わるたびにその場で集まり、「読み込み中 → 読み込み済み → 完了切替」の 3 件になります。</li>
+            <li><code>StateFlow</code> は、同じ値は通知せず、集める側が追いつく前の途中の値は飛ばします（conflation）。値の数を数えるテストでは、この性質を意識します。</li>
+            <li><code>restoredState_isUsedWithoutLoading</code> は、値を入れた <code>SavedStateHandle</code> を渡して、プロセスの再生成を再現します。</li>
+            <li>Turbine などのサードパーティのライブラリは使っていません。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Dispatchers.setMain</code> を忘れても、例外にならない</p>
+              <p><code>setMain</code> を忘れても、ViewModel の生成は例外になりません。<code>viewModelScope</code> が別スレッドで動き、検証がタイミング次第になります。ViewModel のテストでは、<code>setMain</code> を毎回呼び、<code>@After</code> で <code>resetMain</code> します。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>setMain</code> を忘れた実験の記録を見る</summary>
+            <div class="disclosure__body">
+              <p><code>setMain</code> を呼ばずに、待ち時間 0 の ViewModel を作るだけの使い捨てのテストを書いて試しました。ViewModel の生成は例外にならず、テストも落ちません。生成の直後は <code>isLoading=true</code> のままで、300 ミリ秒待つと <code>false</code> になりました。</p>
+              <p>lifecycle の実装では、<code>Dispatchers.Main</code> が使えないと、<code>viewModelScope</code> は別のディスパッチャー（Default）で動きます。そのため、読み込みは別スレッドで非同期に実行され、検証がタイミング次第になります。直後に <code>assertFalse(isLoading)</code> すると、失敗することがあります（筆者の 1 回目の実行では失敗しました）。</p>
+              <p>テストの中で <code>Dispatchers.Main</code> に自分でアクセスした場合（<code>withContext(Dispatchers.Main) {}</code> で確かめました）は、次の分かりやすい例外になります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">例外のメッセージ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">java.lang.IllegalStateException: Dispatchers.Main was accessed when the platform dispatcher was absent and the test dispatcher was unset. Please make sure that Dispatchers.setMain() is called before accessing Dispatchers.Main and that Dispatchers.Main is not accessed after Dispatchers.resetMain().</span></pre>
+</div>
+
+
+            </div>
+          </details>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">クラスを指定して単体テストを実行する</p>
+              <p><code>./gradlew test --tests ...</code> は <code>Unknown command-line option '--tests'</code> で使えません。<code>test</code> は複数のビルドバリアントのテストを束ねるタスクだからです。1 つのクラスだけを実行するときは、<code>./gradlew testDebugUnitTest --tests '*TodoListViewModelTest'</code> のように、バリアントのタスクを指定します。</p>
+            </div>
+          </div>
+
+          <p>テストをまとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 36s</span><span class="terminal__line">86 actionable tasks: 2 executed, 84 up-to-date</span></pre>
+</div>
+
+          <p>UI テストは 56 件（<code>TodoLoadingTest</code> の 2 件を追加）、単体テストは 53 件（<code>TodoListViewModelTest</code> の 11 件を追加）で、すべて成功します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>テストが <code>BUILD SUCCESSFUL</code> で終われば OK です。アプリを起動すると、読み込み表示だけが 1 秒ほど出てから、サマリ・フィルタ・一覧・FAB が表示されます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、完成状態でビルド・lint・単体テスト・UI テストをまとめて実行します。エミュレータを起動した状態で実行してください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 36s</span><span class="terminal__line">86 actionable tasks: 2 executed, 84 up-to-date</span></pre>
+</div>
+
+          <p>結果をまとめます。</p>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト（<code>test</code>）</td><td>53 件すべて成功（06 の 42 件から <code>TodoListViewModelTest</code> の 11 件が増えた）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>56 件すべて成功（06 の 53 件から 3 件増えた）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 9 件（<code>app/build/reports/lint-results-debug.txt</code>）。内訳は <code>UnusedResources</code> × 7、<code>AndroidGradlePluginVersion</code>、<code>RedundantLabel</code> です。ほかにヒント（<code>AutoboxingStateCreation</code>）が 1 件出ます。06 と同じ件数で、この項目で増えたものはありません</td></tr>
+            <tr><td>debug APK</td><td><code>app/build/outputs/apk/debug/app-debug.apk</code> は約 12MB</td></tr>
+            </tbody>
+          </table>
+
+          <table>
+            <thead>
+            <tr><th>テストクラス</th><th>種類</th><th>件数</th><th>この項目での変更</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>TodoListViewModelTest</code></td><td>単体</td><td>11</td><td>ステップ 3 で追加</td></tr>
+            <tr><td>02 の 6 クラスと <code>ExampleUnitTest</code></td><td>単体</td><td>42</td><td>準備で <code>BasicsTest</code> の期待値を変えた</td></tr>
+            <tr><td><code>TodoListViewModelRecreationTest</code></td><td>UI</td><td>2</td><td>ステップ 1 で追加、ステップ 3 で直した</td></tr>
+            <tr><td><code>TodoLoadingTest</code></td><td>UI</td><td>2</td><td>ステップ 3 で追加</td></tr>
+            <tr><td><code>TodoListPageRestorationTest</code></td><td>UI</td><td>1</td><td>ステップ 1 で 1 件削除</td></tr>
+            <tr><td><code>TodoFilterTest</code>・<code>TodoListPageTest</code>・<code>TodoSheetAndDialogTest</code>・<code>TodoSnackbarTest</code>・<code>TodoSwipeTest</code></td><td>UI</td><td>25</td><td>ステップ 1 で <code>testViewModel</code> に置き換えた</td></tr>
+            <tr><td>上記以外の 10 クラス</td><td>UI</td><td>26</td><td></td></tr>
+            </tbody>
+          </table>
+
+          <p>エミュレータでも操作します。アプリをインストールして起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">Installing APK &#x27;app-debug.apk&#x27; on &#x27;Handson_Android36(AVD) - 16&#x27; for :app:debug</span><span class="terminal__line">BUILD SUCCESSFUL in 1s</span><span class="terminal__line">39 actionable tasks: 1 executed, 38 up-to-date</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+
+          <p>起動の数秒後に、画面の文字を <code>uiautomator</code> で取り出します（筆者は起動の約 4 秒後に実行しました）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell uiautomator dump /sdcard/ui.xml</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cat /sdcard/ui.xml | grep -oE &#x27;text=&quot;[^&quot;]+&quot;&#x27;</span><span class="terminal__line">text=&quot;20 件中 7 件完了&quot;</span><span class="terminal__line">text=&quot;すべて&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;完了&quot;</span><span class="terminal__line">text=&quot;Task 2&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 3&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 5&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 6&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 8&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 9&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 11&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 12&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 14&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Todo&quot;</span><span class="terminal__line">text=&quot;13&quot;</span></pre>
+</div>
+
+          <p>06 の完成状態と同じ並びです。読み込みが終わった後なので、サマリは <code>20 件中 7 件完了</code> です。末尾の <code>13</code> は未完了の件数のバッジです。起動の直後に実行すると、読み込み中の表示（行の無い状態）を取り出すことがあります。</p>
+
+          <table>
+            <thead>
+            <tr><th>操作</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>起動直後</td><td>読み込み表示だけが出る（サマリ・フィルタ・FAB・一括削除・件数バッジは無い）。数秒以内に 20 件の一覧に変わる</td></tr>
+            <tr><td>チェックを付けて横向きに回転（ステップ 1）</td><td>チェックと絞り込みが残る</td></tr>
+            <tr><td>ホームボタン → <code>am kill</code> → <code>am start</code>（ステップ 2）</td><td>チェックと絞り込みが戻る。読み込み表示は出ない</td></tr>
+            </tbody>
+          </table>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">起動直後の <code>uiautomator dump</code> は失敗することがある</p>
+              <p>アプリを起動した直後に <code>uiautomator dump</code> を実行すると、<code>ERROR: null root node returned by UiTestAutomationBridge.</code> で失敗することがあります。数秒待ってから実行し直すと成功します。</p>
+            </div>
+          </div>
+
+          <p>確認が終わったら、エミュレータと Gradle デーモンを止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>上のテストの実行が <code>BUILD SUCCESSFUL</code> で終わり、UI テスト 56 件と単体テスト 53 件が成功していれば OK です。エミュレータで、起動時の読み込み表示と、回転・プロセスの終了の後も状態が残ることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid07</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">状態を ViewModel と Composable のどちらに置くかを、この項目の基準で説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>MutableStateFlow</code> を private にし、<code>asStateFlow()</code> で公開する理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">Composable の中で ViewModel のコンストラクタを直接呼ばず、<code>viewModel()</code> で取り出す理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>collectAsState()</code> と <code>collectAsStateWithLifecycle()</code> の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">画面回転では残りプロセスの終了では消える状態を、<code>SavedStateHandle</code> で復元した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>StandardTestDispatcher</code> と <code>UnconfinedTestDispatcher</code> の違いを、テストで確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>./gradlew assembleDebug lint test connectedDebugAndroidTest</code> で UI テスト 56 件・単体テスト 53 件を通した</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Cannot create an instance of class ...</code> で起動直後に落ちる</p>
+              <p><code>viewModel()</code> の既定のファクトリは、引数なし、または <code>SavedStateHandle</code> だけを受け取るコンストラクタしか呼べません。原因の行は <code>Caused by: java.lang.NoSuchMethodException: ...&lt;init&gt; []</code> です。既定のファクトリ用のコンストラクタを用意するか、<code>viewModel(factory = ...)</code> でファクトリを渡します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">回転すると状態が初期値に戻る</p>
+              <p>Composable の中で <code>TodoListViewModel()</code> のようにコンストラクタを直接呼ぶと、Activity が作り直されるたびに新しい ViewModel ができます。<code>viewModel()</code> で取り出します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ViewModel の回転のテストが、何をしても通る</p>
+              <p><code>StateRestorationTester</code> は Activity を作り直さないので、ViewModel の状態は必ず残ります。Activity ごと作り直す <code>createAndroidComposeRule&lt;MainActivity&gt;()</code> と <code>scenario.recreate()</code> を使います。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>am kill</code> してもプロセスが終了しない</p>
+              <p><code>am kill</code> はバックグラウンドのプロセスだけを終了します。先にホームボタンでアプリをバックグラウンドに移します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Can't put value with type ... into saved state</code> で落ちる</p>
+              <p><code>SavedStateHandle</code> に、Bundle に入らない型を書きました。<code>Parcelable</code>・<code>Serializable</code>・プリミティブ・<code>ArrayList</code> などに変換してから書きます。<code>List</code> は実装クラスによっては受け付けられない（<code>subList</code> の結果など）ので、<code>ArrayList(list)</code> に詰め替えて型を確定させます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ViewModel の単体テストが、ときどき失敗する</p>
+              <p><code>Dispatchers.setMain</code> を呼び忘れると、例外は出ないまま <code>viewModelScope</code> が別スレッドで動き、検証がタイミング次第になります。テストごとに <code>setMain</code> し、<code>@After</code> で <code>resetMain</code> します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">UI テストが、読み込み前の画面を見て失敗する</p>
+              <p><code>viewModelScope</code> の <code>delay</code> は実時間なので、Compose のテスト用クロックでは進みません。<code>waitUntil</code> で一覧が出るまで待つか、テスト用の ViewModel の待ち時間を 0 にします。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">横向きのまま UI テストを実行して、複数のテストが落ちる</p>
+              <p>回転を試した後は、次の 2 つのコマンドで向きを戻してから実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system accelerometer_rotation 1</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system user_rotation 0</span></pre>
+</div>
+
+            </div>
+          </div>
+
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        Todo の一覧と絞り込みを <code>TodoListViewModel</code> に移し、<code>MutableStateFlow</code> を private にして <code>StateFlow</code> で公開しました。画面は <code>viewModel()</code> で ViewModel を取り出し、<code>collectAsStateWithLifecycle()</code> で購読します。
+        状態の置き場所は、アプリのデータは ViewModel、Compose の部品に依存する見た目だけの状態は Composable、と分けました。
+        ViewModel は回転では残りますが、プロセスの終了では消えます。その退行を確かめ、<code>SavedStateHandle</code> で一覧と絞り込みを復元しました。
+        最後に、<code>viewModelScope</code> の読み込み処理を足し、<code>Dispatchers.setMain</code> と 2 種類のテスト用ディスパッチャーで ViewModel を単体テストしました。</p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>android/07-viewmodel-stateflow</code> の <code>android/07-viewmodel-stateflow/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../06-material3-components/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">06: Material3 の画面部品</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">08: Navigation 3</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
