@@ -1,0 +1,35 @@
+.updateChecker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 32px;
+}
+
+.button {
+  padding: 8px 20px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid var(--foreground);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.message {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+
+.error {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #d94545;
+  word-break: break-all;
+  text-align: center;
+}

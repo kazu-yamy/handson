@@ -1,0 +1,123 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "handson-tauri-05",
+  "version": "0.5.0",
+  "identifier": "com.handson.tauri05",
+  "build": {
+    "frontendDist": "../out",
+    "devUrl": "http://localhost:3000",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "handson-tauri-05",
+        "width": 800,
+        "height": 600,
+        "minWidth": 480,
+        "minHeight": 360,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "theme": null,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      },
+      {
+        "label": "about",
+        "url": "/about/",
+        "title": "About",
+        "width": 360,
+        "height": 240,
+        "resizable": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "msi",
+      "deb",
+      "appimage",
+      "rpm"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "copyright": "© 2026 Handson Materials",
+    "shortDescription": "Tauri ハンズオン 05: パッケージングと配布",
+    "longDescription": "Tauri トラックの 05 番目の教材で作成するサンプルアプリです。bundle 設定・ビルド最適化・署名・自動アップデート・GitHub Actions による各 OS 向けのリリースを扱います。",
+    "category": "DeveloperTool",
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "10.15",
+      "dmg": {
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        }
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "Japanese",
+          "English"
+        ],
+        "displayLanguageSelector": false
+      },
+      "wix": {
+        "language": [
+          "ja-JP",
+          "en-US"
+        ]
+      }
+    },
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "priority": "optional"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      },
+      "rpm": {
+        "release": "1"
+      }
+    },
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDQjY4MUExODU2NkE1NTcKUldSWHBXYUZvWUcyN05JSWZXL24yNy9jKzhMb2JtRUp3eXdHZVQya09QaUYvVEJSTkh0emxEYXIK",
+      "endpoints": [
+        "https://github.com/<owner>/<repo>/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true
+    }
+  }
+}
