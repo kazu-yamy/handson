@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03: SwiftUI 入門 | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">03</li>
+        </ol>
+        <h1 class="lesson-title">SwiftUI 入門</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: Swift の基本文法を学び終え、SwiftUI で画面を組み立て始めたい人</li>
+          <li class="lesson-meta__item">📋 前提: 02 で <code>Profile</code>・<code>TodoItem</code> などのモデル型を作った <code>HandsonApp</code> プロジェクトが手元にあること。オプショナル・列挙型・<code>switch</code> の書き方を知っていること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../02-swift-basics/index.html">02 Swift 基礎</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>Text</code> に修飾子を付けて見た目を整え、修飾子の順序で結果が変わることを確かめる</li>
+          <li><code>VStack</code>・<code>HStack</code>・<code>Spacer</code>・<code>Image(systemName:)</code> で画面を組み立てる</li>
+          <li>View を別ファイルのサブビューに切り出し、<code>#Preview</code> で複数のパターンをプレビューする</li>
+          <li><code>ForEach</code> で繰り返し、<code>if</code>・<code>switch</code> で表示を切り替える</li>
+          <li><code>body</code> に書けるもの・書けないものを、ビルドエラーの文言で確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        02 で作った <code>Profile</code> と <code>TodoItem</code> を、SwiftUI の画面に表示します。
+        完成すると、画面の上部にプロフィールのカード、その下に 3 件の ToDo が並びます。
+        ボタンやタップによる状態の変更は扱わず、「データを受け取って表示する View」を組み立てることに集中します。状態の変更は次の 04 で扱います。
+      </p>
+      <p>
+        02 と同じく、Xcode の画面での操作と、同じ結果をターミナルで確かめるコマンドの両方を載せています。どちらか一方で進めてかまいません。
+        ターミナルで進める場合は、ビルドした <code>.app</code> をシミュレータにインストールして画面を確かめます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            02 と同じく、macOS 26.6.2 / Xcode 27.0 / Swift 6.4 で動作を確認しています。シミュレータは iPhone 17（iOS 26.5）を使います。
+            バージョンは執筆時点（2026年10月）のものです。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">02 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            02 の完成コードをそのまま出発点にします。<code>02-swift-basics</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>03-swiftui-basics</code> にコピーします。
+            プロジェクト名・ターゲット名・Bundle Identifier（<code>com.example.HandsonApp</code>）は変えません。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 02-swift-basics 03-swiftui-basics</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 03-swiftui-basics/HandsonApp</span></pre>
+          </div>
+
+          <p>以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。コピーしたプロジェクトがそのままビルドでき、02 の 18 テストが通ることを確かめます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test tooLongNameThrowsWithAssociatedValue() passed after 0.003 seconds.</span><span class="terminal__line">✔ Test resultVersion() passed after 0.001 seconds.</span><span class="terminal__line">✔ Suite ValidationTests passed after 0.007 seconds.</span><span class="terminal__line">✔ Test run with 18 tests in 6 suites passed after 0.022 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+          </div>
+
+          <p>
+            ビルドの途中で <code>appintentsmetadataprocessor</code> の <code>warning: Metadata extraction skipped, no AppIntents.framework dependency found</code> が表示されます。02 で説明したとおり、Swift のコードに対する警告ではないので無視してかまいません。以降のビルドでも毎回表示されます。
+          </p>
+
+          <p>Xcode の場合は、<code>03-swiftui-basics/HandsonApp/HandsonApp.xcodeproj</code> を開き、<kbd>⌘</kbd> + <kbd>U</kbd>（<code>Product</code> &gt; <code>Test</code>）でテストを実行します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> と <code>Test run with 18 tests in 6 suites passed</code> が表示されれば準備完了です。この項目ではテストを追加せず、02 の 18 テストが通り続けることだけを確かめます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">Text と修飾子で見た目を整える</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>ContentView.swift</code> を開きます。今は 01 で書いた、地球のアイコンと <code>Hello, SwiftUI!</code> を縦に並べる画面のままです。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift（変更前）</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">struct ContentView: View {
+    var body: some View {
+        VStack {
+            Image(systemName: "globe")
+                .imageScale(.large)
+                .foregroundStyle(.tint)
+            Text("Hello, SwiftUI!")
+                .font(.title)
+        }
+        .padding()
+    }
+}</code></pre>
+          </div>
+
+          <p>
+            SwiftUI の画面は、<code>View</code> プロトコルに準拠した構造体で作ります。<code>body</code> プロパティに、画面に表示する View を書きます。
+            <code>Text("…")</code> は文字列を表示する View で、後ろに <code>.font(.title)</code> のように続けて書くメソッドを修飾子（modifier）と呼びます。
+            ファイル全体を次の内容に書き換えます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  ContentView.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    var body: some View {
+        VStack {
+            Text("Handson Profile")
+                .font(.title)
+                .fontWeight(.bold)
+                .foregroundStyle(.secondary)
+                .padding()
+
+            // 修飾子の順序: padding → background（余白も含めて色が付く）
+            Text("padding → background")
+                .padding()
+                .background(.yellow)
+
+            // background → padding（文字の範囲だけに色が付く）
+            Text("background → padding")
+                .background(.yellow)
+                .padding()
+        }
+    }
+}
+
+#Preview {
+    ContentView()
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>.font(.title)</code>・<code>.fontWeight(.bold)</code>: 文字の大きさと太さを指定します。</li>
+            <li><code>.foregroundStyle(.secondary)</code>: 文字の色を指定します。<code>.secondary</code> は控えめな灰色の文字になります。色の指定には <code>.foregroundColor</code> ではなく、新しい API の <code>.foregroundStyle</code> を使います。</li>
+            <li><code>.padding()</code>: View の周りに余白を付けます。</li>
+            <li><code>.background(.yellow)</code>: View の背景に色を付けます。</li>
+          </ul>
+
+          <p>
+            下の 2 つの <code>Text</code> は、<code>.padding()</code> と <code>.background(.yellow)</code> を逆の順序で付けています。
+            修飾子は上から順に「それまでの結果を包む」ように適用されます。そのため、順序によって次のように見た目が変わります。
+          </p>
+          <ul>
+            <li><code>.padding()</code> → <code>.background(.yellow)</code>: 先に余白を付けた View 全体に背景を付けるので、余白ごと黄色になります。</li>
+            <li><code>.background(.yellow)</code> → <code>.padding()</code>: 文字だけに背景を付けてから余白を足すので、黄色は文字の範囲だけで、余白は外側に付きます。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">順序で結果が変わる修飾子・変わらない修飾子</p>
+              <p>
+                順序で結果が変わるのは、<code>padding</code>・<code>frame</code>・<code>background</code>・<code>border</code> のようにレイアウトや範囲に関わる修飾子です。
+                1 つ目の <code>Text</code> の <code>.foregroundStyle(.secondary)</code> を <code>.font</code> より前に書いても、見た目は同じです。
+              </p>
+            </div>
+          </div>
+
+          <p>ビルドしてシミュレータで確かめます。シミュレータを起動し、ビルドした <code>.app</code> をインストールして起動します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl boot 'iPhone 17'</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: 58422</span></pre>
+          </div>
+
+          <p>
+            シミュレータがすでに起動している場合、<code>simctl boot</code> は失敗します。その場合は <code>boot</code> を飛ばしてください。<code>launch</code> の出力の末尾の数字はプロセス ID で、実行するたびに変わります。
+            Xcode の場合は、<kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示できます。
+          </p>
+
+          <p>
+            Xcode では、コードを書きながらキャンバス（Canvas）で画面を確かめられます。<code>#Preview { … }</code> がキャンバスに表示する内容です。
+            メニューの <code>Editor</code> &gt; <code>Canvas</code>（<kbd>⌥</kbd> + <kbd>⌘</kbd> + <kbd>↩</kbd>）でキャンバスを表示し、表示が止まっている場合は右上の <code>Resume</code>（<kbd>⌥</kbd> + <kbd>⌘</kbd> + <kbd>P</kbd>）で再描画します。
+            キャンバス上の <code>Text</code> を <kbd>⌘</kbd> + クリックして <code>Show SwiftUI Inspector</code> を選ぶと、フォントや色を画面から変更でき、コードも書き換わります。<!-- 要確認: Canvas の表示内容と SwiftUI Inspector の挙動は手順ログで未確認（CLI ではプレビューを描画できない） -->
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              画面の中央に、上から順に次の 3 つが並びます。
+              灰色の太字で「Handson Profile」、余白ごと黄色い四角に収まった「padding → background」、文字の範囲だけが黄色い「background → padding」です。
+              2 つの黄色の大きさが違うことで、修飾子の順序で結果が変わることを確認してください。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">スタックでプロフィールのカードを組み立てる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            02 で作った <code>Profile</code> を使い、アイコン・名前・星を並べたカードを作ります。
+            View を縦に並べる <code>VStack</code>、横に並べる <code>HStack</code>、空いた場所を埋める <code>Spacer</code> を組み合わせます。
+            <code>ContentView.swift</code> を次の内容に書き換えます。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  ContentView.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    let profile = Profile(name: "Taro Yamada", nickname: "Taro")
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 48))
+                    .foregroundStyle(.tint)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(profile.displayName)
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    Text(profile.name)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "star.fill")
+                    .foregroundStyle(.yellow)
+            }
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+
+            Spacer()
+        }
+        .padding()
+    }
+}
+
+#Preview {
+    ContentView()
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>Image(systemName: "person.crop.circle.fill")</code>: SF Symbols のアイコンを名前で表示します。<code>.font(.system(size: 48))</code> で大きさを、<code>.foregroundStyle(.tint)</code> でアプリのアクセントカラー（青）を指定しています。</li>
+            <li><code>VStack(alignment: .leading, spacing: 4)</code>: <code>alignment</code> は子の揃え方、<code>spacing</code> は子どうしの間隔です。<code>VStack</code> の <code>alignment</code> は横方向の揃え（<code>.leading</code> は左揃え）で、<code>HStack</code> の <code>alignment</code> は縦方向の揃え（<code>.top</code>・<code>.center</code>・<code>.bottom</code>）です。</li>
+            <li><code>Spacer()</code>: 残りの空間を全て取ります。<code>HStack</code> の中では星を右端に押し出し、外側の <code>VStack</code> の末尾ではカードを画面の上に押し上げます。</li>
+            <li><code>.frame(maxWidth: .infinity)</code>: カードを横幅いっぱいに広げます。<code>.background</code> より前に置いているので、背景も横幅いっぱいに付きます。ステップ 2 の修飾子の順序と同じ考え方です。</li>
+            <li><code>.background(.quaternary, in: RoundedRectangle(cornerRadius: 12))</code>: 角丸の四角形の形で、薄い灰色の背景を付けます。</li>
+          </ul>
+
+          <p>
+            <code>let profile = Profile(…)</code> のように、View の中に表示するデータを持たせられます。
+            <code>Text(profile.displayName)</code> には、02 で書いた <code>displayName</code>（ニックネームがあればニックネーム）が表示されます。
+          </p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Xcode でスタックに包む</p>
+              <p>キャンバスやエディタで View を <kbd>⌘</kbd> + クリックし、<code>Embed in HStack</code> や <code>Embed in VStack</code> を選ぶと、選んだ View をスタックで包むコードに書き換えられます。<!-- 要確認: Embed in HStack / VStack の GUI 操作は手順ログで未確認 --></p>
+            </div>
+          </div>
+
+          <p>ビルドしてシミュレータに入れ直します。<code>install</code> で新しい <code>.app</code> に置き換えてから <code>launch</code> します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;PID&gt;</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              画面の上部に、角丸で薄い灰色のカードが横幅いっぱいに表示されます。
+              カードの左に青い丸の人型アイコン、その右に太字の「Taro」と灰色の小さな「Taro Yamada」、右端に黄色い星が並びます。
+              カードの下は空白で、全体が上に詰まっていれば OK です。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">カードをサブビューに切り出してプレビューする（ProfileHeader）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            <code>body</code> が長くなってきたので、カードの部分を <code>ProfileHeader</code> という別の View に切り出します。
+            表示する <code>Profile</code> は引数で受け取るようにし、ニックネームの有無で表示を変えます。まず、Xcode でフォルダとファイルを作ります。
+          </p>
+
+          <ol>
+            <li>ナビゲータで <code>HandsonApp</code> フォルダ（黄色）を右クリックし、<code>New Group</code>（または <code>New Folder</code>）で <code>Views</code> を作ります。</li>
+            <li><code>Views</code> を右クリックし、<code>New File from Template…</code>（<kbd>⌘</kbd> + <kbd>N</kbd>）を選びます。<code>iOS</code> &gt; <code>SwiftUI View</code> を選び、名前を <code>ProfileHeader</code>、<code>Targets</code> は <code>HandsonApp</code> にチェックを付けて作成します。テンプレートには <code>#Preview</code> があらかじめ書かれています。</li>
+          </ol>
+
+          <p>02 と同じく <code>HandsonApp</code> は同期フォルダなので、<code>HandsonApp/Views/ProfileHeader.swift</code> にファイルを置くだけでもターゲットに取り込まれます。ターミナルで進める場合は、プロジェクトのフォルダで <code>mkdir HandsonApp/Views</code> を実行してフォルダを作ります。中身を次の内容にします。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Views/ProfileHeader.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import SwiftUI
+
+struct ProfileHeader: View {
+    let profile: Profile
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "person.crop.circle.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(profile.displayName)
+                    .font(.title2)
+                    .fontWeight(.bold)
+                // ニックネームがあるときだけ本名を添える
+                if profile.nickname != nil {
+                    Text(profile.name)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+#Preview("ニックネームあり") {
+    ProfileHeader(profile: Profile(name: "Taro Yamada", nickname: "Taro"))
+        .padding()
+}
+
+#Preview("ニックネームなし") {
+    ProfileHeader(profile: Profile(name: "Hanako Suzuki", nickname: nil))
+        .padding()
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>let profile: Profile</code>: 表示するデータをプロパティで受け取ります。構造体なので、<code>ProfileHeader(profile:)</code> のイニシャライザが自動で用意されます。</li>
+            <li><code>if profile.nickname != nil { … }</code>: <code>body</code> の中では <code>if</code> で表示する View を切り替えられます。ニックネームが無いときは 2 行目の本名を表示しません（1 行目の <code>displayName</code> がすでに本名になるため）。</li>
+            <li>ステップ 3 にあった星（<code>star.fill</code>）は、ここでは外しています。</li>
+            <li><code>#Preview("ニックネームあり") { … }</code>: <code>#Preview</code> は 1 つのファイルに複数書けます。括弧内の文字列がプレビューの名前になり、引数を変えた複数のパターンを並べて確かめられます。中の <code>.padding()</code> は、プレビューでカードが画面の端に貼り付かないようにするためだけのものです。</li>
+          </ul>
+
+          <p><code>ContentView.swift</code> は、カードを <code>ProfileHeader</code> に置き換えて短くします。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  ContentView.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    let profile = Profile(name: "Taro Yamada", nickname: "Taro")
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ProfileHeader(profile: profile)
+            Spacer()
+        }
+        .padding()
+    }
+}
+
+#Preview {
+    ContentView()
+}</code></pre>
+          </div>
+
+          <p>
+            Xcode で <code>ProfileHeader.swift</code> を開き、キャンバス（<kbd>⌥</kbd> + <kbd>⌘</kbd> + <kbd>↩</kbd>）を表示します。
+            キャンバスの下部に「ニックネームあり」「ニックネームなし」の 2 つのタブが並び、クリックで切り替えられます。
+            「ニックネームあり」では太字の「Taro」と灰色の「Taro Yamada」、「ニックネームなし」では太字の「Hanako Suzuki」だけがカードに表示されます。<!-- 要確認: キャンバス下部に名前付きのタブが並ぶかは人の確認が必要 -->
+          </p>
+
+          <p>ターミナルでは、これまでと同じようにビルドしてシミュレータに入れ直します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;PID&gt;</span></pre>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>#Preview</code> の中で引数を渡し忘れるとビルドが失敗する</p>
+              <p><code>ProfileHeader.swift</code> の「ニックネームなし」のプレビューで、<code>ProfileHeader(profile: …)</code> を一時的に <code>ProfileHeader()</code> に変えてビルドしてみます。</p>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/Views/ProfileHeader.swift:36:19: error: missing argument for parameter 'profile' in call</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+              </div>
+              <p>
+                <code>missing argument for parameter 'profile' in call</code>（呼び出しで引数 <code>profile</code> が足りない）のエラーです。
+                <code>#Preview</code> の中身もアプリのビルドでコンパイルされるため、キャンバスを開いていなくても <code>xcodebuild</code> で見つかります。
+                確認したら、元の <code>ProfileHeader(profile: Profile(name: "Hanako Suzuki", nickname: nil))</code> に戻してください。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              シミュレータの画面が、ステップ 3 から右端の黄色い星だけを除いた見た目になります。上部の薄い灰色のカードに、青い人型アイコン、太字の「Taro」、灰色の「Taro Yamada」が並んでいれば OK です。
+              見た目が変わらないまま、<code>ContentView</code> の <code>body</code> が 1 行の <code>ProfileHeader(profile: profile)</code> に短くなったことを確認してください。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">ForEach と switch で ToDo の一覧を表示する（TodoRow）</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            02 で作った <code>TodoItem</code> を 1 行で表示する <code>TodoRow</code> を作り、<code>ForEach</code> で 3 件並べます。
+            <code>Views</code> フォルダに SwiftUI View のファイル <code>TodoRow.swift</code> を作り、次の内容を書きます。<code>Views</code> フォルダはステップ 4 で作成済みなので、<code>mkdir</code> は不要です。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Views/TodoRow.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import SwiftUI
+
+struct TodoRow: View {
+    let item: TodoItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // switch: Status の case ごとにアイコンを切り替える
+            switch item.status {
+            case .todo:
+                Image(systemName: "circle")
+                    .foregroundStyle(.secondary)
+            case .done:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            }
+
+            Text(item.title)
+                .strikethrough(isDone)
+
+            Spacer()
+
+            Text(item.priority.label)
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
+        }
+    }
+
+    private var isDone: Bool {
+        if case .done = item.status {
+            return true
+        }
+        return false
+    }
+}
+
+#Preview("未完了") {
+    TodoRow(item: TodoItem(title: "牛乳を買う", priority: .high))
+        .padding()
+}
+
+#Preview("完了") {
+    TodoRow(item: TodoItem(title: "メールを返す", priority: .low, status: .done(Date())))
+        .padding()
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>switch item.status { … }</code>: <code>body</code> の中では <code>switch</code> でも表示する View を切り替えられます。未完了は灰色の丸、完了は緑のチェックマークにしています。<code>case .done:</code> のように書くと、関連値（完了日時）は無視できます。</li>
+            <li><code>.strikethrough(isDone)</code>: 引数が <code>true</code> のときだけ文字に取り消し線を引きます。</li>
+            <li><code>private var isDone: Bool</code>: <code>Status</code> は <code>Equatable</code> に準拠していないため <code>==</code> で比べられません。そこで <code>if case .done = item.status</code> で完了かどうかを判定しています。</li>
+            <li><code>.background(.quaternary, in: Capsule())</code>: 優先度のラベルを、薄い灰色のカプセル形で囲みます。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>body</code> では <code>return</code> が要らず、<code>isDone</code> では要る理由</p>
+              <p>
+                <code>body</code> は <code>ViewBuilder</code> という仕組みで組み立てられるため、View を並べたり、<code>if</code>・<code>switch</code> で切り替えたりするだけで、<code>return</code> を書かずに View を返せます。
+                Xcode 27 のクイックヘルプでは <code>@ContentBuilder</code> と表示されますが、これは <code>ViewBuilder</code> の別名です。
+                一方、<code>isDone</code> のような通常のプロパティの中は <code>ViewBuilder</code> ではないため、<code>return true</code> のように値を返す必要があります。
+              </p>
+            </div>
+          </div>
+
+          <p><code>ContentView.swift</code> に ToDo のデータと一覧を追加します。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">//
+//  ContentView.swift
+//  HandsonApp
+//
+
+import SwiftUI
+
+struct ContentView: View {
+    let profile = Profile(name: "Taro Yamada", nickname: "Taro")
+
+    let items: [TodoItem] = [
+        TodoItem(title: "牛乳を買う", priority: .high),
+        TodoItem(title: "メールを返す", priority: .low, status: .done(Date())),
+        TodoItem(title: "SwiftUI を勉強する"),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ProfileHeader(profile: profile)
+
+            Text("Todo")
+                .font(.headline)
+
+            // List は 05 で扱う。ここでは ForEach を VStack に並べる
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(items, id: \.title) { item in
+                    TodoRow(item: item)
+                }
+            }
+
+            if items.isEmpty {
+                Text("Todo はありません")
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding()
+    }
+}
+
+#Preview {
+    ContentView()
+}</code></pre>
+          </div>
+
+          <ul>
+            <li><code>ForEach(items, id: \.title) { item in … }</code>: 配列の要素ごとに View を作ります。<code>id:</code> には、各要素を区別するためのプロパティをキーパスで指定します。<code>TodoItem</code> は <code>Identifiable</code> に準拠していないため、ここでは <code>title</code> を ID にしています。</li>
+            <li><code>if items.isEmpty { … }</code>: 配列が空のときだけ「Todo はありません」を表示します。今は 3 件あるため表示されません。</li>
+            <li>3 件目の <code>TodoItem(title: "SwiftUI を勉強する")</code> は優先度を省略しているため、02 で決めた既定値 <code>.medium</code>（中）になります。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">タイトルを ID にすると重複に弱い</p>
+              <p><code>id: \.title</code> では、同じタイトルの ToDo が 2 件あると ID が衝突します。この項目ではタイトルが全て異なるので問題ありませんが、実際のアプリでは各要素に一意な ID を持たせます。</p>
+              <p>試しに 4 件目として同じタイトルの <code>TodoItem(title: "牛乳を買う", priority: .low)</code> を追加しても、ビルドは通ります。実行すると、Xcode のコンソールに次の警告が出ます。</p>
+              <p><code>ForEach&lt;Array&lt;TodoItem&gt;, String, TodoRow&gt;: the ID 牛乳を買う occurs multiple times within the collection, this will give undefined results!</code></p>
+              <p>このとき、SwiftUI が別の行の内容を表示してしまうことがあります。実測では、優先度 <code>.low</code> の行に「高」と表示されました。</p>
+            </div>
+          </div>
+
+          <p>
+            Xcode では <code>TodoRow.swift</code> のキャンバスで「未完了」「完了」の 2 つのプレビューを切り替えられます。
+            「未完了」は灰色の丸と「牛乳を買う」と「高」、「完了」は緑のチェックマークと取り消し線付きの「メールを返す」と「低」が表示されます。
+          </p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;PID&gt;</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              上部にプロフィールのカード、その下に見出し「Todo」、さらに 3 行の ToDo が並びます。
+              1 行目は灰色の丸と「牛乳を買う」で右端に「高」、2 行目は緑のチェックマークと取り消し線付きの「メールを返す」で右端に「低」、3 行目は灰色の丸と「SwiftUI を勉強する」で右端に「中」です。
+              右端の優先度は、薄い灰色のカプセルで囲まれています。「Todo はありません」は表示されません。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">body に書けないものを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ステップ 5 で見たとおり、<code>body</code> は <code>ViewBuilder</code> で組み立てられます。何が書けて何が書けないかを、実験用のファイルで確かめます。
+            <code>Views</code> フォルダに <code>Fail6a1.swift</code> を作り、次の内容を書きます。このファイルは確認後に削除します。
+          </p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Views/Fail6a1.swift（実験用。確認後に削除する）</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import SwiftUI
+
+struct Fail6a1: View {
+    var body: some View {
+        Text("一つ目")
+        Text("二つ目")
+    }
+}</code></pre>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Text</code> を 2 つ並べるだけならビルドは通る</p>
+              <p>
+                <code>VStack</code> などで包まずに <code>Text</code> を 2 つ並べても、ビルドは成功します。<code>body</code> は <code>ViewBuilder</code> なので、複数の子を返せるためです（内部では <code>TupleView</code> になります）。
+                ただし、縦に並ぶか横に並ぶかはこの View を使う側の文脈で決まり、この View だけでは決まりません。並べ方を明確にするため、通常は <code>VStack</code> などのコンテナで明示的に包みます。
+              </p>
+            </div>
+          </div>
+
+          <p>次に、<code>body</code> を次のように書き換えて、View ではない文を混ぜてみます。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Swift</span>
+              <span class="code-block__filename">HandsonApp/Views/Fail6a1.swift（実験用。確認後に削除する）</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-swift">import SwiftUI
+
+struct Fail6a1: View {
+    var body: some View {
+        let title = "Hello"
+        Text(title)
+        print("rendered")
+    }
+}</code></pre>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>body</code> に <code>print</code> を書くとビルドが失敗する</p>
+              <div class="terminal">
+                <div class="terminal__header">
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__dot"></span>
+                  <span class="terminal__title">Terminal</span>
+                </div>
+                <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">…/Views/Fail6a1.swift:7:9: error: type '()' cannot conform to 'View' [#ProtocolTypeNonConformance]</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+              </div>
+              <p>
+                <code>type '()' cannot conform to 'View'</code>（<code>()</code> 型は <code>View</code> に準拠できない）のエラーが、<code>print("rendered")</code> の行（7 行目）で出ます。
+                <code>ViewBuilder</code> の中では、<code>print(…)</code> の結果（何も返さないことを表す <code>()</code> 型）も View の並びの 1 つとして扱われるためです。
+                一方、<code>let title = "Hello"</code> のような <code>let</code> 文は、<code>ViewBuilder</code> の中でも書けます。
+              </p>
+            </div>
+          </div>
+
+          <p>確認したら、実験用のファイルを削除して、ビルドが通る状態に戻します。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm HandsonApp/Views/Fail6a1.swift</span></pre>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Text</code> を 2 つ並べただけではビルドが通り、<code>print</code> を混ぜると <code>type '()' cannot conform to 'View'</code> でビルドが失敗することを確認できれば OK です。最後に <code>Fail6a1.swift</code> を削除したことも確かめてください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">完成状態でビルドとテストを実行する</h3>
+        </div>
+        <div class="step__body">
+          <p>完成状態のファイル構成は次のとおりです。<code>Models</code> フォルダとテストは 02 のままです。</p>
+
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Text</span>
+              <span class="code-block__filename">HandsonApp/</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext">HandsonApp/
+  HandsonApp/
+    HandsonAppApp.swift
+    ContentView.swift            # この項目で更新
+    Greeting.swift
+    Models/                      # 02 のまま
+      Profile.swift
+      Counter.swift
+      TodoItem.swift
+      Describable.swift
+      Validation.swift
+    Views/                       # この項目で追加
+      ProfileHeader.swift
+      TodoRow.swift
+  HandsonAppTests/               # 02 のまま（18 テスト）</code></pre>
+          </div>
+
+          <p>ビルドと全てのユニットテストを実行し、シミュレータで最終的な画面を確かめてから、シミュレータを止めます。</p>
+
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Suite ValidationTests passed after 0.005 seconds.</span><span class="terminal__line">✔ Test run with 18 tests in 6 suites passed after 0.018 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;PID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+          </div>
+
+          <p>Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> で全てのテストを実行し、<kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>** BUILD SUCCEEDED **</code> と <code>Test run with 18 tests in 6 suites passed</code> が表示されることを確かめます。シミュレータにステップ 5 と同じ画面（プロフィールのカードと 3 行の ToDo）が表示されれば完成です。
+              ビルドの出力に、Swift のコードに対する警告（<code>appintentsmetadataprocessor</code> 以外の <code>warning:</code>）が出ていないことも確認してください。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">02 のプロジェクトをコピーし、ビルドと 18 テストが通ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>.padding()</code> と <code>.background</code> の順序を入れ替えると、背景の範囲が変わることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>VStack</code>・<code>HStack</code> の <code>alignment</code> がそれぞれどの方向の揃えかを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>ProfileHeader</code> をサブビューに切り出し、名前付きの <code>#Preview</code> を 2 つ書いた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>ForEach</code> で ToDo を並べ、<code>switch</code> でアイコンを、<code>.strikethrough</code> で取り消し線を切り替えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>#Preview</code> の引数不足や <code>body</code> の <code>print</code> がビルドエラーになることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">18 テストが全て通り、<code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">背景が思った範囲に付かない</p>
+          <p>修飾子の順序を確認してください。<code>.padding()</code> や <code>.frame(maxWidth: .infinity)</code> を <code>.background</code> より前に書くと、余白や広げた範囲まで背景が付きます。後ろに書くと、背景は元の View の範囲だけに付きます。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Status</code> を <code>==</code> で比べられない</p>
+          <p>関連値（<code>.done(Date)</code>）を持つ <code>Status</code> は <code>Equatable</code> ではないため、<code>item.status == .todo</code> のようには書けません。ステップ 5 の <code>TodoRow</code> のように、<code>switch</code> か <code>if case .done = item.status</code> で判定してください。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        02 で作った <code>Profile</code> と <code>TodoItem</code> を、SwiftUI の画面に表示しました。<code>Text</code> と修飾子、スタックによるレイアウト、サブビューへの切り出しと <code>#Preview</code>、<code>ForEach</code>・<code>if</code>・<code>switch</code> による表示の切り替えを扱いました。
+        あわせて、修飾子の順序で見た目が変わること、<code>body</code> に View ではない文を書くとビルドエラーになることも確かめました。
+        次の項目では、<code>@State</code>・<code>@Binding</code>・<code>@Observable</code> を使い、タップなどの操作で画面の状態を変えます。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li><a href="https://developer.apple.com/tutorials/swiftui">SwiftUI Tutorials</a></li>
+        <li><a href="https://developer.apple.com/documentation/swiftui/previews-in-xcode">Previews in Xcode</a></li>
+        <li>SwiftUI のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/swiftui/text">Text</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftui/vstack">VStack</a> / <a href="https://developer.apple.com/documentation/swiftui/hstack">HStack</a> / <a href="https://developer.apple.com/documentation/swiftui/spacer">Spacer</a> / <a href="https://developer.apple.com/documentation/swiftui/image">Image</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftui/foreach">ForEach</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftui/viewbuilder">ViewBuilder</a></li>
+          </ul>
+        </li>
+        <li><a href="https://developer.apple.com/sf-symbols/">SF Symbols</a></li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/03-swiftui-basics</code> の <code>ios/03-swiftui-basics/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/03-swiftui-basics/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../02-swift-basics/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">02: Swift 基礎</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">04: @State・@Binding・@Observable</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
