@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>11: Charts と MapKit | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">11</li>
+        </ol>
+        <h1 class="lesson-title">Charts と MapKit</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 中級</li>
+          <li class="lesson-meta__item">👤 対象: SwiftData で保存する ToDo アプリを作ったことがあり、その内容をグラフと地図で見せたい人</li>
+          <li class="lesson-meta__item">📋 前提: 10 でウィジェットとショートカットを加えた <code>HandsonApp</code> プロジェクトが手元にあること。SwiftData の <code>@Model</code>・<code>@Query</code>・<code>ModelContext</code> と、Swift Testing の <code>@Test</code>・<code>#expect</code> を使ったことがあること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../10-widget-intents/index.html">10 WidgetKit と App Intents</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>集計の処理を画面から分けた型にし、ユニットテストで確かめる</li>
+          <li>Swift Charts の <code>Chart</code> と <code>BarMark</code> で棒グラフを描く</li>
+          <li><code>annotation</code>・軸・凡例・色の指定でグラフを整え、<code>SectorMark</code> でドーナツグラフを描く</li>
+          <li>SwiftData のモデルに省略可能なプロパティを足し、既存のデータのまま開けること（軽量マイグレーション）を確かめる</li>
+          <li>MapKit の <code>Map</code> と <code>Marker</code> で地図とピンを表示する</li>
+          <li><code>MapReader</code> で、地図をタップした位置を緯度経度に変換して保存する</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        10 までの ToDo アプリに、2 つの画面要素を加えます。1 つ目は、完了と未完了の件数を表す統計画面です。Swift Charts で棒グラフとドーナツグラフを描きます。
+        2 つ目は、ToDo の詳細画面の地図です。地図をタップすると、その場所を ToDo に保存できます。
+      </p>
+      <p>
+        Swift Charts と MapKit は SDK に含まれているので、追加のパッケージは要りません。完成すると、ユニットテストは 76 から 82 に、UI テストは 2 から 3 に増えます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョンと並行処理の設定</p>
+          <p>
+            Xcode 27.0 / Swift 6.4（Swift 6 言語モード）/ 最小対象 iOS 18.0 / シミュレータ iPhone 17（iOS 27.0）は 10 と同じです。バージョンは執筆時点（2026年10月）のものです。
+          </p>
+          <p>
+            アプリターゲットは 10 と同じく、<code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> です。アプリの型は既定でメインアクターに分離されます。テストから使うときにこの設定が効いてきます（ステップ 1）。
+          </p>
+          <p>
+            この項目では現在地を取得しません（現在地を取得する Core Location の位置情報サービスは使いません）。そのため、位置情報の利用を許可するダイアログは出ません。ただし、地図のタイル（地図の画像）を表示するには、シミュレータを動かす Mac がネットワークにつながっている必要があります。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="preparation">準備</h2>
+      <p>
+        10 の完成コードをそのまま出発点にします。<code>10-widget-intents</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>11-charts-mapkit</code> にコピーします。
+        プロジェクト名・ターゲット名・Bundle Identifier（<code>com.example.HandsonApp</code>）・App Group の ID は変えません。
+      </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 10-widget-intents 11-charts-mapkit</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 11-charts-mapkit/HandsonApp</span><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span></pre>
+</div>
+
+      <p>以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。Xcode の場合は、<code>11-charts-mapkit/HandsonApp/HandsonApp.xcodeproj</code> を開きます。</p>
+
+      <div class="callout callout--warning">
+        <span class="callout__icon" aria-hidden="true">⚠️</span>
+        <div class="callout__body">
+          <p class="callout__title">シミュレータのアプリは削除しないでおく</p>
+          <p>ステップ 4 で、10 のアプリが保存した ToDo を 11 のアプリがそのまま開けることを確かめます。10 で追加した ToDo が残っているシミュレータのアプリは、削除しないでおきます。</p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">集計の型 TodoStats を作ってテストする</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            グラフを描く前に、表示する数（完了と未完了の件数）を数える型を作ります。画面やグラフから切り離した型にしておくと、ユニットテストで確かめられます。
+            <code>HandsonApp/Models</code> フォルダに <code>TodoStats.swift</code> を追加します（<code>Targets</code> は <code>HandsonApp</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoStats.swift（ステップ 1 の版）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+
+// 完了 / 未完了の件数を数える。画面にもグラフにも依存しない純粋な型
+struct TodoStats: Equatable {
+    let done: Int
+    let pending: Int
+
+    var total: Int { done + pending }
+
+    init(records: [TodoRecord]) {
+        done = records.filter(\.isDone).count
+        pending = records.count - done
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>init(records:)</code> は <code>TodoRecord</code> の配列を受け取り、<code>isDone</code> が <code>true</code> のものを完了として数えます。残りが未完了です。</li>
+            <li><code>Equatable</code> に準拠させているので、テストで <code>==</code> を使って比べられます。</li>
+          </ul>
+
+          <p>テストを書きます。<code>HandsonAppTests</code> フォルダに <code>TodoStatsTests.swift</code> を追加します（<code>Targets</code> は <code>HandsonAppTests</code>）。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/TodoStatsTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Testing
+@testable import HandsonApp
+
+@MainActor
+struct TodoStatsTests {
+    @Test func 完了と未完了の件数を数える() {
+        let finished = TodoRecord(title: "完了")
+        finished.toggle()
+        let records = [finished, TodoRecord(title: "未完了A"), TodoRecord(title: "未完了B")]
+
+        let stats = TodoStats(records: records)
+
+        #expect(stats.done == 1)
+        #expect(stats.pending == 2)
+        #expect(stats.total == 3)
+    }
+
+    @Test func 空の配列ならすべて0() {
+        let stats = TodoStats(records: [])
+        #expect(stats == TodoStats(records: []))
+        #expect(stats.total == 0)
+    }
+}</code></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">テストの struct に <code>@MainActor</code> を付け忘れると、ビルドが通らない</p>
+              <p><code>@MainActor</code> の行を消してテストを実行すると、次のようなエラーになります（8 件のうちの抜粋）。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">Call to main actor-isolated initializer 'init(records:)' in a synchronous nonisolated context</span><span class="terminal__line">Main actor-isolated conformance of 'TodoStats' to 'Equatable' cannot be used in nonisolated context</span><span class="terminal__line">Main actor-isolated property 'total' can not be referenced from a nonisolated context</span><span class="terminal__line">** TEST FAILED **</span></pre>
+</div>
+              <p>
+                アプリターゲットは <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> なので、<code>TodoStats</code> と <code>TodoRecord</code> はメインアクターに分離されます。一方、テストターゲットにこの設定は無く、テストの struct はメインアクターの外（nonisolated）にあります。そのため、テストから <code>TodoStats</code> の初期化や <code>==</code> を呼べません。
+                既存の <code>TodoRecordTests</code> と同じく、<code>@MainActor</code> を付けるとビルドが通ります。
+              </p>
+            </div>
+          </div>
+
+          <p>ユニットテストを実行します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild test -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.0' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests</span><span class="terminal__line">…</span><span class="terminal__line">━ Test run with 78 tests in 23 suites passed after 6.323 seconds with 1 known issue.</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Test run with 78 tests in 23 suites passed</code> と表示されることを確かめます。10 の 76 件に、この 2 件が加わりました。<code>1 known issue</code> は、09 で書いた <code>withKnownIssue</code> の分です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">Chart と BarMark で棒グラフを描き、統計画面へ遷移する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            Swift Charts の <code>Chart</code> は、データの配列を受け取り、要素ごとに「マーク」（棒や点など、グラフを形作る図形）を描きます。<code>Chart(stats.entries) { … }</code> のように配列を渡す書き方では、配列の要素を <code>Identifiable</code> にします。
+            そこで、<code>TodoStats</code> に 1 本の棒に当たるデータ型 <code>Entry</code> を加えます。<code>total</code> の下に追加します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoStats.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">      var total: Int { done + pending }</span><span class="diff-line"></span><span class="diff-line diff-line--add">+     // グラフに渡す 1 件分のデータ。Chart の ForEach は Identifiable な配列を取る</span><span class="diff-line diff-line--add">+     struct Entry: Identifiable {</span><span class="diff-line diff-line--add">+         let status: String</span><span class="diff-line diff-line--add">+         let count: Int</span><span class="diff-line diff-line--add">+         var id: String { status }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     var entries: [Entry] {</span><span class="diff-line diff-line--add">+         [Entry(status: "完了", count: done), Entry(status: "未完了", count: pending)]</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">      init(records: [TodoRecord]) {</span></pre>
+</div>
+
+          <p>統計画面を作ります。<code>HandsonApp/Views</code> フォルダに <code>TodoStatsView.swift</code> を追加します（<code>Targets</code> は <code>HandsonApp</code>）。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoStatsView.swift（ステップ 2 の版）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Charts
+import SwiftData
+import SwiftUI
+
+struct TodoStatsView: View {
+    @Query private var records: [TodoRecord]
+
+    private var stats: TodoStats { TodoStats(records: records) }
+
+    var body: some View {
+        List {
+            Section("件数") {
+                Chart(stats.entries) { entry in
+                    BarMark(
+                        x: .value("状態", entry.status),
+                        y: .value("件数", entry.count)
+                    )
+                    // 状態ごとに色を分ける（凡例も自動で付く）
+                    .foregroundStyle(by: .value("状態", entry.status))
+                }
+                .frame(height: 220)
+            }
+        }
+        .navigationTitle("統計")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+#Preview {
+    NavigationStack { TodoStatsView() }
+        .modelContainer(for: TodoRecord.self, inMemory: true)
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>@Query</code> で全ての <code>TodoRecord</code> を読み、<code>TodoStats</code> で数えます。ToDo が増減すると、<code>@Query</code> の結果が変わり、グラフも描き直されます。</li>
+            <li><code>BarMark</code> が棒 1 本です。<code>.value("状態", entry.status)</code> のように、軸の名前と値の組で X と Y を指定します。</li>
+            <li><code>.foregroundStyle(by:)</code> は、値ごとに色を分けます。色を分けると、凡例も自動で付きます。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>import Charts</code> を忘れると、<code>Chart</code> が見つからない</p>
+              <p><code>import Charts</code> の行を消してビルドすると、次のエラーになります。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">TodoStatsView.swift:12:17: error: cannot find 'Chart' in scope</span><span class="terminal__line">TodoStatsView.swift:13:21: error: cannot find 'BarMark' in scope</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p><code>Chart</code> や <code>BarMark</code> は SwiftUI ではなく、Charts フレームワークの型です。<code>import Charts</code> を戻すとビルドが通ります。</p>
+            </div>
+          </div>
+
+          <p>
+            一覧画面のツールバーに、統計画面へのボタンを置きます。10 までは <code>EditButton()</code> だけでした。ボタンを 2 つ置くので、<code>ToolbarItem(placement:)</code> でそれぞれの場所を指定します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line">              .toolbar {</span><span class="diff-line diff-line--remove">-                 EditButton()</span><span class="diff-line diff-line--add">+                 ToolbarItem(placement: .topBarLeading) {</span><span class="diff-line diff-line--add">+                     NavigationLink {</span><span class="diff-line diff-line--add">+                         TodoStatsView()</span><span class="diff-line diff-line--add">+                     } label: {</span><span class="diff-line diff-line--add">+                         Image(systemName: "chart.bar")</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                     .accessibilityLabel("統計")</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line diff-line--add">+                 ToolbarItem(placement: .topBarTrailing) {</span><span class="diff-line diff-line--add">+                     EditButton()</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line">              }</span></pre>
+</div>
+
+          <ul>
+            <li><code>.topBarLeading</code> は左上、<code>.topBarTrailing</code> は右上です。</li>
+            <li>ボタンはアイコン（<code>chart.bar</code>）だけなので、<code>.accessibilityLabel("統計")</code> で名前を付けます。VoiceOver や UI テストは、この名前でボタンを見分けます。</li>
+          </ul>
+
+          <p>ビルドしてアプリをシミュレータで実行します。ToDo を 3 件追加して 1 件を完了にしてから、左上の棒グラフのアイコンをタップします。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              「統計」画面に棒が 2 本表示されることを確かめます。執筆時は、完了（1）が青、未完了（2）が緑の棒になりました。Y 軸の目盛りは右側に 0 / 1 / 2、X 軸のラベルは「完了」「未完了」で、グラフの下に凡例が自動で付きました。
+              件数は、それまでに追加した ToDo の数によって変わります。色はシステムの既定の配色です。次のステップで色を指定します。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">注釈・軸・凡例を整え、SectorMark でドーナツグラフを加える</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            棒グラフを見やすく整え、割合を表すドーナツグラフを加えます。<code>TodoStatsView.swift</code> を次の全文に置き換えます。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoStatsView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Charts
+import SwiftData
+import SwiftUI
+
+struct TodoStatsView: View {
+    @Query private var records: [TodoRecord]
+
+    private var stats: TodoStats { TodoStats(records: records) }
+
+    // 状態と色の対応を 1 か所で決める（2 つのグラフで同じ色にそろえる）
+    private let colors: KeyValuePairs&lt;String, Color&gt; = ["完了": .green, "未完了": .orange]
+
+    var body: some View {
+        List {
+            Section("件数") {
+                Chart(stats.entries) { entry in
+                    BarMark(
+                        x: .value("状態", entry.status),
+                        y: .value("件数", entry.count)
+                    )
+                    .foregroundStyle(by: .value("状態", entry.status))
+                    // 棒の上に件数を表示する
+                    .annotation(position: .top) {
+                        Text("\(entry.count)")
+                            .font(.caption.bold())
+                    }
+                    .accessibilityLabel(entry.status)
+                    .accessibilityValue("\(entry.count) 件")
+                }
+                .chartForegroundStyleScale(colors)
+                // 件数は小さい整数なので、目盛りの数を 3 程度に抑える
+                .chartYAxis {
+                    AxisMarks(values: .automatic(desiredCount: 3)) { _ in
+                        AxisGridLine()
+                        AxisValueLabel()
+                    }
+                }
+                // X 軸は凡例と重複するので隠す
+                .chartXAxis(.hidden)
+                .chartLegend(position: .bottom, alignment: .center)
+                .frame(height: 220)
+            }
+
+            Section("割合") {
+                Chart(stats.entries) { entry in
+                    SectorMark(
+                        angle: .value("件数", entry.count),
+                        innerRadius: .ratio(0.6),  // 内側をくり抜いてドーナツにする
+                        angularInset: 2
+                    )
+                    .foregroundStyle(by: .value("状態", entry.status))
+                    .accessibilityLabel(entry.status)
+                    .accessibilityValue("\(entry.count) 件")
+                }
+                .chartForegroundStyleScale(colors)
+                .chartBackground { _ in
+                    // ドーナツの中央に合計を出す
+                    VStack {
+                        Text("\(stats.total)")
+                            .font(.title.bold())
+                        Text("件")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .chartLegend(position: .bottom, alignment: .center)
+                .frame(height: 240)
+            }
+        }
+        .navigationTitle("統計")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+#Preview {
+    NavigationStack { TodoStatsView() }
+        .modelContainer(for: TodoRecord.self, inMemory: true)
+}</code></pre>
+</div>
+
+          <p>ステップ 2 からの変更点は次のとおりです。</p>
+          <ul>
+            <li><strong><code>chartForegroundStyleScale</code></strong>: 値と色の対応を決めます。<code>foregroundStyle(by:)</code> だけでは、既定の配色になります。対応を <code>colors</code> の 1 か所で決め、2 つのグラフに同じものを渡して色をそろえます。</li>
+            <li><strong><code>annotation(position: .top)</code></strong>: 棒の上に件数を表示します。</li>
+            <li><strong><code>chartYAxis</code></strong>: <code>AxisMarks(values: .automatic(desiredCount: 3))</code> で、目盛りの数の目安を 3 にします。<code>AxisGridLine()</code> が目盛りの線、<code>AxisValueLabel()</code> が目盛りの数値です。</li>
+            <li><strong><code>chartXAxis(.hidden)</code></strong>: X 軸のラベルは凡例と同じ内容なので隠します。<code>chartLegend(position: .bottom, alignment: .center)</code> で、凡例をグラフの下の中央に置きます。</li>
+            <li><strong><code>SectorMark</code></strong>: 扇形のマークです。<code>angle</code> に件数を渡すと、件数の割合で円を分けます。<code>innerRadius: .ratio(0.6)</code> で内側をくり抜いてドーナツにし、<code>angularInset: 2</code> で扇形の間に隙間を空けます。</li>
+            <li><strong><code>chartBackground</code></strong>: グラフの背景にビューを置きます。ここではドーナツの中央に合計の件数を出します。クロージャーはグラフの情報（<code>ChartProxy</code>）を受け取りますが、今回は使わないので <code>_</code> にしています。</li>
+            <li><strong><code>accessibilityLabel</code> / <code>accessibilityValue</code></strong>: マークごとに、VoiceOver に伝える名前（状態）と値（件数）を付けます。</li>
+          </ul>
+
+          <p>ビルドしてアプリを実行し、ステップ 2 と同じく完了 1 件・未完了 2 件の状態で「統計」画面を開きます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              「件数」のグラフで、緑（完了）の棒の上に「1」、橙（未完了）の棒の上に「2」が表示されることを確かめます。X 軸のラベルは消え、凡例（緑が完了、橙が未完了）が下の中央に出ます。執筆時、Y 軸の目盛りは右側に 0 / 2 / 4 でした。
+            </p>
+            <p>
+              「割合」のグラフは、橙が約 3 分の 2、緑が約 3 分の 1 のドーナツになり、中央に「3」「件」が表示されます。扇形の間には細い隙間があります。
+            </p>
+            <p>
+              ToDo が 0 件のときは、ドーナツと Y 軸の目盛りが消え、中央の「0」「件」と、棒グラフ領域の中ほどに浮いた注釈「0」「0」、凡例だけが表示されました。VoiceOver での実際の読み上げは、執筆時に確かめていません。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">モデルに緯度と経度を足し、既存のデータのまま開けることを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            ここから地図の機能に移ります。まず、ToDo に場所を持たせます。<code>TodoRecord.swift</code> の <code>createdAt</code> の下に緯度と経度のプロパティを、<code>init</code> と <code>toggle()</code> の間に <code>hasLocation</code> を追加します。<code>init</code> は変えません。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRecord.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">      var completedAt: Date?</span><span class="diff-line">      var createdAt: Date</span><span class="diff-line diff-line--add">+     // 場所。どちらも nil なら「場所なし」。あとから追加した省略可能なプロパティなので、</span><span class="diff-line diff-line--add">+     // 既存のデータは nil のまま開ける（SwiftData の軽量マイグレーション）</span><span class="diff-line diff-line--add">+     var latitude: Double?</span><span class="diff-line diff-line--add">+     var longitude: Double?</span><span class="diff-line"></span><span class="diff-line">      init(title: String, priority: Priority = .medium, createdAt: Date = .now, remoteID: Int? = nil) {</span><span class="diff-line">  …</span><span class="diff-line">          self.createdAt = createdAt</span><span class="diff-line">      }</span><span class="diff-line"></span><span class="diff-line diff-line--add">+     // 緯度と経度が両方そろっているときだけ場所があるとみなす</span><span class="diff-line diff-line--add">+     var hasLocation: Bool {</span><span class="diff-line diff-line--add">+         latitude != nil &amp;&amp; longitude != nil</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">      // 完了と未完了を切り替える。完了にした時刻も一緒に記録する</span><span class="diff-line">      func toggle() {</span></pre>
+</div>
+
+          <ul>
+            <li>新しい 2 つのプロパティは省略可能（<code>Double?</code>）で、初期値は <code>nil</code> です。そのため、<code>init</code> で代入しなくても済みます。</li>
+            <li>保存済みのデータベースには、この 2 つの列がありません。省略可能なプロパティを足しただけなら、SwiftData が既存のデータを <code>nil</code> のまま読み込めるよう、自動で移行します（軽量マイグレーション）。<code>VersionedSchema</code> や <code>SchemaMigrationPlan</code> は書きません。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">座標型ではなく、<code>Double</code> を 2 つ持たせる理由</p>
+              <p>
+                <code>TodoRecord.swift</code> は、10 からウィジェットの拡張（<code>TodoWidgetExtension</code>）にも入れています。モデルに座標型（Core Location の <code>CLLocationCoordinate2D</code>）を持たせると、ウィジェットにも位置情報のフレームワークを読み込ませることになります。
+                そこで、モデルには <code>Double</code> を 2 つだけ持たせ、座標型への変換は地図を表示する画面で行います（ステップ 5）。
+              </p>
+            </div>
+          </div>
+
+          <p>ウィジェットの拡張もビルドできることを確かめます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild build -project HandsonApp.xcodeproj -scheme TodoWidgetExtension -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.0' -derivedDataPath $DD</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+</div>
+
+          <p>
+            次に、既存のデータのまま開けることを確かめます。10 で ToDo を追加したシミュレータに、アプリを<strong>削除せずに</strong>上書きでインストールします。ビルドしてアプリをシミュレータで実行します（Xcode では、スキームを <code>HandsonApp</code>、実行先を <code>iPhone 17</code> にして <kbd>⌘</kbd> + <kbd>R</kbd>）。
+          </p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              アプリがクラッシュせずに起動し、10 で追加した ToDo がそのまま一覧に表示されることを確かめます。執筆時は、10 のアプリで「牛乳を買う」「メールを返す」の 2 件を追加しておき、11 のアプリを上書きで起動しました。2 件とも、優先度「中」のバッジ付きで表示されました。左上には、ステップ 2 の統計のボタンもあります。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">Map・Marker・MapReader で、地図をタップして場所を設定する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            詳細画面に地図を置きます。場所があればピン（<code>Marker</code>）を立て、地図をタップすると、その位置を ToDo の場所として保存します。
+            まず、場所を設定する・消すメソッドを <code>TodoRecord</code> に加えます。<code>hasLocation</code> の下に追加します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRecord.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">      var hasLocation: Bool {</span><span class="diff-line">          latitude != nil &amp;&amp; longitude != nil</span><span class="diff-line">      }</span><span class="diff-line"></span><span class="diff-line diff-line--add">+     func setLocation(latitude: Double, longitude: Double) {</span><span class="diff-line diff-line--add">+         self.latitude = latitude</span><span class="diff-line diff-line--add">+         self.longitude = longitude</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     func clearLocation() {</span><span class="diff-line diff-line--add">+         latitude = nil</span><span class="diff-line diff-line--add">+         longitude = nil</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">      // 完了と未完了を切り替える。完了にした時刻も一緒に記録する</span></pre>
+</div>
+
+          <p><code>TodoDetailView.swift</code> を次の全文に置き換えます。10 までの 4 行（タイトル・優先度・状態・完了日時）はそのままで、<code>import</code>・<code>init</code>・「場所」の <code>Section</code>・プレビューを加えています。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoDetailView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import MapKit
+import SwiftData
+import SwiftUI
+
+struct TodoDetailView: View {
+    // 保存を明示的に行うための窓口
+    @Environment(\.modelContext) private var modelContext
+    let record: TodoRecord
+
+    // 地図の表示位置。初期値は場所があればそこ
+    @State private var position: MapCameraPosition
+
+    init(record: TodoRecord) {
+        self.record = record
+        if let latitude = record.latitude, let longitude = record.longitude {
+            let center = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+            _position = State(initialValue: .region(
+                MKCoordinateRegion(center: center, latitudinalMeters: 1000, longitudinalMeters: 1000)
+            ))
+        } else {
+            // 場所が無いときは東京駅あたりを中心にしておく
+            let tokyo = CLLocationCoordinate2D(latitude: 35.681236, longitude: 139.767125)
+            _position = State(initialValue: .region(
+                MKCoordinateRegion(center: tokyo, latitudinalMeters: 5000, longitudinalMeters: 5000)
+            ))
+        }
+    }
+
+    // 緯度と経度がそろっているときだけ座標になる
+    private var coordinate: CLLocationCoordinate2D? {
+        guard let latitude = record.latitude, let longitude = record.longitude else { return nil }
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    var body: some View {
+        List {
+            LabeledContent("タイトル", value: record.title)
+            LabeledContent("優先度", value: record.priority.label)
+            LabeledContent("状態", value: record.isDone ? "完了" : "未完了")
+            if let date = record.completedAt {
+                LabeledContent("完了日時") {
+                    Text(date, format: .dateTime.year().month().day().hour().minute())
+                }
+            }
+
+            Section {
+                MapReader { proxy in
+                    Map(position: $position) {
+                        if let coordinate {
+                            Marker(record.title, coordinate: coordinate)
+                        }
+                    }
+                    // タップした画面上の位置（ローカル座標）を、地図上の緯度経度に変換する
+                    .onTapGesture { point in
+                        if let tapped = proxy.convert(point, from: .local) {
+                            record.setLocation(latitude: tapped.latitude, longitude: tapped.longitude)
+                            // 自動保存を待たず、設定の直後に保存する
+                            try? modelContext.save()
+                        }
+                    }
+                }
+                .frame(height: 280)
+
+                if let coordinate {
+                    Text("緯度 \(coordinate.latitude, specifier: "%.4f") / 経度 \(coordinate.longitude, specifier: "%.4f")")
+                        .foregroundStyle(.secondary)
+                    Button("場所を消す", role: .destructive) {
+                        record.clearLocation()
+                        try? modelContext.save()
+                    }
+                } else {
+                    Text("地図をタップして場所を設定")
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("場所")
+            }
+        }
+        .navigationTitle(record.title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+#Preview("場所あり") {
+    let record = TodoRecord(title: "東京駅で待ち合わせ")
+    record.latitude = 35.681236
+    record.longitude = 139.767125
+    return NavigationStack { TodoDetailView(record: record) }
+}
+
+#Preview("場所なし") {
+    NavigationStack { TodoDetailView(record: TodoRecord(title: "牛乳を買う")) }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><strong><code>MapCameraPosition</code></strong>: 地図のどこを、どの広さで表示するかです。<code>@State</code> に持たせ、<code>Map(position: $position)</code> にバインディングで渡します。<code>init</code> で、場所があればそこを中心に 1km 四方、無ければ東京駅のあたりを中心に 5km 四方を初期値にします。</li>
+            <li><strong><code>Map { … }</code> と <code>Marker</code></strong>: <code>Map</code> のクロージャーに、地図に重ねるもの（コンテンツ）を書きます。<code>Marker</code> は、タイトル付きのピンです。場所がある（<code>coordinate</code> が <code>nil</code> でない）ときだけ置きます。</li>
+            <li><strong><code>MapReader</code> と <code>proxy.convert(_:from:)</code></strong>: <code>MapReader</code> の中に <code>Map</code> を置くと、<code>MapProxy</code>（<code>proxy</code>）を受け取れます。<code>.onTapGesture</code> で受け取る <code>point</code> は、<code>Map</code> 自身の座標系での画面上の位置です。そのため、<code>proxy.convert(point, from: .local)</code> で緯度経度に変換します。変換できない位置では <code>nil</code> が返るので、<code>if let</code> で受けます。</li>
+            <li>場所を設定・削除した直後に <code>try? modelContext.save()</code> を呼びます。一覧画面の追加・削除と同じく、自動保存を待たずに保存します。</li>
+            <li>場所はウィジェットに表示しないので、10 で入れた <code>WidgetCenter.shared.reloadAllTimelines()</code> は呼びません。</li>
+            <li>場所が無いときも地図は常に表示し、下に「地図をタップして場所を設定」と出します。場所があるときは、緯度経度（小数点以下 4 桁）と「場所を消す」ボタンを出します。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>import SwiftData</code> を忘れると、<code>modelContext</code> と <code>save()</code> が使えない</p>
+              <p>このファイルを <code>import MapKit</code> と <code>import SwiftUI</code> だけで書いてビルドすると、次の 3 つのエラーになります。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">TodoDetailView.swift:6:20: error: property 'modelContext' is not available due to missing import of defining module 'SwiftData' [#MemberImportVisibility]</span><span class="terminal__line">TodoDetailView.swift:57:47: error: instance method 'save()' is not available due to missing import of defining module 'SwiftData' [#MemberImportVisibility]</span><span class="terminal__line">TodoDetailView.swift:68:43: error: instance method 'save()' is not available due to missing import of defining module 'SwiftData' [#MemberImportVisibility]</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                このプロジェクトでは <code>SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY</code> が有効です。ほかのファイルが SwiftData を import していても、SwiftData のメンバーを使うファイルごとに <code>import SwiftData</code> が要ります。
+                10 までの <code>TodoDetailView.swift</code> は <code>modelContext</code> を使っていなかったので、<code>import SwiftUI</code> だけで済んでいました。
+              </p>
+            </div>
+          </div>
+
+          <p>ビルドしてアプリを実行し、ステップ 4 で残っていた ToDo（ここでは「牛乳を買う」）をタップして詳細画面を開きます。地図の上をタップし、アプリを終了して起動し直してから、同じ ToDo を開きます。最後に「場所を消す」をタップします。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              詳細画面の「場所」に、東京駅と皇居のあたりの地図と「地図をタップして場所を設定」が表示されることを確かめます。地図をタップすると、タップした位置に赤いピンと ToDo のタイトルが立ち、表示が <code>緯度 35.6857 / 経度 139.7537</code> のような緯度経度に変わって、赤い「場所を消す」ボタンが出ます（数値はタップした位置で変わります）。
+            </p>
+            <p>
+              アプリを起動し直しても、緯度経度は同じままです。地図は保存した場所を中心に表示され、赤いピンと ToDo のタイトルが出ます。「場所を消す」をタップすると、「地図をタップして場所を設定」に戻ります。
+            </p>
+            <p>
+              開いた直後は、地図のタイルの読み込みに少し時間がかかります。地図が表示されないときは、Mac のネットワーク接続を確かめてください。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">場所のテストを加え、完成状態を確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            場所を扱うメソッドと、保存して読み直したときに場所が残ることをテストします。<code>HandsonAppTests</code> フォルダに <code>TodoLocationTests.swift</code> を追加します（<code>Targets</code> は <code>HandsonAppTests</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/TodoLocationTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import SwiftData
+import Testing
+@testable import HandsonApp
+
+@MainActor
+struct TodoLocationTests {
+    @Test func 作ったばかりのTodoには場所がない() {
+        let record = TodoRecord(title: "x")
+        #expect(record.latitude == nil)
+        #expect(record.longitude == nil)
+        #expect(!record.hasLocation)
+    }
+
+    @Test func setLocationで場所が入りclearLocationで消える() {
+        let record = TodoRecord(title: "x")
+
+        record.setLocation(latitude: 35.681236, longitude: 139.767125)
+        #expect(record.hasLocation)
+        #expect(record.latitude == 35.681236)
+
+        record.clearLocation()
+        #expect(!record.hasLocation)
+        #expect(record.longitude == nil)
+    }
+
+    @Test func 緯度だけでは場所ありとみなさない() {
+        let record = TodoRecord(title: "x")
+        record.latitude = 35.0
+        #expect(!record.hasLocation)
+    }
+
+    @Test func 保存して取得し直しても場所が残る() throws {
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: TodoRecord.self, configurations: configuration)
+        let context = container.mainContext
+        let record = TodoRecord(title: "東京駅")
+        record.setLocation(latitude: 35.681236, longitude: 139.767125)
+        context.insert(record)
+        try context.save()
+
+        let fetched = try #require(try context.fetch(FetchDescriptor&lt;TodoRecord&gt;()).first)
+        #expect(fetched.latitude == 35.681236)
+        #expect(fetched.longitude == 139.767125)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li>ステップ 1 と同じ理由で、struct に <code>@MainActor</code> を付けます。</li>
+            <li><code>緯度だけでは場所ありとみなさない</code> は、<code>hasLocation</code> が緯度と経度の両方を見ていることを確かめます。</li>
+            <li><code>保存して取得し直しても場所が残る</code> は、メモリ上のコンテナ（<code>isStoredInMemoryOnly: true</code>）に保存して取得し直します。追加したプロパティが SwiftData に保存されることを確かめます。</li>
+          </ul>
+
+          <p>
+            地図のタップは UI テストで確かめます。<code>HandsonAppUITests.swift</code> の末尾にテストを 1 つ追加します。起動引数 <code>-uiTesting</code> で、メモリ上のデータベースを使うので、シミュレータに保存した ToDo には影響しません。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonAppUITests/HandsonAppUITests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">          XCTAssertTrue(app.buttons["未完了に戻す"].waitForExistence(timeout: 5))</span><span class="diff-line">      }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     @MainActor</span><span class="diff-line diff-line--add">+     func testTapMapSetsAndClearsLocation() throws {</span><span class="diff-line diff-line--add">+         let app = launchApp()</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+         let field = app.textFields["新しいタスク"]</span><span class="diff-line diff-line--add">+         XCTAssertTrue(field.waitForExistence(timeout: 5))</span><span class="diff-line diff-line--add">+         field.tap()</span><span class="diff-line diff-line--add">+         field.typeText("牛乳を買う")</span><span class="diff-line diff-line--add">+         app.buttons["追加"].tap()</span><span class="diff-line diff-line--add">+         app.staticTexts["牛乳を買う"].tap()</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+         // 詳細画面: 最初は場所が無い</span><span class="diff-line diff-line--add">+         XCTAssertTrue(app.staticTexts["地図をタップして場所を設定"].waitForExistence(timeout: 5))</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+         // 地図をタップすると、緯度経度の表示に変わる</span><span class="diff-line diff-line--add">+         app.maps.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.4)).tap()</span><span class="diff-line diff-line--add">+         let coordinateLabel = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH '緯度'")).firstMatch</span><span class="diff-line diff-line--add">+         XCTAssertTrue(coordinateLabel.waitForExistence(timeout: 5))</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+         // 場所を消すと元に戻る</span><span class="diff-line diff-line--add">+         app.buttons["場所を消す"].tap()</span><span class="diff-line diff-line--add">+         XCTAssertTrue(app.staticTexts["地図をタップして場所を設定"].waitForExistence(timeout: 5))</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>app.maps.firstMatch</code> で地図の要素を取り、<code>coordinate(withNormalizedOffset:)</code> で地図の中の位置（幅と高さに対する割合）を指定してタップします。</li>
+            <li>緯度経度の表示はタップした位置で変わるので、<code>BEGINSWITH '緯度'</code> で「緯度」で始まるラベルを探します。</li>
+          </ul>
+
+          <p>ユニットテスト、UI テスト、ウィジェットの拡張のビルドを実行します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild test -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.0' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests</span><span class="terminal__line">…</span><span class="terminal__line">━ Test run with 82 tests in 24 suites passed after 6.414 seconds with 1 known issue.</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild test -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.0' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppUITests</span><span class="terminal__line">…</span><span class="terminal__line">Test Case '-[HandsonAppUITests.HandsonAppUITests testAddedTaskAppearsInList]' passed (11.155 seconds).</span><span class="terminal__line">Test Case '-[HandsonAppUITests.HandsonAppUITests testTapMapSetsAndClearsLocation]' passed (14.209 seconds).</span><span class="terminal__line">Test Case '-[HandsonAppUITests.HandsonAppUITests testToggleMarksTaskAsDone]' passed (11.908 seconds).</span><span class="terminal__line">	 Executed 3 tests, with 0 failures (0 unexpected) in 37.273 (37.278) seconds</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild build -project HandsonApp.xcodeproj -scheme TodoWidgetExtension -destination 'platform=iOS Simulator,name=iPhone 17,OS=27.0' -derivedDataPath $DD</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+</div>
+
+          <ul>
+            <li>ユニットテストは 10 の 76 件に、ステップ 1 の 2 件とこのステップの 4 件を加えて 82 件、スイートは 24 になります。</li>
+            <li>UI テストは、10 の 2 件に地図のテストを加えて 3 件です。</li>
+          </ul>
+
+          <p>完成状態のファイル構成は次のとおりです。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Text</span>
+  <span class="code-block__filename">HandsonApp/</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-plaintext">HandsonApp/
+  HandsonApp/
+    ContentView.swift                      # この項目で更新（ツールバーに統計のボタン）
+    Models/
+      TodoStats.swift                      # この項目で追加（件数の集計）
+      TodoRecord.swift                     # この項目で更新（緯度・経度。ウィジェットにも入れる）
+      …                                    # ほかは 10 のまま
+    Views/
+      TodoStatsView.swift                  # この項目で追加（棒グラフとドーナツグラフ）
+      TodoDetailView.swift                 # この項目で更新（地図と場所の設定）
+      …
+    …                                      # Intents/ と Shared/ は 10 のまま
+  TodoWidget/                              # 10 のまま
+  HandsonAppTests/
+    TodoStatsTests.swift                   # この項目で追加（2 テスト）
+    TodoLocationTests.swift                # この項目で追加（4 テスト）
+    …                                      # ほかは 10 のまま（合計 82 テスト）
+  HandsonAppUITests/
+    HandsonAppUITests.swift                # この項目で更新（地図のテストを追加、合計 3 テスト）</code></pre>
+</div>
+
+          <p>確かめ終わったら、シミュレータを止めます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              ユニットテストで <code>━ Test run with 82 tests in 24 suites passed … with 1 known issue.</code> が表示されることを確かめます。UI テストは <code>Executed 3 tests, with 0 failures</code>、ウィジェットの拡張は <code>** BUILD SUCCEEDED **</code> です。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">集計の処理を <code>TodoStats</code> に分け、テストの struct に <code>@MainActor</code> が要る理由を、付け忘れたときのエラーから説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>Chart</code> に <code>Identifiable</code> な配列を渡し、<code>BarMark</code> で棒グラフを描いた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>ToolbarItem(placement:)</code> でツールバーの左右にボタンを置き、統計画面へ遷移できた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>chartForegroundStyleScale</code> で 2 つのグラフの色をそろえ、<code>annotation</code>・軸・凡例を調整した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>SectorMark</code> の <code>innerRadius</code> でドーナツグラフにし、中央に合計を表示した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">省略可能なプロパティを足したモデルで、10 で保存した ToDo がそのまま開けることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">モデルに座標型を持たせず <code>Double</code> 2 つにした理由を、ウィジェットとの共有から説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>MapReader</code> と <code>proxy.convert(_:from:)</code> で、タップした位置を場所として保存し、起動し直しても残ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">82 件のユニットテストと 3 件の UI テストが通った後に、<code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">グラフの色が指定した色にならない</p>
+          <p><code>foregroundStyle(by:)</code> だけでは、システムの既定の配色（執筆時は青と緑）になります。<code>chartForegroundStyleScale</code> に値と色の対応を渡しているかを確かめてください（ステップ 3）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">地図が表示されない、タップしても場所が設定されない</p>
+          <p>
+            地図のタイルの表示には、ネットワーク接続が要ります。タップで場所が設定されないときは、2 点を確かめてください。<code>Map</code> を <code>MapReader</code> の中に置いているか、<code>proxy.convert(point, from: .local)</code> のように <code>.local</code> を渡しているかです。<code>.onTapGesture</code> の <code>point</code> は <code>Map</code> 自身の座標系での位置です。
+          </p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">新しいファイルで「not available due to missing import」と出る</p>
+          <p>
+            <code>MemberImportVisibility</code> が有効なので、使うフレームワークはファイルごとに import します。この項目の完成コードでは、<code>TodoStatsView.swift</code> が <code>Charts</code>・<code>SwiftData</code>・<code>SwiftUI</code> を import しています。<code>TodoDetailView.swift</code> は <code>MapKit</code>・<code>SwiftData</code>・<code>SwiftUI</code> です。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        完了と未完了の件数を数える処理を <code>TodoStats</code> に分けてテストし、Swift Charts の <code>BarMark</code> で棒グラフ、<code>SectorMark</code> でドーナツグラフを描きました。色は <code>chartForegroundStyleScale</code> で 1 か所にまとめ、注釈・軸・凡例を整えました。
+        モデルには省略可能な緯度と経度を足し、10 で保存したデータがそのまま開けることを確かめました。ウィジェットとモデルを共有しているので、座標型は持たせていません。
+        詳細画面では <code>Map</code> と <code>Marker</code> で地図とピンを表示し、<code>MapReader</code> でタップした位置を緯度経度に変換して保存しました。
+        次の項目では、TestFlight でアプリを配布します。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li>Swift Charts のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/charts">Swift Charts</a> / <a href="https://developer.apple.com/documentation/charts/barmark">BarMark</a> / <a href="https://developer.apple.com/documentation/charts/sectormark">SectorMark</a></li>
+          </ul>
+        </li>
+        <li>MapKit のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/mapkit/map">Map</a> / <a href="https://developer.apple.com/documentation/mapkit/marker">Marker</a> / <a href="https://developer.apple.com/documentation/mapkit/mapreader">MapReader</a> / <a href="https://developer.apple.com/documentation/mapkit/mapcameraposition">MapCameraPosition</a></li>
+          </ul>
+        </li>
+        <li><a href="https://developer.apple.com/documentation/swiftdata">SwiftData</a></li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/11-charts-mapkit</code> の <code>ios/11-charts-mapkit/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/11-charts-mapkit/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../10-widget-intents/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">10: WidgetKit と App Intents</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">12: TestFlight で配布</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
