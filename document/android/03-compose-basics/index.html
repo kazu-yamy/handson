@@ -1193,7 +1193,7 @@ private fun TodoListScreenScreenSizesMultiPreview() {
           </table>
 
           <p>マルチプレビューアノテーションは、<code>@Preview</code> を複数組み合わせたアノテーションです。1 つ付けるだけで、決まった条件の Preview が複数できます。<code>@PreviewLightDark</code> / <code>@PreviewFontScale</code> / <code>@PreviewScreenSizes</code> は、この項目で使う <code>ui-tooling-preview</code> 1.12.1 に含まれています。</p>
-          <p>Preview 関数をすべて <code>private</code> にしているのは、Preview は Android Studio で描くためだけの関数で、アプリのコードから呼ばれては困るからです。これは慣習で、公開のままでもビルドは通ります。ただし <code>private</code> にしてもコードからは消えません。このプロジェクトの release ビルドの <code>optimization</code> は、<code>packageScope</code> で androidx・kotlin・kotlinx のパッケージだけを対象にしており、アプリ自身のコードは R8 で縮小されません。そのため、Preview 関数も APK に含まれます。</p>
+          <p>Preview 関数をすべて <code>private</code> にしているのは、Preview は Android Studio で描くためだけの関数で、アプリのコードから呼ばれては困るからです。これは慣習で、公開のままでもビルドは通ります。ただし、<code>private</code> にしただけでは関数は消えません。APK から取り除くのは R8 です。01 で release の <code>optimization</code> から <code>packageScope</code> を外したので、release ビルドではアプリ自身のコードも R8 の縮小の対象です。どこからも呼ばれない Preview 関数は、release の APK から取り除かれます。R8 を通さない debug の APK には残ります。執筆時に 1 回計測したところ、この項目の完成コードの release の APK では <code>Preview</code> を含むメソッド名・クラス名が 0 件でした。debug の APK ではメソッド名 56 件・クラス 45 件があり、アプリの Preview 関数 17 種類が残っていました。</p>
           <p>このファイルは Preview 用の関数だけなので、ターミナルではコンパイルが通ることを確かめます。</p>
 
 <div class="terminal">
@@ -1590,7 +1590,7 @@ class MainActivityTest {
             <span class="callout__icon" aria-hidden="true">💡</span>
             <div class="callout__body">
               <p class="callout__title">Preview 関数は <code>private</code> にする</p>
-              <p>Preview 関数はアプリのコードから呼ぶものではないので <code>private</code> にします。慣習として <code>private</code> にします（本番コードに Preview が含まれないようにする意図）。<code>private</code> にしても関数はコードに残り、R8 で縮小しない設定（このプロジェクトの release の <code>optimization</code> は <code>packageScope</code> で androidx・kotlin・kotlinx のパッケージだけが対象で、アプリ自身のコードは縮小されません）では release の APK にも含まれます。</p>
+              <p>Preview 関数はアプリのコードから呼ぶものではないので、慣習として <code>private</code> にします。本番コードに Preview が含まれないようにする意図です。<code>private</code> を付けても関数は消えないので、R8 で縮小しない debug の APK には含まれます。release の APK では、01 で <code>packageScope</code> を外したためアプリ自身のコードも R8 で縮小され、どこからも呼ばれない Preview 関数は取り除かれます。</p>
             </div>
           </div>
 

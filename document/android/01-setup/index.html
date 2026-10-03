@@ -480,11 +480,31 @@ dependencies {
             <li><code>compileSdk { version = release(37) }</code>: コンパイルに使う Android API のバージョンです。新しい API を使えるかどうかは、この値で決まります。</li>
             <li><code>minSdk = 26</code>: インストールできる最も古い Android のバージョン（Android 8.0）です。</li>
             <li><code>targetSdk = 37</code>: アプリが動作確認済みとして宣言する Android のバージョンです。OS はこの値を見て、互換動作を切り替えます。</li>
-            <li><code>release { optimization { ... } }</code>: リリースビルドで R8 による最適化を有効にする設定です。R8 に残させるコードの指定（キープルール）は <code>app/src/main/keepRules/rules.keep</code> に書きます。<code>packageScope</code> により、最適化の対象は androidx・kotlin・kotlinx のパッケージだけで、アプリ自身のコードは対象外です。この項目ではデバッグ版だけを作るので、ここは変更しません。</li>
+            <li><code>release { optimization { ... } }</code>: リリースビルドで R8 による最適化を有効にする設定です。R8 に残させるコードの指定（キープルール）は <code>app/src/main/keepRules/rules.keep</code> に書きます。ウィザードの生成物では、<code>packageScope</code> により最適化の対象が androidx・kotlin・kotlinx のパッケージだけに限られ、アプリ自身のコードは対象外になっています。この <code>packageScope</code> の行は、この後で削除します。</li>
             <li><code>buildFeatures { compose = true }</code>: Jetpack Compose を有効にします。</li>
             <li><code>implementation(platform(libs.androidx.compose.bom))</code>: Compose BOM を依存に加えます。続く <code>libs.androidx.compose.ui</code> などのバージョンは BOM から決まります。</li>
             <li><code>testImplementation</code> / <code>androidTestImplementation</code> / <code>debugImplementation</code>: それぞれ、単体テスト用・計装テスト用・デバッグビルド用だけに加える依存です。</li>
           </ul>
+
+          <p>作成直後の <code>release</code> にある <code>packageScope</code> の行を削除します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          release {</span><span class="diff-line">              optimization {</span><span class="diff-line">                  enable = true</span><span class="diff-line diff-line--remove">-                 packageScope = setOf(&quot;androidx.**&quot;, &quot;kotlin.**&quot;, &quot;kotlinx.**&quot;)</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>packageScope</code> を削除する理由</p>
+              <p><code>packageScope</code> は、R8 による最適化の対象を指定したパッケージだけに限る実験的な機能です。公式ドキュメントが推奨するのは、<code>enable = true</code> だけを書く形です。<code>packageScope</code> を残したまま進めると、アプリのコードが増えた時点で release ビルドが起動直後に落ちます。この教材では、05 の時点で <code>IllegalAccessError</code> により落ちることを確認しました。削除すると、アプリ自身のコードも R8 による縮小・最適化の対象になります。</p>
+            </div>
+          </div>
 
           <div class="callout callout--note">
             <span class="callout__icon" aria-hidden="true">ℹ️</span>
@@ -781,7 +801,7 @@ toolchainVersion=25</code></pre>
 
           <div class="step__check">
             <p class="step__check-title">✅ 確認ポイント</p>
-            <p>プロジェクトのルートに <code>settings.gradle.kts</code>・<code>build.gradle.kts</code>・<code>gradle/libs.versions.toml</code>・<code>gradlew</code> があり、<code>app/build.gradle.kts</code> の <code>minSdk</code> が <code>26</code>、<code>namespace</code> が <code>com.handson.android01</code> になっていれば OK です。ターミナルでは、プロジェクトのルートで以降の <code>./gradlew</code> を実行します。</p>
+            <p>プロジェクトのルートに <code>settings.gradle.kts</code>・<code>build.gradle.kts</code>・<code>gradle/libs.versions.toml</code>・<code>gradlew</code> があり、<code>app/build.gradle.kts</code> の <code>minSdk</code> が <code>26</code>、<code>namespace</code> が <code>com.handson.android01</code>、<code>release</code> の <code>optimization</code> が <code>enable = true</code> の 1 行だけになっていれば OK です。ターミナルでは、プロジェクトのルートで以降の <code>./gradlew</code> を実行します。</p>
           </div>
 
 
