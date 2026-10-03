@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02: ウィンドウ設定とビルド | Tauri ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Tauri</li>
+          <li aria-current="page">02</li>
+        </ol>
+        <h1 class="lesson-title">ウィンドウ設定とビルド</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 30分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: Tauri 01 を終えた人。Rust のコードは書きません</li>
+          <li class="lesson-meta__item">📋 前提: macOS（透明タイトルバーとアイコン生成の手順は macOS 前提）、01 と同じ開発環境</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../01-setup/index.html">01: 環境構築とプロジェクト作成</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>tauri.conf.json</code> の <code>app.windows</code> でウィンドウのサイズ・位置・テーマを設定する</li>
+          <li><code>titleBarStyle: "Overlay"</code> と <code>data-tauri-drag-region</code> で、透明なタイトルバーとドラッグ領域を作る</li>
+          <li>2 つ目のウィンドウを定義し、Capabilities で権限を許可してフロントエンドから開く</li>
+          <li><code>tauri icon</code> でアイコンを差し替え、<code>version</code> とバンドルのメタデータを設定する</li>
+          <li><code>npm run tauri build</code> でリリースビルドを作り、デバッグビルドとの違いを知る</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        01 では、Next.js の静的エクスポートを Tauri に組み込み、デバッグビルドの <code>.app</code> を作りました。
+        この項目では、設定ファイル <code>tauri.conf.json</code> を中心にウィンドウの見た目と振る舞い・アイコン・バージョンを整えます。最後に、配布に使うリリースビルドを作ります。
+      </p>
+
+      <h3 id="conf-structure">tauri.conf.json の構造</h3>
+      <p>01 の完成時点の <code>tauri.conf.json</code> は、大きく次の 4 つの部分でできています。このレッスンで触るのは <code>app.windows</code> と <code>bundle</code>、トップレベルの <code>version</code> などです。</p>
+      <table>
+        <thead>
+        <tr><th>キー</th><th>役割</th><th>このレッスンで変更する内容</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>productName</code> / <code>version</code> / <code>identifier</code></td><td>アプリ名・バージョン・一意な ID</td><td>02 用の名前と ID、<code>version</code> を <code>0.2.0</code> に（準備・ステップ 5）</td></tr>
+        <tr><td><code>build</code></td><td>フロントエンドの読み込み先（<code>devUrl</code> / <code>frontendDist</code>）と、事前に実行するコマンド</td><td>変更しない（01 で設定済み）</td></tr>
+        <tr><td><code>app.windows</code></td><td>起動時に作るウィンドウの一覧と、それぞれの設定</td><td>サイズ・タイトルバーの設定、2 つ目のウィンドウ（ステップ 1〜3）</td></tr>
+        <tr><td><code>bundle</code></td><td>配布物（<code>.app</code> / <code>.dmg</code> など）の作り方。アイコン、説明、カテゴリなど</td><td>メタデータの追加（ステップ 5）。アイコンはファイルを差し替える（ステップ 4）</td></tr>
+        </tbody>
+      </table>
+      <p><code>app</code> には <code>windows</code> のほかに、01 から変更しない <code>security</code>（CSP の設定）があります。</p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            使用するツールとライブラリのバージョンは 01 と同じです。Tauri 関連は Tauri CLI 2.11.5 / <code>tauri</code> クレート 2.11.6 / <code>@tauri-apps/api</code> 2.11.1 です。そのほかは Next.js 16.3.6 / rustc 1.98.1 / Node.js 24.21.0 などです。
+            バージョンは執筆時点（2026年9月）のものです。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="preparation">準備: 01 のプロジェクトを引き継ぐ</h2>
+      <p>
+        01 で作ったプロジェクトをそのまま出発点にします。本文ではプロジェクトのディレクトリ名を <code>02-window-build</code> として示します。
+        最初に、プロジェクト名に依存する値を 02 用に直しておきます。<code>version</code> はステップ 5 で変更するので、ここでは触れません。
+      </p>
+      <table>
+        <thead>
+        <tr><th>ファイル</th><th>キー</th><th>01</th><th>02</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>package.json</code></td><td><code>name</code></td><td><code>01-setup</code></td><td><code>02-window-build</code></td></tr>
+        <tr><td><code>package-lock.json</code></td><td><code>name</code></td><td><code>01-setup</code></td><td><code>02-window-build</code>（<code>npm install</code> で更新）</td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>productName</code></td><td><code>handson-tauri-01</code></td><td><code>handson-tauri-02</code></td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>identifier</code></td><td><code>com.handson.tauri01</code></td><td><code>com.handson.tauri02</code></td></tr>
+        <tr><td><code>src-tauri/Cargo.toml</code></td><td><code>[package]</code> の <code>name</code></td><td><code>app</code></td><td><code>handson-tauri-02</code></td></tr>
+        <tr><td><code>src-tauri/Cargo.toml</code></td><td><code>[lib]</code> の <code>name</code></td><td><code>app_lib</code></td><td><code>handson_tauri_02_lib</code></td></tr>
+        <tr><td><code>src-tauri/src/main.rs</code></td><td>呼び出すクレート</td><td><code>app_lib::run()</code></td><td><code>handson_tauri_02_lib::run()</code></td></tr>
+        <tr><td><code>src/app/layout.tsx</code></td><td><code>metadata.title</code> / <code>metadata.description</code></td><td><code>handson-tauri-01</code> / 「Tauri トラック 01: 環境構築とプロジェクト作成」</td><td><code>handson-tauri-02</code> / 「Tauri トラック 02: ウィンドウ設定とビルド」</td></tr>
+        </tbody>
+      </table>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line diff-line--remove">-   "name": "01-setup",</span><span class="diff-line diff-line--add">+   "name": "02-window-build",</span><span class="diff-line">    "version": "0.1.0",</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p><code>package-lock.json</code> にも <code>name</code> / <code>version</code> が記録されているので、<code>package.json</code> を書き換えたら <code>npm install</code> を実行して更新しておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm install</span><span class="terminal__line">up to date, audited 357 packages in 3s</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line">    "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",</span><span class="diff-line diff-line--remove">-   "productName": "handson-tauri-01",</span><span class="diff-line diff-line--add">+   "productName": "handson-tauri-02",</span><span class="diff-line">    "version": "0.1.0",</span><span class="diff-line diff-line--remove">-   "identifier": "com.handson.tauri01",</span><span class="diff-line diff-line--add">+   "identifier": "com.handson.tauri02",</span><span class="diff-line">    "build": {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "app"</span><span class="diff-line diff-line--add">+ name = "handson-tauri-02"</span><span class="diff-line">  version = "0.1.0"</span><span class="diff-line">  ...</span><span class="diff-line">  [lib]</span><span class="diff-line diff-line--remove">- name = "app_lib"</span><span class="diff-line diff-line--add">+ name = "handson_tauri_02_lib"</span><span class="diff-line">  crate-type = ["staticlib", "cdylib", "rlib"]</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>Rust のライブラリ名（<code>[lib]</code> の <code>name</code>）を変えたので、<code>main.rs</code> から呼び出すクレート名も合わせます。<code>src-tauri/src/lib.rs</code> は 01 から変更しません。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/main.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  fn main() {</span><span class="diff-line diff-line--remove">-     app_lib::run();</span><span class="diff-line diff-line--add">+     handson_tauri_02_lib::run();</span><span class="diff-line">  }</span></pre>
+</div>
+
+      <p>01 では <code>Cargo.toml</code> の <code>name</code> が <code>tauri init</code> の既定値 <code>app</code> のままだったため、開発時の実行ファイルは <code>target/debug/app</code> でした。02 からは <code>productName</code> とそろえた <code>target/debug/handson-tauri-02</code> になります。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/layout.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import type { Metadata } from "next";</span><span class="diff-line">  import "@/styles/globals.scss";</span><span class="diff-line"> </span><span class="diff-line">  export const metadata: Metadata = {</span><span class="diff-line diff-line--remove">-   title: "handson-tauri-01",</span><span class="diff-line diff-line--remove">-   description: "Tauri トラック 01: 環境構築とプロジェクト作成",</span><span class="diff-line diff-line--add">+   title: "handson-tauri-02",</span><span class="diff-line diff-line--add">+   description: "Tauri トラック 02: ウィンドウ設定とビルド",</span><span class="diff-line">  };</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">ウィンドウの基本設定をする</h3>
+        </div>
+        <div class="step__body">
+
+          <p><code>tauri.conf.json</code> の <code>app.windows</code> は、起動時に開くウィンドウの配列です。01 では要素が 1 つだけで、<code>tauri init</code> が生成した <code>title</code> / <code>width</code> / <code>height</code> / <code>resizable</code> / <code>fullscreen</code> だけが書かれていました。ここに最小サイズ・中央配置・テーマの設定を加えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    "app": {</span><span class="diff-line">      "windows": [</span><span class="diff-line">        {</span><span class="diff-line diff-line--remove">-         "title": "handson-tauri-01",</span><span class="diff-line diff-line--add">+         "title": "handson-tauri-02",</span><span class="diff-line">          "width": 800,</span><span class="diff-line">          "height": 600,</span><span class="diff-line diff-line--add">+         "minWidth": 480,</span><span class="diff-line diff-line--add">+         "minHeight": 360,</span><span class="diff-line">          "resizable": true,</span><span class="diff-line diff-line--remove">-         "fullscreen": false</span><span class="diff-line diff-line--add">+         "fullscreen": false,</span><span class="diff-line diff-line--add">+         "center": true,</span><span class="diff-line diff-line--add">+         "theme": null</span><span class="diff-line">        }</span><span class="diff-line">      ],</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>各キーの意味は次のとおりです（説明は <code>node_modules/@tauri-apps/cli/config.schema.json</code> の記述に基づきます）。</p>
+          <table>
+            <thead>
+            <tr><th>キー</th><th>意味</th><th>既定値</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>title</code></td><td>ウィンドウのタイトル</td><td><code>Tauri App</code></td></tr>
+            <tr><td><code>width</code> / <code>height</code></td><td>ウィンドウの幅と高さ（論理ピクセル）</td><td><code>800</code> / <code>600</code></td></tr>
+            <tr><td><code>minWidth</code> / <code>minHeight</code></td><td>ウィンドウの最小の幅と高さ（論理ピクセル）</td><td>なし</td></tr>
+            <tr><td><code>resizable</code></td><td>リサイズできるか。<code>false</code> にすると最大化ボタンも無効になる</td><td><code>true</code></td></tr>
+            <tr><td><code>fullscreen</code></td><td>フルスクリーンで起動するか</td><td><code>false</code></td></tr>
+            <tr><td><code>center</code></td><td>画面の中央に配置して起動するか</td><td><code>false</code></td></tr>
+            <tr><td><code>theme</code></td><td>ウィンドウの初期テーマ（<code>"Light"</code> / <code>"Dark"</code>）。<code>null</code> または省略で OS の設定に従う。Windows と macOS 10.14 以降のみ</td><td>なし（OS の設定）</td></tr>
+            </tbody>
+          </table>
+          <p><code>theme</code> は既定値と同じ <code>null</code> ですが、「OS の設定に従う」ことを明示するために書いています。設定できたら、開発モードで起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri dev</span><span class="terminal__line">（Next.js の開発サーバーの起動ログは省略）</span><span class="terminal__line">     Running DevCommand (`cargo  run --no-default-features --color always --`)</span><span class="terminal__line">        Info Watching /path/to/02-window-build/src-tauri for changes...</span><span class="terminal__line">   Compiling handson-tauri-02 v0.1.0 (/path/to/02-window-build/src-tauri)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.02s</span><span class="terminal__line">     Running `target/debug/handson-tauri-02`</span><span class="terminal__line"> GET / 200 in 357ms (next.js: 247ms, application-code: 110ms)</span></pre>
+</div>
+
+          <p>準備でパッケージ名を変えたため、<code>Compiling handson-tauri-02</code> と <code>Running `target/debug/handson-tauri-02`</code> の表示が 01 と変わっています。依存クレートは 01 のビルド結果が使われるので、コンパイルは数秒で終わります。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">ウィンドウのサイズをコマンドで確かめる</p>
+              <p>macOS では、System Events（アクセシビリティ）経由でウィンドウの名前・位置・サイズを取得できます。初回はターミナルにアクセシビリティの許可を求められる場合があります。許可してもウィンドウの一覧が取得できず、空の結果（<code>,,</code>）が返る環境もあります。その場合はターミナルのアクセシビリティ権限（システム設定 → プライバシーとセキュリティ → アクセシビリティ）を見直すか、画面を直接見てサイズを確認してください。結果は「名前・X・Y・幅・高さ」の順に並びます。位置の値は画面の大きさによって変わります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> osascript -e 'tell application "System Events" to tell process "handson-tauri-02" to get {name, position, size} of every window'</span><span class="terminal__line">handson-tauri-02, 1520, 795, 800, 600</span></pre>
+</div>
+
+            </div>
+          </div>
+
+          <p>確認できたら、<code>tauri dev</code> を実行しているターミナルで <kbd>Ctrl</kbd> + <kbd>C</kbd> を押して止めます。止まらない場合は、01 と同じ要領でプロセスを個別に止めます。実行ファイル名が変わったので、パスも <code>handson-tauri-02</code> になります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> pkill -f "target/debug/handson-tauri-02"</span><span class="terminal__line"><span class="terminal__prompt">$</span> pkill -f "node_modules/.bin/tauri"</span><span class="terminal__line"><span class="terminal__prompt">$</span> pkill -f "node_modules/.bin/next dev"</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>800×600 のウィンドウが画面の中央に開き、タイトルが <code>handson-tauri-02</code> になっていれば成功です。実際にウィンドウの端をドラッグして縮め、480×360 より小さくならないことを目で確認してください。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">タイトルバーを透明にしてドラッグ領域を作る</h3>
+        </div>
+        <div class="step__body">
+
+          <p>macOS の標準のタイトルバーを透明にし、ページの内容をウィンドウの最上部まで広げます。左上のトラフィックライト（閉じる・最小化・拡大の赤黄緑ボタン）はそのまま残ります。<code>titleBarStyle</code> と <code>hiddenTitle</code> を追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          "center": true,</span><span class="diff-line diff-line--remove">-         "theme": null</span><span class="diff-line diff-line--add">+         "theme": null,</span><span class="diff-line diff-line--add">+         "titleBarStyle": "Overlay",</span><span class="diff-line diff-line--add">+         "hiddenTitle": true</span><span class="diff-line">        }</span><span class="diff-line">      ],</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>titleBarStyle: "Overlay"</code>: タイトルバーを透明にし、トラフィックライトをページの内容の上に重ねて表示します。既定値は <code>"Visible"</code>（通常のタイトルバー）です。</li>
+            <li><code>hiddenTitle: true</code>: タイトルバーのタイトル文字列を隠します。</li>
+          </ul>
+          <p>タイトルバーが透明になると、ウィンドウをつかんで動かす場所がなくなります。そこで、ページの上端にドラッグ用の領域を作ります。ルート専用の部品を置く <code>src/app/_components/</code> に、<code>TitleBar</code> コンポーネントを 1 コンポーネント 1 フォルダで作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/_components/TitleBar/TitleBar.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import styles from "./TitleBar.module.scss";
+
+export function TitleBar() {
+  return (
+    &lt;header className={styles.titleBar} data-tauri-drag-region&gt;
+      &lt;span className={styles.label} data-tauri-drag-region&gt;
+        handson-tauri-02
+      &lt;/span&gt;
+    &lt;/header&gt;
+  );
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/app/_components/TitleBar/TitleBar.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.titleBar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  // titleBarStyle: "Overlay" はトラフィックライト（赤黄緑ボタン）を
+  // コンテンツの上に重ねて表示する。左側にその分の余白を空ける。
+  padding-left: 78px;
+  background: transparent;
+  user-select: none;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+  opacity: 0.6;
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/_components/TitleBar/index.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export { TitleBar } from "./TitleBar";</code></pre>
+</div>
+
+          <p><code>data-tauri-drag-region</code> 属性を付けた要素をマウスでつかむと、ウィンドウ全体をドラッグして動かせます。<code>header</code> だけでなく中の <code>span</code> にも付けているのは、この属性が付けた要素自身にしか効かず、子要素には伝わらないためです（Tauri 2 では <code>data-tauri-drag-region="deep"</code> を付けると子要素にも効くようになります）。<code>padding-left: 78px</code> は、左上に重なるトラフィックライトの分の余白です。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">TitleBar はどこに置くか</p>
+              <p><code>TitleBar</code> を <code>layout.tsx</code> に置くと全ページの共通部品になり、ステップ 3 で追加する About ウィンドウにも表示されてしまいます。About ウィンドウに帯は出したくないので、ここではトップページ <code>page.tsx</code> 側に組み込みます。</p>
+            </div>
+          </div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  "use client";</span><span class="diff-line"> </span><span class="diff-line">  import { useEffect, useState } from "react";</span><span class="diff-line">  import { getVersion } from "@tauri-apps/api/app";</span><span class="diff-line diff-line--add">+ import { TitleBar } from "./_components/TitleBar";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line"> </span><span class="diff-line">  export default function Home() {</span><span class="diff-line">    const [version, setVersion] = useState("読み込み中...");</span><span class="diff-line"> </span><span class="diff-line">    useEffect(() =&gt; {</span><span class="diff-line">      getVersion()</span><span class="diff-line">        .then((v) =&gt; setVersion(`Tauri アプリのバージョン: ${v}`))</span><span class="diff-line">        .catch(() =&gt; setVersion("ブラウザで実行中（Tauri API は利用できません）"));</span><span class="diff-line">    }, []);</span><span class="diff-line"> </span><span class="diff-line">    return (</span><span class="diff-line">      &lt;div className={styles.page}&gt;</span><span class="diff-line diff-line--add">+       &lt;TitleBar /&gt;</span><span class="diff-line">        &lt;h1 className={styles.title}&gt;Hello, Tauri!&lt;/h1&gt;</span><span class="diff-line">        &lt;p className={styles.version}&gt;{version}&lt;/p&gt;</span><span class="diff-line">      &lt;/div&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>TitleBar</code> は <code>position: fixed</code> で上端に重なるので、ページ側に同じ高さ（38px）の余白を加えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  .page {</span><span class="diff-line">  ...</span><span class="diff-line">    min-height: 100vh;</span><span class="diff-line diff-line--add">+   padding-top: 38px; // TitleBar の高さぶん、コンテンツと重ならないようにする</span><span class="diff-line">    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>最後に、ドラッグ領域を使うための権限を追加します。<code>data-tauri-drag-region</code> の領域をドラッグすると、フロントエンドから Tauri の <code>start_dragging</code> コマンドが呼ばれます。01 で許可した <code>core:default</code> にはこのコマンドが含まれないため、<code>core:window:allow-start-dragging</code> を明示的に許可します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/capabilities/default.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    "windows": [</span><span class="diff-line">      "main"</span><span class="diff-line">    ],</span><span class="diff-line">    "permissions": [</span><span class="diff-line diff-line--remove">-     "core:default"</span><span class="diff-line diff-line--add">+     "core:default",</span><span class="diff-line diff-line--add">+     "core:window:allow-start-dragging"</span><span class="diff-line">    ]</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>windows</code> の <code>"main"</code> は、この権限を与えるウィンドウのラベルです。<code>app.windows</code> で <code>label</code> を省略したウィンドウのラベルは <code>main</code> になります。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Capabilities（権限）の仕組み</p>
+              <p>Tauri 2 では、フロントエンドから呼べる Tauri のコマンドを <code>src-tauri/capabilities/</code> の JSON で許可制にしています。許可していないコマンドを呼ぶと、エラーになります（実際のエラーはステップ 3 で確認します）。<code>core:default</code> はウィンドウの状態の取得など、読み取り中心の基本的なコマンドだけを含むセットです。</p>
+            </div>
+          </div>
+
+          <p><code>npm run tauri dev</code> で起動し直して、見た目を確かめます。</p>
+
+          <h4>試してみる: <code>decorations: false</code> との違い</h4>
+          <p>比較のため、<code>app.windows[0]</code> に一時的に <code>"decorations": false</code> を追加して起動してみます。<code>decorations</code> は「ウィンドウの枠やバーを表示するか」の設定で、既定値は <code>true</code> です。既定（<code>decorations</code> を指定しない通常時）では、トラフィックライト（閉じる・最小化・拡大のボタン）が左上に表示されます。<code>decorations: false</code> にすると、このトラフィックライトを含む OS 標準のウィンドウ装飾がすべて消えます。閉じるボタンもなくなるため、閉じる手段を自前で用意しない限り不便です。確かめたら <code>"decorations": false</code> を削除して、元の設定に戻してください。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>titleBarStyle</code> は macOS 専用</p>
+              <p><code>titleBarStyle</code> と <code>hiddenTitle</code> は macOS 専用の設定です。スキーマの説明もそれぞれ「macOS のタイトルバーのスタイル」「macOS でタイトルを隠す」となっています。複数の OS に配布する場合は、Windows / Linux 向けの見た目を別途確認してください。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>タイトルバーが透明になり、トラフィックライトがページの左上に重なって表示されます。上端の中央に <code>handson-tauri-02</code> のラベルが表示されます。実際に上端の帯をドラッグして、ウィンドウを移動できることを目で確認してください。確認後は <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">2 つ目のウィンドウを追加する</h3>
+        </div>
+        <div class="step__body">
+
+          <p><code>app.windows</code> に 2 つ目の要素を追加すると、起動時に作られるウィンドウが増えます。ボタンを押したときに開く「About」ウィンドウを、最初は非表示の状態で定義します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          "titleBarStyle": "Overlay",</span><span class="diff-line">          "hiddenTitle": true</span><span class="diff-line diff-line--add">+       },</span><span class="diff-line diff-line--add">+       {</span><span class="diff-line diff-line--add">+         "label": "about",</span><span class="diff-line diff-line--add">+         "url": "/about/",</span><span class="diff-line diff-line--add">+         "title": "About",</span><span class="diff-line diff-line--add">+         "width": 360,</span><span class="diff-line diff-line--add">+         "height": 240,</span><span class="diff-line diff-line--add">+         "resizable": false,</span><span class="diff-line diff-line--add">+         "visible": false</span><span class="diff-line">        }</span><span class="diff-line">      ],</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>label</code>: ウィンドウの識別子（英数字）。フロントエンドからこの名前でウィンドウを取得します。省略すると <code>main</code> になるので、2 つ目以降には必ず付けます。</li>
+            <li><code>url</code>: ウィンドウの WebView に読み込むページ。開発時は <code>devUrl</code>、ビルド後は <code>frontendDist</code> からの相対パスになります。</li>
+            <li><code>visible: false</code>: ウィンドウを作るが表示しない設定です。後でフロントエンドから <code>show()</code> を呼んで表示します。</li>
+          </ul>
+          <p>About ウィンドウに表示するページを作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/app/about/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import styles from "./page.module.scss";
+
+export default function About() {
+  return (
+    &lt;div className={styles.page}&gt;
+      &lt;h1 className={styles.title}&gt;About&lt;/h1&gt;
+      &lt;p className={styles.text}&gt;handson-tauri-02 の 2 つ目のウィンドウです。&lt;/p&gt;
+    &lt;/div&gt;
+  );
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/app/about/page.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding-top: 38px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.title {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.text {
+  margin-top: 12px;
+  font-size: 14px;
+  color: var(--foreground);
+  opacity: 0.7;
+}</code></pre>
+</div>
+
+          <p>トップページに、About ウィンドウを開くボタンを追加します。<code>@tauri-apps/api/webviewWindow</code> の <code>WebviewWindow.getByLabel()</code> でラベルからウィンドウを取得します。続けて <code>show()</code> で表示し、<code>setFocus()</code> で前面に出します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  "use client";</span><span class="diff-line"> </span><span class="diff-line">  import { useEffect, useState } from "react";</span><span class="diff-line">  import { getVersion } from "@tauri-apps/api/app";</span><span class="diff-line diff-line--add">+ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line"> </span><span class="diff-line">  export default function Home() {</span><span class="diff-line">    const [version, setVersion] = useState("読み込み中...");</span><span class="diff-line"> </span><span class="diff-line">    useEffect(() =&gt; {</span><span class="diff-line">      getVersion()</span><span class="diff-line">        .then((v) =&gt; setVersion(`Tauri アプリのバージョン: ${v}`))</span><span class="diff-line">        .catch(() =&gt; setVersion("ブラウザで実行中（Tauri API は利用できません）"));</span><span class="diff-line">    }, []);</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+   const showAbout = async () =&gt; {</span><span class="diff-line diff-line--add">+     const about = await WebviewWindow.getByLabel("about");</span><span class="diff-line diff-line--add">+     await about?.show();</span><span class="diff-line diff-line--add">+     await about?.setFocus();</span><span class="diff-line diff-line--add">+   };</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">    return (</span><span class="diff-line">      &lt;div className={styles.page}&gt;</span><span class="diff-line">        &lt;h1 className={styles.title}&gt;Hello, Tauri!&lt;/h1&gt;</span><span class="diff-line">        &lt;p className={styles.version}&gt;{version}&lt;/p&gt;</span><span class="diff-line diff-line--add">+       &lt;button type="button" className={styles.button} onClick={showAbout}&gt;</span><span class="diff-line diff-line--add">+         About を開く</span><span class="diff-line diff-line--add">+       &lt;/button&gt;</span><span class="diff-line">      &lt;/div&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  .version {</span><span class="diff-line">    margin-top: 12px;</span><span class="diff-line">    font-size: 16px;</span><span class="diff-line">    color: var(--foreground);</span><span class="diff-line">    opacity: 0.7;</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ .button {</span><span class="diff-line diff-line--add">+   margin-top: 24px;</span><span class="diff-line diff-line--add">+   padding: 8px 20px;</span><span class="diff-line diff-line--add">+   font-size: 14px;</span><span class="diff-line diff-line--add">+   border-radius: 6px;</span><span class="diff-line diff-line--add">+   border: 1px solid var(--foreground);</span><span class="diff-line diff-line--add">+   background: transparent;</span><span class="diff-line diff-line--add">+   color: var(--foreground);</span><span class="diff-line diff-line--add">+   cursor: pointer;</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+          <p>この状態で <code>npm run tauri dev</code> を起動し、「About を開く」を押してみます。ウィンドウは開かず、ターミナルに次のエラーが出ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri dev</span><span class="terminal__line">（中略）</span><span class="terminal__line">     Running `target/debug/handson-tauri-02`</span><span class="terminal__line"> GET / 200 in 449ms (next.js: 151ms, application-code: 298ms)</span><span class="terminal__line"> GET /about 200 in 449ms (next.js: 195ms, application-code: 254ms)</span><span class="terminal__line">[browser] "⨯ unhandledRejection:" window.show not allowed. Permissions associated with this command: core:window:allow-show</span></pre>
+</div>
+
+          <p><code>show()</code> に必要な権限 <code>core:window:allow-show</code> が許可されていない、というエラーです。<code>visible: false</code> の About ウィンドウも起動時に作られてページを読み込むため、ボタンを押す前から <code>GET /about 200</code> が出ている点にも注目してください（<code>next.config.ts</code> に <code>trailingSlash</code> を追加するのはこのステップの後半なので、この時点ではまだ末尾の <code>/</code> は付きません）。</p>
+          <p>ボタンを 1 回押すと、この <code>unhandledRejection</code> のエラーが 1 回出ます。確認済みです。環境によっては、<code>[browser]</code> で始まるこのログがターミナルに転送されない場合があります。その場合は、アプリのウィンドウで右クリックして「Inspect Element」を選び、開いた Web Inspector のコンソールでエラーを確認してください。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">実装時の確認方法について</p>
+              <p>上のエラーは、実装時に <code>showAbout()</code> を <code>useEffect</code> から自動実行して取得したものです。そのときは React の開発時の Strict Mode でエフェクトが 2 回実行されたため、同じエラーが 2 回出ました。</p>
+            </div>
+          </div>
+
+          <p>ターミナルを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止め、<code>capabilities/default.json</code> に <code>show()</code> と <code>setFocus()</code> の権限を追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/capabilities/default.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    "permissions": [</span><span class="diff-line">      "core:default",</span><span class="diff-line diff-line--add">+     "core:window:allow-show",</span><span class="diff-line diff-line--add">+     "core:window:allow-set-focus",</span><span class="diff-line">      "core:window:allow-start-dragging"</span><span class="diff-line">    ]</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>もう一度起動してボタンを押すと、About ウィンドウが開きます。アクセシビリティで確認すると、2 つのウィンドウが見つかります（名前・位置・サイズの順に、ウィンドウごとの値がまとめて並びます）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> osascript -e 'tell application "System Events" to tell process "handson-tauri-02" to get {name, position, size} of every window'</span><span class="terminal__line">About, handson-tauri-02, 2341, 800, 2370, 763, 360, 240, 800, 600</span></pre>
+</div>
+
+          <p>About が 360×240、メインが 800×600 で、<code>tauri.conf.json</code> の設定どおりです。</p>
+
+          <h4>静的エクスポートで <code>/about/</code> を用意する</h4>
+          <p>ここまでの設定では、開発時の Next.js サーバーは <code>/about</code>（末尾に <code>/</code> なし）を返します。直前の出力の <code>GET /about 200</code> がそれです。ビルド後は <code>out/</code> の静的ファイルから読み込みますが、<code>output: "export"</code> の既定では <code>/about</code> は <code>out/about.html</code> という 1 ファイルとして出力されます。ウィンドウの <code>url</code> はディレクトリ形式の <code>/about/</code> にしているので、開発時とビルド後のどちらも <code>/about/</code> の形になるよう <code>trailingSlash: true</code> を追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">next.config.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  import type { NextConfig } from "next";</span><span class="diff-line"> </span><span class="diff-line">  const nextConfig: NextConfig = {</span><span class="diff-line">    output: "export",</span><span class="diff-line diff-line--add">+   // 複数ページ（/about）を静的エクスポートすると、既定では out/about.html になる。</span><span class="diff-line diff-line--add">+   // Tauri の frontendDist はディレクトリの index.html を期待するため、</span><span class="diff-line diff-line--add">+   // trailingSlash で out/about/index.html の形にする。</span><span class="diff-line diff-line--add">+   trailingSlash: true,</span><span class="diff-line">    images: {</span><span class="diff-line">      unoptimized: true,</span><span class="diff-line">    },</span><span class="diff-line">  };</span><span class="diff-line"> </span><span class="diff-line">  export default nextConfig;</span></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">（中略）</span><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">├ ○ /_not-found</span><span class="terminal__line">└ ○ /about</span><span class="terminal__line"></span><span class="terminal__line">○  (Static)  prerendered as static content</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls out/about/</span><span class="terminal__line">__next._full.txt</span><span class="terminal__line">__next._tree.txt</span><span class="terminal__line">__next.about.__PAGE__.txt</span><span class="terminal__line">index.html</span><span class="terminal__line">index.txt</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ボタンを押すと 360×240 の About ウィンドウが開けば成功です。<code>npm run build</code> の結果に <code>/about</code> が含まれ、<code>out/about/index.html</code> ができていることも確認してください。確認後は <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">アプリのアイコンを差し替える</h3>
+        </div>
+        <div class="step__body">
+
+          <p>アプリのアイコンを差し替えます。Tauri CLI の <code>tauri icon</code> に元画像を 1 枚渡すと、各 OS 向けのサイズと形式のアイコンをまとめて生成し、<code>src-tauri/icons/</code> を上書きします。</p>
+          <p>元画像には、正方形の PNG（または SVG）を使います。ここでは追加のツールを入れずに済むよう、Python 3 の標準ライブラリで 2×2 のオレンジ色の PNG を書き出し、macOS 標準の <code>sips</code> で 1024×1024 に拡大します。<code>src-tauri/</code> に置くのは、<code>src/app/</code> がルーティング専用のディレクトリで、画像など生成物の元ファイルを置く場所ではないためです。手元に使いたい画像があれば、そちらを <code>src-tauri/icon-source.png</code> に置いても構いません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> python3 - seed-icon.png &lt;&lt; 'EOF'</span><span class="terminal__line">import struct, zlib, sys</span><span class="terminal__line">def chunk(tag, data):</span><span class="terminal__line">    return struct.pack("&gt;I", len(data)) + tag + data + struct.pack("&gt;I", zlib.crc32(tag + data))</span><span class="terminal__line">w, h = 2, 2</span><span class="terminal__line">r, g, b = 0xF5, 0x4A, 0x00  # オレンジ</span><span class="terminal__line">raw = b"".join(b"\x00" + bytes([r, g, b]) * w for _ in range(h))</span><span class="terminal__line">png = b"\x89PNG\r\n\x1a\n"</span><span class="terminal__line">png += chunk(b"IHDR", struct.pack("&gt;IIBBBBB", w, h, 8, 2, 0, 0, 0))</span><span class="terminal__line">png += chunk(b"IDAT", zlib.compress(raw, 9))</span><span class="terminal__line">png += chunk(b"IEND", b"")</span><span class="terminal__line">with open(sys.argv[1], "wb") as f:</span><span class="terminal__line">    f.write(png)</span><span class="terminal__line">EOF</span><span class="terminal__line"><span class="terminal__prompt">$</span> sips -z 1024 1024 seed-icon.png --out src-tauri/icon-source.png</span><span class="terminal__line">/path/to/02-window-build/seed-icon.png</span><span class="terminal__line">  /path/to/02-window-build/src-tauri/icon-source.png</span><span class="terminal__line"><span class="terminal__prompt">$</span> rm seed-icon.png</span><span class="terminal__line"><span class="terminal__prompt">$</span> sips -g pixelWidth -g pixelHeight -g format src-tauri/icon-source.png</span><span class="terminal__line">/path/to/02-window-build/src-tauri/icon-source.png</span><span class="terminal__line">  pixelWidth: 1024</span><span class="terminal__line">  pixelHeight: 1024</span><span class="terminal__line">  format: png</span></pre>
+</div>
+
+          <p><code>python3 -</code> は標準入力（ヒアドキュメント）のスクリプトを実行し、続く <code>seed-icon.png</code> を <code>sys.argv[1]</code> として渡します。<code>sips -z 高さ 幅</code> は画像を指定のサイズに変換するコマンドで、<code>-g</code> は画像の情報を表示します。</p>
+          <p>1024×1024 の PNG になったことを確認したら、<code>tauri icon</code> に渡します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri icon src-tauri/icon-source.png</span><span class="terminal__line">（Windows ストアアプリ向けの Appx の行は省略）</span><span class="terminal__line">        ICNS Creating icon.icns</span><span class="terminal__line">         ICO Creating icon.ico</span><span class="terminal__line">         PNG Creating 32x32.png</span><span class="terminal__line">         PNG Creating 64x64.png</span><span class="terminal__line">         PNG Creating 128x128.png</span><span class="terminal__line">         PNG Creating 128x128@2x.png</span><span class="terminal__line">         PNG Creating icon.png</span><span class="terminal__line">         iOS Creating AppIcon-20x20@2x-1.png</span><span class="terminal__line">（iOS / Android 向けアイコンの生成は省略）</span><span class="terminal__line">     Android Creating mipmap-xxxhdpi/ic_launcher.png</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls src-tauri/icons</span><span class="terminal__line">128x128.png</span><span class="terminal__line">128x128@2x.png</span><span class="terminal__line">32x32.png</span><span class="terminal__line">64x64.png</span><span class="terminal__line">android/</span><span class="terminal__line">icon.icns</span><span class="terminal__line">icon.ico</span><span class="terminal__line">icon.png</span><span class="terminal__line">ios/</span><span class="terminal__line">Square107x107Logo.png</span><span class="terminal__line">Square142x142Logo.png</span><span class="terminal__line">Square150x150Logo.png</span><span class="terminal__line">Square284x284Logo.png</span><span class="terminal__line">Square30x30Logo.png</span><span class="terminal__line">Square310x310Logo.png</span><span class="terminal__line">Square44x44Logo.png</span><span class="terminal__line">Square71x71Logo.png</span><span class="terminal__line">Square89x89Logo.png</span><span class="terminal__line">StoreLogo.png</span></pre>
+</div>
+
+          <p>01 からあったファイルは上書きされ、<code>64x64.png</code> と、モバイル向けの <code>android/</code> / <code>ios/</code> が新しく追加されます。主な生成物の用途は次のとおりです。</p>
+          <table>
+            <thead>
+            <tr><th>ファイル</th><th>用途</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>icon.icns</code></td><td>macOS（<code>.app</code> のアイコン）</td></tr>
+            <tr><td><code>icon.ico</code></td><td>Windows</td></tr>
+            <tr><td><code>32x32.png</code> / <code>128x128.png</code> / <code>128x128@2x.png</code> / <code>icon.png</code></td><td>Linux などで使う PNG アイコン</td></tr>
+            <tr><td><code>Square*Logo.png</code> / <code>StoreLogo.png</code></td><td>Windows のストアアプリ向け</td></tr>
+            <tr><td><code>android/</code> / <code>ios/</code></td><td>モバイル向け（このトラックでは使いません）</td></tr>
+            </tbody>
+          </table>
+          <p>バンドルに含めるアイコンは、<code>tauri.conf.json</code> の <code>bundle.icon</code> で指定します。ファイル名は変わらないので、01 の設定（<code>32x32.png</code> / <code>128x128.png</code> / <code>128x128@2x.png</code> / <code>icon.icns</code> / <code>icon.ico</code> の 5 つ）のままで構いません。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>tauri icon</code> がエラーなく終わり、<code>ls src-tauri/icons</code> に <code>icon.icns</code> と <code>64x64.png</code> が表示されれば成功です。アイコンがアプリに反映された様子は、ステップ 6 でビルドした <code>.app</code> で確かめます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">バージョンとメタデータを設定する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>アプリのバージョンを <code>0.2.0</code> に上げ、配布物に埋め込む説明などのメタデータを <code>bundle</code> に追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line">    "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",</span><span class="diff-line">    "productName": "handson-tauri-02",</span><span class="diff-line diff-line--remove">-   "version": "0.1.0",</span><span class="diff-line diff-line--add">+   "version": "0.2.0",</span><span class="diff-line">    "identifier": "com.handson.tauri02",</span><span class="diff-line">  ...</span><span class="diff-line">    "bundle": {</span><span class="diff-line">      "active": true,</span><span class="diff-line">      "targets": "all",</span><span class="diff-line">      "icon": [</span><span class="diff-line">        "icons/32x32.png",</span><span class="diff-line">        "icons/128x128.png",</span><span class="diff-line">        "icons/128x128@2x.png",</span><span class="diff-line">        "icons/icon.icns",</span><span class="diff-line">        "icons/icon.ico"</span><span class="diff-line">      ],</span><span class="diff-line diff-line--add">+     "copyright": "© 2026 Handson Materials",</span><span class="diff-line diff-line--add">+     "shortDescription": "Tauri ハンズオン 02: ウィンドウ設定とビルド",</span><span class="diff-line diff-line--add">+     "longDescription": "Tauri トラックの 02 番目の教材で作成するサンプルアプリです。ウィンドウ設定・複数ウィンドウ・アイコン・リリースビルドを学びます。",</span><span class="diff-line diff-line--add">+     "category": "DeveloperTool",</span><span class="diff-line">      "android": {</span><span class="diff-line">        "debugApplicationIdSuffix": ".debug"</span><span class="diff-line">      }</span><span class="diff-line">    }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>キー</th><th>意味</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>version</code></td><td>アプリのバージョン。<code>getVersion()</code> が返す値で、バンドルのファイル名にも使われる</td></tr>
+            <tr><td><code>bundle.copyright</code></td><td>アプリの著作権表示</td></tr>
+            <tr><td><code>bundle.shortDescription</code></td><td>アプリの短い説明</td></tr>
+            <tr><td><code>bundle.longDescription</code></td><td>アプリの長い説明</td></tr>
+            <tr><td><code>bundle.category</code></td><td>アプリの種類。<code>Business</code> / <code>DeveloperTool</code> / <code>Education</code> / <code>Game</code> などの決められた値から選ぶ</td></tr>
+            </tbody>
+          </table>
+          <p><code>package.json</code> の <code>version</code> も <code>0.2.0</code> にそろえます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line">    "name": "02-window-build",</span><span class="diff-line diff-line--remove">-   "version": "0.1.0",</span><span class="diff-line diff-line--add">+   "version": "0.2.0",</span><span class="diff-line">    "private": true,</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">3 つの <code>version</code></p>
+              <p>このプロジェクトには <code>version</code> が 3 か所あります。<code>getVersion()</code> が返すのは、<code>tauri::generate_context!()</code> で取り込まれる <code>tauri.conf.json</code> の値です。<code>package.json</code> の値は npm 用で、<code>getVersion()</code> には影響しません。混乱しないように、このレッスンではそろえています。<code>Cargo.toml</code> の <code>version</code> は Rust のパッケージのバージョンで、<code>0.1.0</code> のままにしています。そのため、ビルドのログには <code>Compiling handson-tauri-02 v0.1.0</code> と表示されます。</p>
+            </div>
+          </div>
+
+          <p>macOS の最低対応バージョンを指定する <code>bundle.macOS.minimumSystemVersion</code> は書いていないので、既定値が使われます。既定値は、Tauri CLI に同梱されているスキーマで確認できます。<code>minimumSystemVersion</code> というキー名は iOS 側の設定にもあるので、<code>description</code> に「macOS」と書かれている方を見るようにします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n -B1 -A1 "minimum macOS X version" node_modules/@tauri-apps/cli/config.schema.json</span><span class="terminal__line">3667:        "minimumSystemVersion": {</span><span class="terminal__line">3668:          "description": "A version string indicating the minimum macOS X version that the bundled application supports. Defaults to `10.13`.…",</span><span class="terminal__line">3669:          "default": "10.13",</span></pre>
+</div>
+
+          <p>既定値は macOS 10.13 です。より新しい macOS の機能を使う場合は、この値を引き上げます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>npm run tauri dev</code> で起動し、画面の表示が「Tauri アプリのバージョン: 0.2.0」に変わっていれば成功です。ステップ 6 のリリースビルドでも同様に 0.2.0 と表示されます。ビルドする <code>.dmg</code> のファイル名にも <code>0.2.0</code> が入ります。確認後は <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">リリースビルドを作る</h3>
+        </div>
+        <div class="step__body">
+
+          <p>01 ではデバッグビルド（<code>--debug</code>）で <code>.app</code> を作りました。ここでは、配布に使う最適化済みのリリースビルドを作ります。ビルドの前に、ポート 3000 を使うプロセスが残っていないことを確認します（<code>tauri build</code> は <code>beforeBuildCommand</code> で静的エクスポートするので、開発サーバーは不要です）。<code>time</code> を付けて、所要時間も測ります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> lsof -iTCP:3000 -sTCP:LISTEN</span><span class="terminal__line"><span class="terminal__prompt">$</span> time npm run tauri build</span><span class="terminal__line">（Next.js のビルドと Rust のコンパイル進捗は省略）</span><span class="terminal__line">   Compiling tauri v2.11.6</span><span class="terminal__line">   Compiling tauri-plugin-log v2.9.2</span><span class="terminal__line">   Compiling tauri-macros v2.6.3</span><span class="terminal__line">   Compiling mime v0.3.17</span><span class="terminal__line">   Compiling handson-tauri-02 v0.1.0 (/path/to/02-window-build/src-tauri)</span><span class="terminal__line">   Compiling fern v0.7.1</span><span class="terminal__line">    Finished `release` profile [optimized] target(s) in 58.59s</span><span class="terminal__line">       Built application at: /path/to/02-window-build/src-tauri/target/release/handson-tauri-02</span><span class="terminal__line">    Bundling handson-tauri-02.app (/path/to/02-window-build/src-tauri/target/release/bundle/macos/handson-tauri-02.app)</span><span class="terminal__line">    Bundling handson-tauri-02_0.2.0_aarch64.dmg (/path/to/02-window-build/src-tauri/target/release/bundle/dmg/handson-tauri-02_0.2.0_aarch64.dmg)</span><span class="terminal__line">     Running bundle_dmg.sh</span><span class="terminal__line">    Finished 2 bundles at:</span><span class="terminal__line">        /path/to/02-window-build/src-tauri/target/release/bundle/macos/handson-tauri-02.app</span><span class="terminal__line">        /path/to/02-window-build/src-tauri/target/release/bundle/dmg/handson-tauri-02_0.2.0_aarch64.dmg</span><span class="terminal__line"></span><span class="terminal__line">npm run tauri build  315.60s user 25.76s system 402% cpu 1:24.83 total</span></pre>
+</div>
+
+          <p>最初の <code>lsof</code> が何も出力しなければ、ポート 3000 は空いています。リリースビルドでは、依存クレートも含めて最適化付きでコンパイルし直すため、<code>Finished `release` profile [optimized]</code> まで 58.59 秒かかりました。コマンド全体では約 1 分 25 秒（最終行の <code>1:24.83 total</code>）です。<code>315.60s user</code> は複数の CPU コアで並列にコンパイルした時間の合計なので、実際の待ち時間ではありません。</p>
+          <p>リリースビルドの成果物は <code>target/release/bundle/</code> にできます。01 と同じデバッグビルドも作り、大きさを比べてみます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> time npm run tauri build -- --debug</span><span class="terminal__line">（中略）</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.50s</span><span class="terminal__line">（中略）</span><span class="terminal__line">npm run tauri build -- --debug  31.82s user 4.05s system 89% cpu 40.150 total</span><span class="terminal__line"><span class="terminal__prompt">$</span> du -sh src-tauri/target/release/bundle/macos/handson-tauri-02.app</span><span class="terminal__line">9.4M</span><span class="terminal__line"><span class="terminal__prompt">$</span> du -sh src-tauri/target/release/bundle/dmg/handson-tauri-02_0.2.0_aarch64.dmg</span><span class="terminal__line">2.7M</span><span class="terminal__line"><span class="terminal__prompt">$</span> du -sh src-tauri/target/debug/bundle/macos/handson-tauri-02.app</span><span class="terminal__line">29M</span><span class="terminal__line"><span class="terminal__prompt">$</span> du -sh src-tauri/target/debug/bundle/dmg/handson-tauri-02_0.2.0_aarch64.dmg</span><span class="terminal__line">6.6M</span></pre>
+</div>
+
+          <p><code>du -sh</code> の出力のうち、2 列目のパスは省略しています。</p>
+          <table>
+            <thead>
+            <tr><th>ビルド</th><th>所要時間（コマンド全体）</th><th><code>.app</code></th><th><code>.dmg</code></th></tr>
+            </thead>
+            <tbody>
+            <tr><td>リリース（<code>tauri build</code>）</td><td>約 1 分 25 秒</td><td>9.4 MB</td><td>2.7 MB</td></tr>
+            <tr><td>デバッグ（<code>tauri build -- --debug</code>）</td><td>約 40 秒</td><td>29 MB</td><td>6.6 MB</td></tr>
+            </tbody>
+          </table>
+          <p>リリースビルドは時間がかかる代わりに、<code>.app</code> がデバッグビルドの約 3 分の 1 の大きさになりました。デバッグビルドにはデバッグ情報（<code>debuginfo</code>）が含まれ、最適化もされていないためです。</p>
+          <p>リリースビルドの <code>.app</code> を起動してみます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> open src-tauri/target/release/bundle/macos/handson-tauri-02.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> osascript -e 'tell application "System Events" to tell process "handson-tauri-02" to get {name, size} of every window'</span><span class="terminal__line">handson-tauri-02, 800, 600</span></pre>
+</div>
+
+          <p>800×600 のウィンドウが開きます。ビルド後は <code>out/</code> の静的ファイルを読み込んでいるので、Next.js の開発サーバーなしで動いています。「About を開く」を押すと、このリリースビルドでも About ウィンドウが開きます。確認できたら、アプリを終了します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> pkill -f "release/bundle/macos/handson-tauri-02.app"</span></pre>
+</div>
+
+          <p>このビルドは Apple の開発者証明書で署名していません。<code>codesign</code> で署名の情報を表示すると、<code>flags</code> に <code>adhoc</code> と表示されます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> codesign -dv --verbose=4 src-tauri/target/release/bundle/macos/handson-tauri-02.app</span><span class="terminal__line">Executable=/path/to/02-window-build/src-tauri/target/release/bundle/macos/handson-tauri-02.app/Contents/MacOS/handson-tauri-02</span><span class="terminal__line">Identifier=handson_tauri_02-b505a2b1644dd5ff</span><span class="terminal__line">Format=app bundle with Mach-O thin (arm64)</span><span class="terminal__line">CodeDirectory v=20400 size=76264 flags=0x20002(adhoc,linker-signed) hashes=2379+0 location=embedded</span><span class="terminal__line">（以下省略）</span></pre>
+</div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">未署名のアプリと Gatekeeper</p>
+              <p><code>adhoc</code> は、証明書を使わない簡易的な署名（実質的に未署名）であることを表します。自分の Mac で <code>open</code> する分には起動できましたが、Finder からのダブルクリックや、ほかの Mac に配った場合は macOS の Gatekeeper に警告される可能性があります。署名と公証は 05（パッケージングと配布）で扱います。</p>
+            </div>
+          </div>
+
+          <p>最後に、フロントエンドと Rust の両方のチェックが通ることを確認します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 02-window-build@0.2.0 lint</span><span class="terminal__line">&gt; eslint</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo check</span><span class="terminal__line">   Compiling handson-tauri-02 v0.1.0 (/path/to/02-window-build/src-tauri)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.37s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Finished 2 bundles at:</code> に続いて、<code>target/release/bundle/</code> 配下の <code>.app</code> と <code>.dmg</code> のパスが表示されます。<code>open</code> でウィンドウが開けば成功です。<code>npm run lint</code>・<code>cargo check</code>・<code>cargo fmt --check</code> もエラーなく終わることを確認してください。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>app.windows</code> に <code>minWidth</code> / <code>minHeight</code> / <code>center</code> / <code>theme</code> を設定し、<code>tauri dev</code> で反映を確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>titleBarStyle: "Overlay"</code> と <code>data-tauri-drag-region</code> で、透明なタイトルバーとドラッグ領域を作った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>decorations: false</code> を試し、<code>titleBarStyle: "Overlay"</code> との違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>visible: false</code> の About ウィンドウを定義し、<code>show()</code> で開けた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">権限が足りないときのエラー（<code>window.show not allowed</code>）を確認し、<code>capabilities/default.json</code> に必要な権限を追加した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>trailingSlash: true</code> で <code>out/about/index.html</code> が出力されることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>tauri icon</code> でアイコン一式を生成した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>version</code> を <code>0.2.0</code> に上げ、<code>bundle</code> にメタデータを追加した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>npm run tauri build</code> でリリースビルドを作り、デバッグビルドと大きさを比べた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>data-tauri-drag-region</code> を付けたのにドラッグできない</p>
+              <p>まず <code>capabilities/default.json</code> に <code>core:window:allow-start-dragging</code> があるかを確認します。次に、属性を付けた要素の上をつかんでいるかを確認します。この属性は付けた要素自身にしか効かず、子要素には伝わりません。<code>TitleBar</code> で中の <code>span</code> にも属性を付けているのはこのためです。逆に、ボタンなどクリックしたい要素に付けると、クリックではなくドラッグとして扱われます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ボタンを押しても About ウィンドウが開かない</p>
+              <p><code>show()</code> / <code>setFocus()</code> は、<code>capabilities/default.json</code> での許可が必要です。許可がないと Promise が reject されますが、画面には何も出ないので「何も起きない」ように見えます。<code>tauri dev</code> のターミナルに <code>window.show not allowed</code> などのエラーが出ていないかを確認してください。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ビルドしたアプリで About ウィンドウのページが見つからない</p>
+              <p><code>output: "export"</code> の既定では <code>/about</code> は <code>out/about.html</code> として出力され、ウィンドウの <code>url: "/about/"</code> と形が合いません。<code>next.config.ts</code> に <code>trailingSlash: true</code> があるか、<code>out/about/index.html</code> ができているかを確認してください。<code>trailingSlash</code> を使わない場合は、<code>url</code> を <code>/about.html</code> にする方法もあります。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>visible: false</code> のウィンドウも起動時に読み込まれる</p>
+              <p><code>visible: false</code> は「表示しない」だけで、ウィンドウとページは起動時に作られます。<code>tauri dev</code> の起動直後に <code>GET /about/ 200</code> が出るのはこのためです。定義するウィンドウが増えるほど、起動時の読み込みも増えます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>tauri icon</code> の元画像は正方形にする</p>
+              <p><code>npm run tauri icon --help</code> の説明では、入力は正方形の PNG または SVG とされています。このレッスンでは 1024×1024 の PNG を使いました。渡す前に <code>sips -g pixelWidth -g pixelHeight</code> で縦横のサイズを確かめておくと安心です。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">リリースビルドは時間がかかる</p>
+              <p>執筆環境では、リリースビルドが約 1 分 25 秒、デバッグビルドが約 40 秒でした。リリースビルドは依存クレートも最適化付きでコンパイルするため、初めて実行するときはさらに長くなる場合があります。開発中の動作確認は <code>tauri dev</code> で行い、リリースビルドは配布物を作るときだけにしましょう。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>getVersion()</code> の値が変わらない</p>
+              <p><code>getVersion()</code> が返すのは <code>tauri.conf.json</code> の <code>version</code> です。<code>package.json</code> や <code>Cargo.toml</code> の <code>version</code> を変えても、表示は変わりません。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>tauri.conf.json</code> の <code>app.windows</code> でウィンドウのサイズやタイトルバーを設定し、2 つ目のウィンドウを Capabilities の権限と組み合わせて開けるようにしました。
+        さらに、アイコン・バージョン・メタデータを整えて、配布に使うリリースビルドを作りました。
+        次の項目では、フロントエンドから Rust のコマンドを呼び出します。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>tauri/02-window-build</code> の <code>tauri/02-window-build/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../01-setup/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">01: 環境構築とプロジェクト作成</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">03: Rust コマンドの呼び出し</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
