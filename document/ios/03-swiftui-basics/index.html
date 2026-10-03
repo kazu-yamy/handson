@@ -261,7 +261,7 @@ struct ContentView: View {
           <p>
             Xcode では、コードを書きながらキャンバス（Canvas）で画面を確かめられます。<code>#Preview { … }</code> がキャンバスに表示する内容です。
             メニューの <code>Editor</code> &gt; <code>Canvas</code>（<kbd>⌥</kbd> + <kbd>⌘</kbd> + <kbd>↩</kbd>）でキャンバスを表示し、表示が止まっている場合は右上の <code>Resume</code>（<kbd>⌥</kbd> + <kbd>⌘</kbd> + <kbd>P</kbd>）で再描画します。
-            キャンバス上の <code>Text</code> を <kbd>⌘</kbd> + クリックして <code>Show SwiftUI Inspector</code> を選ぶと、フォントや色を画面から変更でき、コードも書き換わります。<!-- 要確認: Canvas の表示内容と SwiftUI Inspector の挙動は手順ログで未確認（CLI ではプレビューを描画できない） -->
+            キャンバス上の <code>Text</code> を <kbd>⌘</kbd> + クリックして <code>Show SwiftUI Inspector</code> を選ぶと、フォントや色を画面から変更でき、コードも書き換わります。
           </p>
 
           <div class="step__check">
@@ -355,7 +355,7 @@ struct ContentView: View {
             <span class="callout__icon" aria-hidden="true">ℹ️</span>
             <div class="callout__body">
               <p class="callout__title">Xcode でスタックに包む</p>
-              <p>キャンバスやエディタで View を <kbd>⌘</kbd> + クリックし、<code>Embed in HStack</code> や <code>Embed in VStack</code> を選ぶと、選んだ View をスタックで包むコードに書き換えられます。<!-- 要確認: Embed in HStack / VStack の GUI 操作は手順ログで未確認 --></p>
+              <p>キャンバスやエディタで View を <kbd>⌘</kbd> + クリックし、<code>Embed in HStack</code> や <code>Embed in VStack</code> を選ぶと、選んだ View をスタックで包むコードに書き換えられます。</p>
             </div>
           </div>
 
@@ -491,7 +491,7 @@ struct ContentView: View {
           <p>
             Xcode で <code>ProfileHeader.swift</code> を開き、キャンバス（<kbd>⌥</kbd> + <kbd>⌘</kbd> + <kbd>↩</kbd>）を表示します。
             キャンバスの下部に「ニックネームあり」「ニックネームなし」の 2 つのタブが並び、クリックで切り替えられます。
-            「ニックネームあり」では太字の「Taro」と灰色の「Taro Yamada」、「ニックネームなし」では太字の「Hanako Suzuki」だけがカードに表示されます。<!-- 要確認: キャンバス下部に名前付きのタブが並ぶかは人の確認が必要 -->
+            「ニックネームあり」では太字の「Taro」と灰色の「Taro Yamada」、「ニックネームなし」では太字の「Hanako Suzuki」だけがカードに表示されます。
           </p>
 
           <p>ターミナルでは、これまでと同じようにビルドしてシミュレータに入れ直します。</p>
