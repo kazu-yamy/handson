@@ -1,0 +1,2132 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04: 状態と State hoisting | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">04</li>
+        </ol>
+        <h1 class="lesson-title">状態と State hoisting</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 03 で Composable 関数と Compose UI テストを書いた人</li>
+          <li class="lesson-meta__item">📋 前提: 03 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../03-compose-basics/index.html">03: Compose 入門</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>remember</code> と <code>mutableStateOf</code> で Composable に状態を持たせ、値の変化で再コンポーズが起きることを確かめられる</li>
+          <li>State hoisting で、状態を持つ画面（stateful）と状態を持たない部品（stateless）に分けられる</li>
+          <li>リストの状態を <code>mutableStateListOf</code>（<code>toMutableStateList</code>）で持ち、要素を置き換えて画面を更新できる</li>
+          <li><code>rememberSaveable</code> と <code>@Parcelize</code> で、画面回転の後も状態を残せる</li>
+          <li><code>TextFieldState</code> で入力欄の状態を扱い、入力に応じてボタンの有効・無効を切り替えられる</li>
+          <li><code>derivedStateOf</code> が再コンポーズを減らす場面と、減らさない場面を説明できる</li>
+          <li>Compose UI テストで、クリックや文字入力の結果を検証できる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        03 の Todo 一覧画面は状態を持たず、チェックボックスを押しても「追加」を押しても画面は変わりませんでした。
+        この項目では、画面に<strong>状態</strong>を持たせて、チェックの切り替えと Todo の追加ができるようにします。
+        状態をどの Composable に置くかを決める <strong>State hoisting</strong>（状態の巻き上げ）のパターンを、カウンターと Todo 一覧の 2 つの題材で実装します。
+      </p>
+
+      <h3 id="state-model">Compose の状態モデル</h3>
+      <p>
+        03 で見たとおり、Compose は「データから UI を作る関数」を呼び直して画面を更新します（再コンポーズ）。
+        何が変わったら呼び直すのかを Compose に知らせるのが <strong>State</strong> です。
+        <code>mutableStateOf</code> で作った State の値を Composable が読むと、Compose はその読み取りを記録します。値が書き換わると、その State を読んでいる Composable だけが再コンポーズされます。
+        普通の変数（<code>var count = 0</code>）を書き換えても、Compose は変化に気づきません。
+      </p>
+      <p>
+        State hoisting では、状態をそれを使う部品から 1 段上の Composable に移します。状態を持つ側と持たない側の役割は次のとおりです。
+        この流れを<strong>単方向データフロー</strong>と呼び、「状態は下へ、イベントは上へ」と覚えます。
+      </p>
+
+          <table>
+            <thead>
+            <tr><th>役割</th><th>この項目の例</th><th>受け取るもの・渡すもの</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>状態を持つ（stateful）</td><td><code>CounterScreen</code>・<code>TodoListPage</code></td><td>状態を作って保持し、変更の処理を書く。子には値とイベントのラムダを渡す</td></tr>
+            <tr><td>状態を持たない（stateless）</td><td><code>CounterDisplay</code>・<code>TodoListScreen</code>・<code>TodoRow</code>・<code>TodoInput</code></td><td>値を引数で受け取って表示し、操作はラムダ（<code>onIncrement</code>・<code>onToggle</code> など）で親に知らせる</td></tr>
+            </tbody>
+          </table>
+
+      <p>状態を持たない部品は、同じ引数を渡せばいつも同じ画面になります。03 と同じく Preview や UI テストでそのまま確かめられます。</p>
+
+      <h3 id="state-apis">状態の API の使い分け</h3>
+      <p>この項目で使う API と、使い分けの目安です。各ステップで実際に書いて、動きの違いを確かめます。</p>
+
+          <table>
+            <thead>
+            <tr><th>API</th><th>役割</th><th>この項目で使う場面</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>mutableStateOf(値)</code></td><td>読み書きを Compose が追跡する State を作る。値が変わると、読んでいる Composable が再コンポーズされる</td><td>カウンターの <code>count</code>（ステップ 1）</td></tr>
+            <tr><td><code>remember { ... }</code></td><td>初回のコンポーズで計算した値を、再コンポーズをまたいで覚えておく。画面回転などで Activity が作り直されると消える</td><td><code>mutableStateOf</code> を包む（ステップ 1）</td></tr>
+            <tr><td><code>rememberSaveable { ... }</code></td><td><code>remember</code> と同じに覚えておくうえ、画面回転などの構成変更をまたいで値を保存して戻す。保存できる型（<code>Bundle</code> に入る型）か、保存方法（<code>Saver</code>）が必要</td><td>カウンターと Todo 一覧（ステップ 3）</td></tr>
+            <tr><td><code>mutableStateListOf()</code> / <code>toMutableStateList()</code></td><td>要素の追加・削除・置き換えを Compose が追跡するリスト（<code>SnapshotStateList</code>）を作る</td><td>Todo の一覧（ステップ 2）</td></tr>
+            <tr><td><code>derivedStateOf { ... }</code></td><td>ほかの State から計算した値を State にする。計算結果が変わったときだけ、読んでいる側が再コンポーズされる</td><td>完了件数・全完了フラグ（ステップ 5）</td></tr>
+            </tbody>
+          </table>
+
+      <p>入力欄の状態には、Compose Foundation の <code>TextFieldState</code>（<code>rememberTextFieldState()</code> で作る）を使います。詳しくはステップ 4 で扱います。</p>
+
+      <h3 id="what-we-build">この項目で作るもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>作るもの</th><th>置き場所</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>状態を持つカウンター <code>Counter</code>（ステップ 2 で分割して削除）</td><td><code>ui/components/</code></td></tr>
+            <tr><td>2</td><td><code>CounterDisplay</code>（stateless）と <code>CounterScreen</code>（stateful）、Todo 一覧の状態を持つ <code>TodoListPage</code></td><td><code>ui/components/</code>・<code>ui/screens/</code></td></tr>
+            <tr><td>3</td><td><code>rememberSaveable</code> と <code>@Parcelize</code> による状態の保存</td><td><code>ui/screens/</code>・<code>kotlin/Models.kt</code></td></tr>
+            <tr><td>4</td><td>入力欄と追加ボタンの部品 <code>TodoInput</code></td><td><code>ui/components/</code></td></tr>
+            <tr><td>5</td><td><code>derivedStateOf</code> による完了件数</td><td><code>ui/screens/TodoListScreen.kt</code></td></tr>
+            <tr><td>6</td><td>画面全体の操作を確かめる UI テスト <code>TodoListPageTest</code></td><td><code>app/src/androidTest/</code></td></tr>
+            </tbody>
+          </table>
+
+      <p>カウンター（<code>CounterScreen</code>）はアプリの画面には載せず、Preview と UI テストで動かします。アプリの画面（<code>MainActivity</code>）には、状態を持った Todo 一覧を表示します。</p>
+
+      <h3 id="versions">使用バージョン</h3>
+      <p>01〜03 と同じく、Kotlin 2.4.20 / AGP 9.4.1 / Gradle 9.6.0 / Compose BOM 2026.09.00 で作成しています。Compose の各ライブラリは BOM が決めるバージョン（Compose UI・Foundation・Runtime 1.12.1、Material3 1.4.0）のままです。ライブラリの追加はありません。ステップ 3 で Kotlin の Parcelize プラグイン（<code>org.jetbrains.kotlin.plugin.parcelize</code>、Kotlin と同じ 2.4.20）を追加します。バージョンは執筆時点（2026年10月）の最新安定版です。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Android Studio の画面について</p>
+              <p>Android Studio の画面の名称や配置はバージョンで変わります。画面の名称は Rabbit 1（2026.2.1.8）同梱のリソースで確認して書いています。本文のコードとコマンドの出力は、ターミナル（Gradle・<code>adb</code>）で実際に動かして確認したものです。Preview パネルの表示は確認していません。Preview パネルの切り替えボタンや表示が本文と違う場合は、同じ意味の項目を選んでください。</p>
+            </div>
+          </div>
+
+
+      <h2 id="prepare">準備</h2>
+      <p>03 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 04 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid03&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid04&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid03&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid04&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid03&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid04&quot;</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid03&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid04&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>パッケージ名（<code>com.handson.android01</code>）は 03 と同じく変えません。この項目で作るファイルも、03 で作った <code>ui/components</code> と <code>ui/screens</code> に置きます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">BUILD SUCCESSFUL in 16s</span></pre>
+</div>
+
+      <p><code>BUILD SUCCESSFUL</code> と表示されれば準備は完了です。</p>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>remember</code> と <code>mutableStateOf</code></h3>
+        </div>
+        <div class="step__body">
+
+          <p>最初に、ボタンを押すたびに数が増えるカウンターを作ります。状態（今の数）を Composable の中に持たせる、一番小さな例です。<code>ui/components/Counter.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/Counter.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import android.util.Log
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+
+// remember: 再コンポーズをまたいで値を保持する。remember の中の計算は初回コンポーズ時にだけ実行される
+// mutableStateOf: 値が変わると、この値を読んでいる Composable だけが再コンポーズされる
+// by: 委譲プロパティ。count の読み書きが state.value の読み書きになる（getValue / setValue の import が必要）
+@Composable
+fun Counter(modifier: Modifier = Modifier) {
+    var count by remember { mutableStateOf(0) }
+
+    // SideEffect: 再コンポーズが成功するたびに実行される。再コンポーズの回数を logcat に出すために使う
+    SideEffect {
+        Log.d(&quot;Recompose&quot;, &quot;Counter: count=$count&quot;)
+    }
+
+    Column(modifier = modifier.padding(16.dp)) {
+        Text(
+            text = &quot;count: $count&quot;,
+            modifier = Modifier.testTag(&quot;count_text&quot;),
+            style = MaterialTheme.typography.titleLarge,
+        )
+        Button(
+            onClick = { count++ },
+            modifier = Modifier.testTag(&quot;increment_button&quot;),
+        ) {
+            Text(&quot;増やす&quot;)
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun CounterPreview() {
+    HandsonAndroid01Theme {
+        Counter()
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>mutableStateOf(0)</code>: 初期値 0 の State を作ります。この State の値を読んだ Composable は、値が変わると再コンポーズされます。</li>
+            <li><code>remember { ... }</code>: 中のラムダは初回のコンポーズでだけ実行され、作った State は再コンポーズをまたいで使い回されます。</li>
+            <li><code>var count by ...</code>: <code>by</code> は Kotlin の委譲プロパティです。<code>count</code> を読むと State の <code>value</code> を読み、<code>count++</code> は <code>value</code> への書き込みになります。<code>by</code> で State を使うには、<code>androidx.compose.runtime.getValue</code> と <code>setValue</code> の import が必要です。</li>
+            <li><code>SideEffect { ... }</code>: コンポーズ（初回と再コンポーズ）が成功するたびに実行されるブロックです。ここでは、再コンポーズが何回起きたかを Logcat に出すために使っています。</li>
+            <li><code>testTag</code>: UI テストから表示と押すボタンを見つけるための目印です（03 で使ったもの）。</li>
+          </ul>
+          <p>カウンターはアプリの画面には載せないので、UI テストで動かします。<code>androidTest/.../ui/components/CounterTest.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/components/CounterTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class CounterTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun counter_startsAtZero() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                Counter()
+            }
+        }
+
+        composeTestRule.onNodeWithTag(&quot;count_text&quot;).assertTextEquals(&quot;count: 0&quot;)
+    }
+
+    @Test
+    fun counter_incrementsOnEachClick() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                Counter()
+            }
+        }
+
+        composeTestRule.onNodeWithTag(&quot;increment_button&quot;).performClick()
+        composeTestRule.onNodeWithTag(&quot;increment_button&quot;).performClick()
+
+        // performClick の後は自動で待機してから検証される（waitForIdle の役割はステップ 6 で扱う）
+        composeTestRule.onNodeWithTag(&quot;count_text&quot;).assertTextEquals(&quot;count: 2&quot;)
+    }
+}</code></pre>
+</div>
+
+          <p>エミュレータを起動してから、このクラスのテストだけを実行します。<code>-Pandroid.testInstrumentationRunnerArguments.class=</code> でテストクラスを指定できます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.handson.android01.ui.components.CounterTest</span><span class="terminal__line">（出力は省略。2 件とも成功し、BUILD SUCCESSFUL で終わります）</span></pre>
+</div>
+
+          <p>テストの実行中に <code>SideEffect</code> が出したログを、Logcat から取り出します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s Recompose</span><span class="terminal__line">D Recompose: Counter: count=0</span><span class="terminal__line">D Recompose: Counter: count=1</span><span class="terminal__line">D Recompose: Counter: count=2</span><span class="terminal__line">D Recompose: Counter: count=0</span></pre>
+</div>
+
+          <p>2 件のテストのログが出ています。<code>counter_incrementsOnEachClick</code> では、ボタンを押すたびに <code>count</code> が 0 → 1 → 2 と増え、そのたびに再コンポーズが起きています。もう 1 行の <code>count=0</code> は、ボタンを押さない <code>counter_startsAtZero</code> の初回のコンポーズです。</p>
+
+          <h4>実験: <code>remember</code> を外すとどうなるか</h4>
+          <p><code>remember</code> の役割を確かめるために、一時的に <code>remember</code> を外します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/Counter.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  fun Counter(modifier: Modifier = Modifier) {</span><span class="diff-line diff-line--remove">-     var count by remember { mutableStateOf(0) }</span><span class="diff-line diff-line--add">+     var count by mutableStateOf(0)</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>この状態でもコンパイルは通ります。同じテストを実行すると、<code>counter_incrementsOnEachClick</code> が失敗します。テスト結果の XML に、次の失敗メッセージが残ります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.handson.android01.ui.components.CounterTest</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest FAILED</span></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">テスト結果の失敗メッセージ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">java.lang.AssertionError: Failed to assert the following: (Text + EditableText = [count: 2])</span><span class="terminal__line">Semantics of the node:</span><span class="terminal__line">Node #3 at (l=42.0, t=42.0, r=246.0, b=116.0)px, Tag: &#x27;count_text&#x27;</span><span class="terminal__line">Text = &#x27;[count: 0]&#x27;</span></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s Recompose</span><span class="terminal__line">D Recompose: Counter: count=0</span><span class="terminal__line">D Recompose: Counter: count=0</span><span class="terminal__line">D Recompose: Counter: count=0</span><span class="terminal__line">D Recompose: Counter: count=0</span></pre>
+</div>
+
+          <p>ボタンを 2 回押しても <code>count</code> は 0 のままです。ボタンを押すと <code>count++</code> で State の値は 1 になり、再コンポーズが起きます。ところが再コンポーズで <code>Counter</code> が呼び直されると、<code>remember</code> が無いので <code>mutableStateOf(0)</code> がもう一度実行され、新しい State（値は 0）が作られます。<code>remember</code> は「再コンポーズのたびに作り直さない」ための仕組みです。</p>
+          <p>確かめたら、<code>remember</code> を元に戻してください。戻した後にもう一度テストを実行し、2 件とも成功することを確かめます。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>remember</code> を外してもコンパイルエラーにならない</p>
+              <p><code>remember</code> を付け忘れても、ビルドは成功します。誤りに気づけるのは、ボタンを押した後の値を確かめたときだけです。状態を持つ部品には、操作の後の表示を確かめる UI テストを書いておきます。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>CounterTest</code> の 2 件が成功し、Logcat に <code>count=0</code>・<code>count=1</code>・<code>count=2</code> が出れば OK です。<code>remember</code> を外すと <code>count: 2</code> の検証が失敗することも確かめてください。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">State hoisting</h3>
+        </div>
+        <div class="step__body">
+
+          <p>ステップ 1 の <code>Counter</code> は、状態（<code>count</code>）と表示（<code>Text</code>・<code>Button</code>）を 1 つの関数に持っています。これを、状態を持たない部品 <code>CounterDisplay</code> と、状態を持つ画面 <code>CounterScreen</code> に分けます。まず <code>ui/components/CounterDisplay.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/CounterDisplay.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+
+// stateless（状態を持たない）な部品。表示する値は count で受け取り、操作は onIncrement で親に知らせる
+// 値を持たないので、同じ引数を渡せば何度呼んでも同じ画面になる。テストや Preview で扱いやすい
+@Composable
+fun CounterDisplay(
+    count: Int,
+    onIncrement: () -&gt; Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.padding(16.dp)) {
+        Text(
+            text = &quot;count: $count&quot;,
+            modifier = Modifier.testTag(&quot;count_text&quot;),
+            style = MaterialTheme.typography.titleLarge,
+        )
+        // ボタンを押しても count は変わらない。onIncrement を呼ぶだけで、増やすかどうかは親が決める
+        Button(
+            onClick = onIncrement,
+            modifier = Modifier.testTag(&quot;increment_button&quot;),
+        ) {
+            Text(&quot;増やす&quot;)
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun CounterDisplayPreview() {
+    HandsonAndroid01Theme {
+        CounterDisplay(count = 3, onIncrement = {})
+    }
+}</code></pre>
+</div>
+
+          <p><code>CounterDisplay</code> は <code>count</code> を引数で受け取って表示し、ボタンが押されたことを <code>onIncrement</code> で親に知らせるだけです。数を増やすかどうかは親が決めます。次に、状態を持つ <code>ui/screens/CounterScreen.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/CounterScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import android.util.Log
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import com.handson.android01.ui.components.CounterDisplay
+
+// stateful（状態を持つ）な画面。count の状態をここで持ち、部品には値とイベントだけを渡す
+// 状態を持つ場所を 1 か所に決めると、部品の動きを状態に関係なくテストできる
+@Composable
+fun CounterScreen(modifier: Modifier = Modifier) {
+    var count by remember { mutableStateOf(0) }
+
+    SideEffect {
+        Log.d(&quot;Recompose&quot;, &quot;CounterScreen: count=$count&quot;)
+    }
+
+    CounterDisplay(
+        count = count,
+        onIncrement = { count++ },
+        modifier = modifier,
+    )
+}</code></pre>
+</div>
+
+          <p><code>count</code> の State は <code>CounterScreen</code> が持ち、<code>CounterDisplay</code> には値（<code>count</code>）とイベント（<code>onIncrement = { count++ }</code>）を渡します。これが State hoisting です。状態は下へ（<code>count</code>）、イベントは上へ（<code>onIncrement</code>）流れます。</p>
+          <p>ステップ 1 の <code>Counter.kt</code> と <code>CounterTest.kt</code> は、この 2 つに置き換えるので削除します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm app/src/main/java/com/handson/android01/ui/components/Counter.kt app/src/androidTest/java/com/handson/android01/ui/components/CounterTest.kt</span></pre>
+</div>
+
+          <p>テストも 2 つに分けます。状態を持たない部品は「渡した値を表示するか」「押したらイベントを呼ぶか」を、状態を持つ画面は「押したら数が増えるか」を確かめます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/components/CounterDisplayTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Assert.assertEquals
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class CounterDisplayTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun display_showsGivenCount() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                CounterDisplay(count = 5, onIncrement = {})
+            }
+        }
+
+        composeTestRule.onNodeWithTag(&quot;count_text&quot;).assertTextEquals(&quot;count: 5&quot;)
+    }
+
+    @Test
+    fun display_callsOnIncrementAndKeepsCount() {
+        var clickCount = 0
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                CounterDisplay(count = 5, onIncrement = { clickCount++ })
+            }
+        }
+
+        composeTestRule.onNodeWithTag(&quot;increment_button&quot;).performClick()
+
+        // 部品は値を持たないので、クリックしても表示は 5 のまま。増やすのは親の仕事
+        assertEquals(1, clickCount)
+        composeTestRule.onNodeWithTag(&quot;count_text&quot;).assertTextEquals(&quot;count: 5&quot;)
+    }
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/CounterScreenTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class CounterScreenTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun counter_startsAtZero() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                CounterScreen()
+            }
+        }
+
+        composeTestRule.onNodeWithTag(&quot;count_text&quot;).assertTextEquals(&quot;count: 0&quot;)
+    }
+
+    @Test
+    fun counter_incrementsOnEachClick() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                CounterScreen()
+            }
+        }
+
+        composeTestRule.onNodeWithTag(&quot;increment_button&quot;).performClick()
+        composeTestRule.onNodeWithTag(&quot;increment_button&quot;).performClick()
+
+        composeTestRule.onNodeWithTag(&quot;count_text&quot;).assertTextEquals(&quot;count: 2&quot;)
+    }
+}</code></pre>
+</div>
+
+          <p><code>display_callsOnIncrementAndKeepsCount</code> では、ボタンを押すと <code>onIncrement</code> が呼ばれ、<code>clickCount</code> は 1 になります。一方、表示は <code>count: 5</code> のままです。部品自身は数を持たないので、親が新しい値を渡さない限り表示は変わりません。</p>
+
+          <h4>Todo の行に、チェックの操作を足す</h4>
+          <p>同じ考え方で、Todo 一覧のチェックボックスを押せるようにします。03 の <code>TodoRow</code> は <code>onCheckedChange = null</code>（表示専用）でした。押されたことを親に知らせる <code>onToggle</code> を引数に足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/TodoRow.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import com.handson.android01.ui.theme.DoneGreen80</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ // onToggle: チェックボックスが押されたときに、新しい完了状態（true/false）を親に知らせる。行自身は完了状態を持たない</span><span class="diff-line">  @Composable</span><span class="diff-line diff-line--remove">- fun TodoRow(todo: Todo, modifier: Modifier = Modifier) {</span><span class="diff-line diff-line--add">+ fun TodoRow(</span><span class="diff-line diff-line--add">+     todo: Todo,</span><span class="diff-line diff-line--add">+     onToggle: (Boolean) -&gt; Unit,</span><span class="diff-line diff-line--add">+     modifier: Modifier = Modifier,</span><span class="diff-line diff-line--add">+ ) {</span><span class="diff-line">      // テーマの背景色の明るさから、ダークかどうかを判定する（端末設定ではなく実際に使われている色で判断する）</span><span class="diff-line">      val isDark = MaterialTheme.colorScheme.surface.luminance() &lt; 0.5f</span><span class="diff-line">      val doneColor = if (isDark) DoneGreen80 else DoneGreen40</span><span class="diff-line">  ...</span><span class="diff-line">          horizontalArrangement = Arrangement.spacedBy(8.dp),</span><span class="diff-line">          verticalAlignment = Alignment.CenterVertically,</span><span class="diff-line">      ) {</span><span class="diff-line diff-line--remove">-         // onCheckedChange = null にすると表示専用になる（タップしても状態が変わらない）</span><span class="diff-line diff-line--remove">-         Checkbox(checked = todo.done, onCheckedChange = null)</span><span class="diff-line diff-line--add">+         // checked は親から受け取った値をそのまま表示する。変更は onToggle で親に任せる（状態は下へ、イベントは上へ）</span><span class="diff-line diff-line--add">+         Checkbox(checked = todo.done, onCheckedChange = onToggle)</span><span class="diff-line">          // weight(1f): 残りの横幅をすべて使う。weight を持つ子が複数あれば比率で分ける</span><span class="diff-line">          Text(</span><span class="diff-line">              text = todo.title.toTitleCase(),</span><span class="diff-line">  ...</span><span class="diff-line">  @Composable</span><span class="diff-line">  private fun TodoRowPreview() {</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoRow(todo = Todo(1, &quot;learn kotlin basics&quot;, done = true))</span><span class="diff-line diff-line--add">+         TodoRow(todo = Todo(1, &quot;learn kotlin basics&quot;, done = true), onToggle = {})</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">  @Composable</span><span class="diff-line">  private fun TodoRowDarkPreview() {</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoRow(todo = Todo(1, &quot;learn kotlin basics&quot;, done = true))</span><span class="diff-line diff-line--add">+         TodoRow(todo = Todo(1, &quot;learn kotlin basics&quot;, done = true), onToggle = {})</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>Checkbox</code> の <code>checked</code> には、親から受け取った <code>todo.done</code> をそのまま渡します。押されると <code>Checkbox</code> は新しい値（<code>true</code> / <code>false</code>）で <code>onCheckedChange</code> を呼ぶので、それを <code>onToggle</code> として親に渡します。行自身は完了状態を持ちません。</p>
+          <p><code>TodoListScreen</code> も状態を持たないまま、行のイベントを親へ中継します。どの行が押されたかが分かるよう、<code>onToggle</code> は Todo の <code>id</code> と新しい完了状態を受け取ります。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  @Composable</span><span class="diff-line">  fun TodoListScreen(</span><span class="diff-line">      todos: List&lt;Todo&gt;,</span><span class="diff-line diff-line--add">+     onToggle: (id: Int, done: Boolean) -&gt; Unit,</span><span class="diff-line">      onAddClick: () -&gt; Unit,</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line">  ) {</span><span class="diff-line">  ...</span><span class="diff-line">              Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {</span><span class="diff-line">                  Column {</span><span class="diff-line">                      todos.forEachIndexed { index, todo -&gt;</span><span class="diff-line diff-line--remove">-                         TodoRow(todo = todo)</span><span class="diff-line diff-line--add">+                         TodoRow(</span><span class="diff-line diff-line--add">+                             todo = todo,</span><span class="diff-line diff-line--add">+                             onToggle = { done -&gt; onToggle(todo.id, done) },</span><span class="diff-line diff-line--add">+                         )</span><span class="diff-line">                          if (index &lt; todos.lastIndex) {</span><span class="diff-line">                              HorizontalDivider()</span><span class="diff-line">                          }</span><span class="diff-line">  ...</span><span class="diff-line">  @Composable</span><span class="diff-line">  private fun TodoListScreenPreview() {</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>状態を持つのは、1 段上に新しく作る <code>ui/screens/TodoListPage.kt</code> です。<code>CounterDisplay</code> / <code>CounterScreen</code> と同じ分け方で、<code>TodoListScreen</code> は Preview と UI テストで使いやすいよう、状態を持たないまま残します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.toMutableStateList
+import androidx.compose.ui.Modifier
+import com.handson.android01.kotlin.Todo
+
+// stateful（状態を持つ）な画面。Todo の一覧は、ここで mutableStateList として持つ
+// toMutableStateList(): 通常の List を、要素の変更を Compose に通知するリストに変換する
+// remember: 再コンポーズのたびに新しいリストを作り直さないよう、初回だけ作る
+@Composable
+fun TodoListPage(
+    initialTodos: List&lt;Todo&gt;,
+    modifier: Modifier = Modifier,
+) {
+    val todos = remember { initialTodos.toMutableStateList() }
+
+    TodoListScreen(
+        todos = todos,
+        onToggle = { id, done -&gt;
+            // 完了状態を変えるのは状態の持ち主（ここ）の役目。要素を新しい Todo に置き換えると、読んでいる画面が再コンポーズされる
+            val index = todos.indexOfFirst { it.id == id }
+            if (index &gt;= 0) {
+                todos[index] = todos[index].copy(done = done)
+            }
+        },
+        onAddClick = {},
+        modifier = modifier,
+    )
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>toMutableStateList()</code>: 普通の <code>List</code> から、要素の変更を Compose が追跡するリスト（<code>SnapshotStateList</code>）を作ります。空のリストから作るときは <code>mutableStateListOf&lt;Todo&gt;()</code> を使います。</li>
+            <li><code>remember</code>: 再コンポーズのたびにリストを作り直さないよう、初回だけ作ります。</li>
+            <li><code>todos[index] = todos[index].copy(done = done)</code>: 完了状態を変えた新しい <code>Todo</code> で要素を置き換えます。<code>Todo</code> は <code>val</code> だけの data class なので、02 で学んだ <code>copy</code> で新しい値を作ります。</li>
+          </ul>
+          <p>アプリの画面を <code>TodoListPage</code> に切り替えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxSize</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line diff-line--remove">- import com.handson.android01.ui.screens.TodoListScreen</span><span class="diff-line diff-line--add">+ import com.handson.android01.ui.screens.TodoListPage</span><span class="diff-line">  import com.handson.android01.ui.screens.demoTodoList</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  ...</span><span class="diff-line">          setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(</span><span class="diff-line diff-line--remove">-                     todos = demoTodoList,</span><span class="diff-line diff-line--remove">-                     onAddClick = {},</span><span class="diff-line diff-line--add">+                 TodoListPage(</span><span class="diff-line diff-line--add">+                     initialTodos = demoTodoList,</span><span class="diff-line">                      modifier = Modifier.fillMaxSize(),</span><span class="diff-line">                  )</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>TodoRow</code> と <code>TodoListScreen</code> の引数が増えたので、03 で書いた Preview とテストの呼び出しがコンパイルエラーになります。<code>TodoRow</code> の呼び出しには <code>onToggle = {}</code>、<code>TodoListScreen</code> の呼び出しには <code>onToggle = { _, _ -&gt; }</code>（何もしない）を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreenPreviews.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = todos, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = todos, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListScreenTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = emptyList(), onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = emptyList(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, onAddClick = { clickCount++ })</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = { clickCount++ })</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>TodoRowTest</code> には、押したときに新しい値で <code>onToggle</code> が呼ばれることを確かめるテストを足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/components/TodoRowTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.assertIsDisplayed</span><span class="diff-line">  import androidx.compose.ui.test.assertWidthIsEqualTo</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.isToggleable</span><span class="diff-line">  import androidx.compose.ui.test.junit4.v2.createComposeRule</span><span class="diff-line">  import androidx.compose.ui.test.onNodeWithTag</span><span class="diff-line">  import androidx.compose.ui.test.onNodeWithText</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.performClick</span><span class="diff-line">  import androidx.compose.ui.unit.dp</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line diff-line--add">+ import org.junit.Assert.assertEquals</span><span class="diff-line">  import org.junit.Rule</span><span class="diff-line">  import org.junit.Test</span><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoRow(todo = Todo(1, &quot;learn kotlin basics&quot;, done = true))</span><span class="diff-line diff-line--add">+                 TodoRow(todo = Todo(1, &quot;learn kotlin basics&quot;, done = true), onToggle = {})</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line">                  Box(modifier = Modifier.width(300.dp)) {</span><span class="diff-line diff-line--remove">-                     TodoRow(todo = Todo(2, &quot;build compose screen&quot;))</span><span class="diff-line diff-line--add">+                     TodoRow(todo = Todo(2, &quot;build compose screen&quot;), onToggle = {})</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;todo_row&quot;).assertWidthIsEqualTo(300.dp)</span><span class="diff-line">      }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     @Test</span><span class="diff-line diff-line--add">+     fun todoRow_callsOnToggleWithNewValue() {</span><span class="diff-line diff-line--add">+         var received: Boolean? = null</span><span class="diff-line diff-line--add">+         composeTestRule.setContent {</span><span class="diff-line diff-line--add">+             HandsonAndroid01Theme {</span><span class="diff-line diff-line--add">+                 TodoRow(todo = Todo(3, &quot;write unit tests&quot;, done = true), onToggle = { received = it })</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         // 行は完了状態を持たないので、押しても表示は変わらない。通知された値（false）だけを確かめる</span><span class="diff-line diff-line--add">+         composeTestRule.onNode(isToggleable()).performClick()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         assertEquals(false, received)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>状態を持つ <code>TodoListPage</code> のテストは、新しいファイル <code>androidTest/.../ui/screens/TodoListPageTest.kt</code> に書きます。ステップ 6 でテストを増やすので、ここでは 1 件だけです。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListPageTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.isToggleable
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+// 画面（TodoListPage）全体の操作をテストする。状態は画面の中にあるので、操作の結果は画面の表示で確かめる
+@RunWith(AndroidJUnit4::class)
+class TodoListPageTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    private fun setPage() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListPage(initialTodos = demoTodoList)
+            }
+        }
+    }
+
+    @Test
+    fun togglingRow_updatesSummary() {
+        setPage()
+        composeTestRule.onNodeWithText(&quot;3 件中 2 件完了&quot;).assertIsDisplayed()
+
+        // 2 番目の行（未完了の &quot;build compose screen&quot;）のチェックボックスを押す
+        composeTestRule.onAllNodes(isToggleable())[1].performClick()
+
+        composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()
+    }
+}</code></pre>
+</div>
+
+          <p><code>isToggleable()</code> は、チェックボックスのように切り替えられるノードを探す条件です。<code>onAllNodes(isToggleable())[1]</code> で 2 番目の行のチェックボックスを押します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest</span><span class="terminal__line">BUILD SUCCESSFUL in 31s</span></pre>
+</div>
+
+
+          <table>
+            <thead>
+            <tr><th>テストクラス</th><th>件数</th><th>失敗</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>ExampleInstrumentedTest</code></td><td>1</td><td>0</td></tr>
+            <tr><td><code>MainActivityTest</code></td><td>1</td><td>0</td></tr>
+            <tr><td><code>CounterDisplayTest</code></td><td>2</td><td>0</td></tr>
+            <tr><td><code>GreetingTest</code></td><td>2</td><td>0</td></tr>
+            <tr><td><code>TodoRowTest</code></td><td>3</td><td>0</td></tr>
+            <tr><td><code>CounterScreenTest</code></td><td>2</td><td>0</td></tr>
+            <tr><td><code>TodoListPageTest</code></td><td>1</td><td>0</td></tr>
+            <tr><td><code>TodoListScreenTest</code></td><td>6</td><td>0</td></tr>
+            </tbody>
+          </table>
+
+
+          <h4>実験: リストの状態の持ち方で何が変わるか</h4>
+          <p>Todo の一覧を <code>mutableStateOf&lt;List&lt;Todo&gt;&gt;</code> に入れる方法もあります。一時的なテストを作り、「2 番目の Todo を完了にする」操作を 3 通りの持ち方で行って、表示と親の再コンポーズ回数（<code>SideEffect</code> で数えたもの）を比べました。</p>
+
+          <table>
+            <thead>
+            <tr><th>ケース</th><th>操作</th><th>親の再コンポーズ</th><th>画面の表示</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>A1: <code>mutableStateOf&lt;List&gt;</code> で全体を置き換える</td><td><code>todos = todos.map { ... }</code></td><td>クリック 1 回で 1 回</td><td>3 件中 3 件完了（更新される）</td></tr>
+            <tr><td>A2: 同じ List の中身だけ書き換える</td><td><code>raw[i] = ...</code>（State の参照は変えない）</td><td>0 回</td><td>3 件中 2 件完了のまま（更新されない）</td></tr>
+            <tr><td>B: <code>SnapshotStateList</code> の要素を置き換える</td><td><code>todos[i] = ...</code></td><td>0 回</td><td>3 件中 3 件完了（更新される）</td></tr>
+            </tbody>
+          </table>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s Exp</span><span class="terminal__line">D Exp     : A1 parent #1</span><span class="terminal__line">D Exp     : A1 parent #2</span><span class="terminal__line">D Exp     : A1 result: parent recompositions per click = 1</span><span class="terminal__line">D Exp     : A2 result: summary still &#x27;3 件中 2 件完了&#x27; after in-place mutation</span><span class="terminal__line">D Exp     : B parent #1</span><span class="terminal__line">D Exp     : B result: parent recompositions per click = 0</span></pre>
+</div>
+
+          <ul>
+            <li>A1 は、新しいリストを State に代入するので、State を読んでいる親が再コンポーズされます。</li>
+            <li>A2 は、リストの中身を変えても State に入っているリストの参照は同じなので、Compose は変化に気づきません。<code>List</code> を <code>mutableStateOf</code> に入れて中身だけを書き換えるのは誤りです。</li>
+            <li>B は、表示が更新されるのに親は再コンポーズされていません。要素を置き換えたときに再コンポーズされるのは、そのリストを読んでいる側（件数や行を表示している <code>TodoListScreen</code>）だけだからです。</li>
+          </ul>
+          <p>この項目では B の持ち方（<code>TodoListPage</code> の書き方）を採用しています。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">実験に使ったテスト（検証後にプロジェクトから外したもの）を見る</summary>
+            <div class="disclosure__body">
+              <p>次のテストは、実験のために一時的に置き、結果を確かめた後でプロジェクトから外しました。完成コードには含まれていません。試す場合も、確かめたら削除してください。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/StateListExperimentTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import android.util.Log
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.toMutableStateList
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.isToggleable
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class StateListExperimentTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun a1_mutableStateOf_replaceWholeList() {
+        var parentRecompositions = 0
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                var todos by remember { mutableStateOf(demoTodoList) }
+                SideEffect { parentRecompositions++; Log.d(&quot;Exp&quot;, &quot;A1 parent #$parentRecompositions&quot;) }
+                TodoListScreen(
+                    todos = todos,
+                    onToggle = { id, done -&gt; todos = todos.map { if (it.id == id) it.copy(done = done) else it } },
+                    onAddClick = {},
+                )
+            }
+        }
+        val before = parentRecompositions
+        composeTestRule.onAllNodes(isToggleable())[1].performClick()
+        composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()
+        Log.d(&quot;Exp&quot;, &quot;A1 result: parent recompositions per click = ${parentRecompositions - before}&quot;)
+    }
+
+    @Test
+    fun a2_mutableStateOf_mutateInPlace_notObserved() {
+        val raw = demoTodoList.toMutableList()
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                val todos by remember { mutableStateOf&lt;List&lt;Todo&gt;&gt;(raw) }
+                TodoListScreen(
+                    todos = todos,
+                    onToggle = { id, done -&gt;
+                        val i = raw.indexOfFirst { it.id == id }
+                        raw[i] = raw[i].copy(done = done)
+                    },
+                    onAddClick = {},
+                )
+            }
+        }
+        composeTestRule.onAllNodes(isToggleable())[1].performClick()
+        // 中身だけ書き換えても State の参照は同じなので、再コンポーズは起きず 2 件のまま
+        composeTestRule.onNodeWithText(&quot;3 件中 2 件完了&quot;).assertIsDisplayed()
+        Log.d(&quot;Exp&quot;, &quot;A2 result: summary still &#x27;3 件中 2 件完了&#x27; after in-place mutation&quot;)
+    }
+
+    @Test
+    fun b_mutableStateList_setElement() {
+        var parentRecompositions = 0
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                val todos = remember { demoTodoList.toMutableStateList() }
+                SideEffect { parentRecompositions++; Log.d(&quot;Exp&quot;, &quot;B parent #$parentRecompositions&quot;) }
+                TodoListScreen(
+                    todos = todos,
+                    onToggle = { id, done -&gt;
+                        val i = todos.indexOfFirst { it.id == id }
+                        todos[i] = todos[i].copy(done = done)
+                    },
+                    onAddClick = {},
+                )
+            }
+        }
+        val before = parentRecompositions
+        composeTestRule.onAllNodes(isToggleable())[1].performClick()
+        composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()
+        Log.d(&quot;Exp&quot;, &quot;B result: parent recompositions per click = ${parentRecompositions - before}&quot;)
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>connectedDebugAndroidTest</code> が成功し、<code>CounterDisplayTest</code>・<code>CounterScreenTest</code>・<code>TodoListPageTest</code> を含む 18 件が通れば OK です。<code>TodoListScreen</code>・<code>TodoRow</code>・<code>CounterDisplay</code> が状態を持たず、値とラムダだけを受け取っていることも確かめてください。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>rememberSaveable</code> と構成変更</h3>
+        </div>
+        <div class="step__body">
+
+          <p><code>remember</code> が覚えた値は、再コンポーズをまたいでも残ります。しかし画面を回転すると、Android は Activity を作り直し（構成変更）、<code>remember</code> の値も消えます。ステップ 2 のアプリで確かめます。</p>
+
+          <h4>実験: <code>remember</code> の状態は画面回転で消える</h4>
+          <p>UI テストの実行後はアプリがエミュレータから外れているので、インストールし直して起動します。<code>adb shell settings put system user_rotation</code> で回転させる前に、自動回転（<code>accelerometer_rotation</code>）を止めておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system accelerometer_rotation 0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span></pre>
+</div>
+
+          <p>エミュレータで 2 番目の Todo（Build Compose Screen）のチェックボックスをタップしてから、横向きに回転させます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system user_rotation 1</span></pre>
+</div>
+
+          <p>画面の文字とチェックボックスの状態を <code>uiautomator</code> で取り出した結果は、次のとおりです。</p>
+
+          <table>
+            <thead>
+            <tr><th>タイミング</th><th>完了件数の表示</th><th>チェックボックス（1〜3 行目）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>起動直後</td><td><code>3 件中 2 件完了</code></td><td>完了 / 未完了 / 完了</td></tr>
+            <tr><td>2 番目をタップした後</td><td><code>3 件中 3 件完了</code></td><td>完了 / 完了 / 完了</td></tr>
+            <tr><td>横向きに回転した後</td><td><code>3 件中 2 件完了</code></td><td>完了 / 未完了 / 完了</td></tr>
+            </tbody>
+          </table>
+
+          <p>回転すると、タップした完了状態が消えて起動直後に戻りました。Activity が作り直され、<code>remember</code> の中身も最初から作り直されたためです。確かめたら、<code>adb shell settings put system user_rotation 0</code> で縦向きに戻します。</p>
+          <p>同じことを UI テストでも確かめられます。<code>StateRestorationTester</code> は、画面回転のときと同じく、保存された状態からコンポーズの中身を作り直すテスト用の道具です。<code>androidTest/.../ui/screens/CounterScreenRestorationTest.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/CounterScreenRestorationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class CounterScreenRestorationTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    // StateRestorationTester: 構成変更時の状態の保存と復元を、Activity を作り直さずに再現する
+    @Test
+    fun counter_keepsCountAfterRecreation() {
+        val tester = StateRestorationTester(composeTestRule)
+        tester.setContent {
+            HandsonAndroid01Theme {
+                CounterScreen()
+            }
+        }
+        composeTestRule.onNodeWithTag(&quot;increment_button&quot;).performClick()
+        composeTestRule.onNodeWithTag(&quot;increment_button&quot;).performClick()
+
+        // 保存された状態を使って、コンポーズの中身を作り直す（回転と同じ経路）
+        tester.emulateSavedInstanceStateRestore()
+
+        composeTestRule.onNodeWithTag(&quot;count_text&quot;).assertTextEquals(&quot;count: 2&quot;)
+    }
+}</code></pre>
+</div>
+
+          <p><code>CounterScreen</code> が <code>remember</code> のままの状態で実行すると、失敗します（ノードの座標などは省略しています）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.handson.android01.ui.screens.CounterScreenRestorationTest</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest FAILED</span><span class="terminal__line">AssertionError: Failed to assert the following: (Text + EditableText = [count: 2])</span><span class="terminal__line">Node #8 at ..., Tag: &#x27;count_text&#x27;</span></pre>
+</div>
+
+
+          <h4><code>rememberSaveable</code> に変える</h4>
+          <p><code>remember</code> を <code>rememberSaveable</code> に変えると、値は構成変更の前に保存され、作り直した後に戻されます。<code>Int</code> は標準で保存できる型なので、書き換えるのは 1 行です。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/CounterScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.runtime.getValue</span><span class="diff-line">  import androidx.compose.runtime.mutableStateOf</span><span class="diff-line diff-line--remove">- import androidx.compose.runtime.remember</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.saveable.rememberSaveable</span><span class="diff-line">  import androidx.compose.runtime.setValue</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line">  ...</span><span class="diff-line">  @Composable</span><span class="diff-line">  fun CounterScreen(modifier: Modifier = Modifier) {</span><span class="diff-line diff-line--remove">-     var count by remember { mutableStateOf(0) }</span><span class="diff-line diff-line--add">+     // rememberSaveable: remember と同じに値を保持するうえ、画面回転などの構成変更をまたいでも値を保存して戻す</span><span class="diff-line diff-line--add">+     var count by rememberSaveable { mutableStateOf(0) }</span><span class="diff-line">  </span><span class="diff-line">      SideEffect {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>Todo の一覧も <code>rememberSaveable</code> にします。こちらは型に注意が必要です。保存先は <code>Bundle</code> なので、入れる値は <code>Bundle</code> に入る型でなければなりません。自作の data class である <code>Todo</code> は、そのままでは入りません。一方、<code>SnapshotStateList</code> は <code>Parcelable</code> を実装しているので、要素が <code>Parcelable</code> なら一覧ごと保存できます。</p>
+          <p>そこで、<code>Todo</code> を <code>Parcelable</code>（<code>Bundle</code> に入れられる型）にします。<code>Parcelable</code> の実装は、Kotlin の Parcelize プラグインに <code>@Parcelize</code> で自動生成させます。まず Version Catalog にプラグインを追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  android-application = { id = &quot;com.android.application&quot;, version.ref = &quot;agp&quot; }</span><span class="diff-line">  kotlin-compose = { id = &quot;org.jetbrains.kotlin.plugin.compose&quot;, version.ref = &quot;kotlin&quot; }</span><span class="diff-line diff-line--add">+ kotlin-parcelize = { id = &quot;org.jetbrains.kotlin.plugin.parcelize&quot;, version.ref = &quot;kotlin&quot; }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      alias(libs.plugins.android.application) apply false</span><span class="diff-line">      alias(libs.plugins.kotlin.compose) apply false</span><span class="diff-line diff-line--add">+     alias(libs.plugins.kotlin.parcelize) apply false</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      alias(libs.plugins.android.application)</span><span class="diff-line">      alias(libs.plugins.kotlin.compose)</span><span class="diff-line diff-line--add">+     alias(libs.plugins.kotlin.parcelize)</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>Todo</code> に <code>@Parcelize</code> と <code>: Parcelable</code> を付けます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Models.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  package com.handson.android01.kotlin</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ import android.os.Parcelable</span><span class="diff-line diff-line--add">+ import kotlinx.parcelize.Parcelize</span><span class="diff-line">  </span><span class="diff-line">  // Step 3: データクラス・sealed interface・enum class</span><span class="diff-line">  </span><span class="diff-line">  // data class: equals / hashCode / toString / copy / 分解宣言が自動で生成される</span><span class="diff-line diff-line--add">+ // @Parcelize / Parcelable: 画面回転などで状態を保存（rememberSaveable）するための実装を自動で生成する（ステップ 3）</span><span class="diff-line diff-line--add">+ @Parcelize</span><span class="diff-line">  data class Todo(</span><span class="diff-line">      val id: Int,</span><span class="diff-line">      val title: String,</span><span class="diff-line">      val done: Boolean = false,</span><span class="diff-line diff-line--remove">- )</span><span class="diff-line diff-line--add">+ ) : Parcelable</span><span class="diff-line">  </span><span class="diff-line">  // enum class: 決まった値の集合。when で網羅的に扱える</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>一覧は <code>toMutableStateList()</code> で作った <code>SnapshotStateList</code> のまま <code>rememberSaveable</code> に渡します。要素の <code>Todo</code> が <code>Parcelable</code> なので、回転の後は保存された内容から、変更を追跡するリストが作り直されます。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>listSaver</code> で保存の形を決める方法</p>
+              <p>保存する形を明示したいときは <code>listSaver</code> を使えます。保存するときは <code>List</code> に変え、戻すときは <code>toMutableStateList()</code> で作り直します。この項目では要素が <code>Parcelable</code> なので、<code>listSaver</code> は使わずに保存します。</p>
+            </div>
+          </div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line diff-line--remove">- import androidx.compose.runtime.remember</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.saveable.rememberSaveable</span><span class="diff-line">  import androidx.compose.runtime.toMutableStateList</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  // stateful（状態を持つ）な画面。Todo の一覧は、ここで mutableStateList として持つ</span><span class="diff-line diff-line--remove">- // toMutableStateList(): 通常の List を、要素の変更を Compose に通知するリストに変換する</span><span class="diff-line diff-line--remove">- // remember: 再コンポーズのたびに新しいリストを作り直さないよう、初回だけ作る</span><span class="diff-line diff-line--add">+ // rememberSaveable: 画面回転のあとも、チェックの状態が残るようにする。要素の Todo は @Parcelize なので、一覧ごと保存できる</span><span class="diff-line">  @Composable</span><span class="diff-line">  fun TodoListPage(</span><span class="diff-line">  ...</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line">  ) {</span><span class="diff-line diff-line--remove">-     val todos = remember { initialTodos.toMutableStateList() }</span><span class="diff-line diff-line--add">+     val todos = rememberSaveable {</span><span class="diff-line diff-line--add">+         initialTodos.toMutableStateList()</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  </span><span class="diff-line">      TodoListScreen(</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Todo</code> の項目を写す <code>Saver</code> を書かなかった理由</p>
+              <p><code>Todo</code> を <code>Parcelable</code> にしない方法として、<code>Saver</code> を自分で書き、<code>id</code>・<code>title</code>・<code>done</code> を 1 つずつ保存できる形に変換する方法もあります。この方法では <code>Todo</code> の項目が data class と <code>Saver</code> の 2 か所に書かれ、項目を足すたびに <code>Saver</code> も直す必要があります。直し忘れやすいので、この項目では変換を <code>Todo</code> 側の <code>@Parcelize</code> 1 つにまとめました。その代わり、02 で作った model の <code>Todo</code> は Android の <code>android.os.Parcelable</code> へ依存します。</p>
+            </div>
+          </div>
+
+          <p>一覧の状態が回転の後も残ることを確かめるテスト <code>androidTest/.../ui/screens/TodoListPageRestorationTest.kt</code> を作ります（ステップ 4 でもう 1 件足します）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListPageRestorationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.isToggleable
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class TodoListPageRestorationTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun togglesSurviveRecreation() {
+        val tester = StateRestorationTester(composeTestRule)
+        tester.setContent {
+            HandsonAndroid01Theme {
+                TodoListPage(initialTodos = demoTodoList)
+            }
+        }
+        composeTestRule.onAllNodes(isToggleable())[1].performClick()
+        composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()
+
+        // 画面回転と同じく、保存された状態から作り直す
+        tester.emulateSavedInstanceStateRestore()
+
+        composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()
+    }
+}</code></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest</span><span class="terminal__line">BUILD SUCCESSFUL in 45s</span></pre>
+</div>
+
+          <p><code>CounterScreenRestorationTest</code>（1 件）と <code>TodoListPageRestorationTest</code>（1 件）を含む 20 件が、すべて成功します。エミュレータでも、インストールし直して同じ操作をします。</p>
+
+          <table>
+            <thead>
+            <tr><th>タイミング</th><th>完了件数の表示</th><th>チェックボックス（1〜3 行目）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>起動直後</td><td><code>3 件中 2 件完了</code></td><td>完了 / 未完了 / 完了</td></tr>
+            <tr><td>2 番目をタップした後</td><td><code>3 件中 3 件完了</code></td><td>完了 / 完了 / 完了</td></tr>
+            <tr><td>横向きに回転した後</td><td><code>3 件中 3 件完了</code></td><td>完了 / 完了 / 完了</td></tr>
+            </tbody>
+          </table>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>StateRestorationTester</code> と実機の回転</p>
+              <p><code>StateRestorationTester</code> は保存と復元の経路を再現しますが、実機の回転とは細部が違います。この項目では、テストとエミュレータの回転の両方で確かめています。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>CounterScreenRestorationTest</code> と <code>TodoListPageRestorationTest</code> が成功し、エミュレータを回転させてもチェックの状態が残れば OK です。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">TextField の状態</h3>
+        </div>
+        <div class="step__body">
+
+          <p>「追加」ボタンで Todo を増やせるように、入力欄を付けます。Compose の入力欄には、状態の持ち方が違う 2 系統の API があります。</p>
+
+          <table>
+            <thead>
+            <tr><th>方式</th><th>書き方</th><th>状態の持ち主</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>value</code> / <code>onValueChange</code></td><td><code>OutlinedTextField(value = text, onValueChange = { text = it })</code></td><td>呼び出し側が <code>String</code> の State を持ち、入力のたびに書き換える</td></tr>
+            <tr><td><code>TextFieldState</code></td><td><code>OutlinedTextField(state = state)</code></td><td>入力の内容は <code>TextFieldState</code> が持つ。<code>rememberTextFieldState()</code> で作る</td></tr>
+            </tbody>
+          </table>
+
+          <p>この項目では <code>TextFieldState</code> を使います。<code>rememberTextFieldState()</code> で作った状態は画面回転の後も入力の内容を残すので、ステップ 3 のように保存の仕組みを自分で組む必要がありません。この点は、このステップの最後にテストで確かめます。Compose BOM 2026.09.00（Material3 1.4.0）の <code>OutlinedTextField</code> に <code>state</code> を渡す形でコンパイルが通ることを確かめて採用しました。</p>
+          <p>入力欄と追加ボタンを並べた部品 <code>ui/components/TodoInput.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/TodoInput.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+
+// TextFieldState: 入力中の文字列を持つ新しい状態のクラス（foundation 1.7 以降）。value / onValueChange の代わりに使える
+@Composable
+fun TodoInput(
+    state: TextFieldState,
+    onAddClick: () -&gt; Unit,
+    modifier: Modifier = Modifier,
+) {
+    val canAdd = state.text.isNotBlank()
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            state = state,
+            modifier = Modifier
+                .weight(1f)
+                .testTag(&quot;todo_input&quot;),
+            lineLimits = TextFieldLineLimits.SingleLine,
+            label = { Text(&quot;新しい Todo&quot;) },
+        )
+        Button(
+            onClick = onAddClick,
+            enabled = canAdd,
+            modifier = Modifier
+                .padding(start = 8.dp)
+                .testTag(&quot;add_button&quot;),
+        ) {
+            Text(&quot;追加&quot;)
+        }
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>state: TextFieldState</code>: 入力の状態は引数で受け取ります。部品自身は状態を作らず、持ち主（後で書く <code>TodoListPage</code>）が作ったものを使います。</li>
+            <li><code>state.text.isNotBlank()</code>: 入力が空、または空白だけのときは <code>canAdd</code> が <code>false</code> になり、<code>Button</code> の <code>enabled = canAdd</code> でボタンを押せなくします。<code>state.text</code> は State として読まれるので、文字を入力するたびにこの判定がやり直されます。</li>
+            <li><code>lineLimits = TextFieldLineLimits.SingleLine</code>: 1 行の入力欄にします。</li>
+          </ul>
+          <p><code>TodoListScreen</code> の下部にあった「追加」ボタンを、<code>TodoInput</code> に置き換えます。入力の状態は引数 <code>inputState</code> で受け取ります。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxWidth</span><span class="diff-line">  import androidx.compose.foundation.layout.height</span><span class="diff-line">  import androidx.compose.foundation.layout.padding</span><span class="diff-line diff-line--remove">- import androidx.compose.foundation.layout.width</span><span class="diff-line diff-line--remove">- import androidx.compose.material.icons.Icons</span><span class="diff-line diff-line--remove">- import androidx.compose.material.icons.filled.Add</span><span class="diff-line diff-line--remove">- import androidx.compose.material3.Button</span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.text.input.TextFieldState</span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.text.input.rememberTextFieldState</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.Card</span><span class="diff-line">  import androidx.compose.material3.ExperimentalMaterial3Api</span><span class="diff-line diff-line--remove">- import androidx.compose.material3.Card</span><span class="diff-line">  import androidx.compose.material3.HorizontalDivider</span><span class="diff-line diff-line--remove">- import androidx.compose.material3.Icon</span><span class="diff-line">  import androidx.compose.material3.MaterialTheme</span><span class="diff-line">  import androidx.compose.material3.OutlinedButton</span><span class="diff-line">  import androidx.compose.material3.Scaffold</span><span class="diff-line">  ...</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import com.handson.android01.kotlin.summaryLine</span><span class="diff-line">  import com.handson.android01.ui.components.CountBadge</span><span class="diff-line diff-line--add">+ import com.handson.android01.ui.components.TodoInput</span><span class="diff-line">  import com.handson.android01.ui.components.TodoRow</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">  @Composable</span><span class="diff-line">  fun TodoListScreen(</span><span class="diff-line">      todos: List&lt;Todo&gt;,</span><span class="diff-line diff-line--add">+     inputState: TextFieldState,</span><span class="diff-line">      onToggle: (id: Int, done: Boolean) -&gt; Unit,</span><span class="diff-line">      onAddClick: () -&gt; Unit,</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">              Spacer(modifier = Modifier.height(16.dp))</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+             // 入力欄と追加ボタン。入力の文字列は状態の持ち主（TodoListPage）が持つ</span><span class="diff-line diff-line--add">+             TodoInput(state = inputState, onAddClick = onAddClick)</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+             Spacer(modifier = Modifier.height(8.dp))</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">              Row(</span><span class="diff-line">                  modifier = Modifier.padding(horizontal = 16.dp),</span><span class="diff-line">                  horizontalArrangement = Arrangement.spacedBy(8.dp),</span><span class="diff-line">              ) {</span><span class="diff-line diff-line--remove">-                 Button(onClick = onAddClick) {</span><span class="diff-line diff-line--remove">-                     Icon(imageVector = Icons.Default.Add, contentDescription = null)</span><span class="diff-line diff-line--remove">-                     Spacer(modifier = Modifier.width(4.dp))</span><span class="diff-line diff-line--remove">-                     Text(&quot;追加&quot;)</span><span class="diff-line diff-line--remove">-                 }</span><span class="diff-line">                  // 以下 2 つはボタンの見た目の違いを示すための置き場。処理は後の項目で実装する</span><span class="diff-line">                  OutlinedButton(onClick = {}) {</span><span class="diff-line">                      Text(&quot;フィルタ&quot;)</span><span class="diff-line">  ...</span><span class="diff-line">  @Composable</span><span class="diff-line">  private fun TodoListScreenPreview() {</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>状態の持ち主 <code>TodoListPage</code> で入力の状態を作り、追加の処理を書きます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.text.input.clearText</span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.text.input.rememberTextFieldState</span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line">  import androidx.compose.runtime.saveable.rememberSaveable</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // rememberTextFieldState: 入力中の文字列の状態を作る。画面回転後も入力の内容は残る</span><span class="diff-line diff-line--add">+     val inputState = rememberTextFieldState()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      TodoListScreen(</span><span class="diff-line">          todos = todos,</span><span class="diff-line diff-line--add">+         inputState = inputState,</span><span class="diff-line">          onToggle = { id, done -&gt;</span><span class="diff-line">              // 完了状態を変えるのは状態の持ち主（ここ）の役目。要素を新しい Todo に置き換えると、読んでいる画面が再コンポーズされる</span><span class="diff-line">  ...</span><span class="diff-line">              }</span><span class="diff-line">          },</span><span class="diff-line diff-line--remove">-         onAddClick = {},</span><span class="diff-line diff-line--add">+         onAddClick = {</span><span class="diff-line diff-line--add">+             val title = inputState.text.toString().trim()</span><span class="diff-line diff-line--add">+             if (title.isNotEmpty()) {</span><span class="diff-line diff-line--add">+                 // id は今ある最大値 + 1。追加したら入力欄を空に戻す</span><span class="diff-line diff-line--add">+                 todos.add(Todo(id = (todos.maxOfOrNull { it.id } ?: 0) + 1, title = title))</span><span class="diff-line diff-line--add">+                 inputState.clearText()</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line">          modifier = modifier,</span><span class="diff-line">      )</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>rememberTextFieldState()</code>: 入力の状態を作ります。<code>TodoListPage</code> が持つので、追加の処理から入力の内容を読めます。</li>
+            <li><code>todos.add(...)</code>: <code>SnapshotStateList</code> への追加も Compose が追跡するので、行が増えて件数の表示も変わります。<code>id</code> は今ある最大値に 1 を足して決めます。</li>
+            <li><code>inputState.clearText()</code>: 追加した後に入力欄を空に戻します。<code>clearText()</code> は <code>TextFieldState</code> の拡張関数なので、<code>androidx.compose.foundation.text.input.clearText</code> の import が要ります。</li>
+          </ul>
+          <p><code>TodoListScreen</code> に引数が増えたので、Preview とテストの呼び出しに <code>inputState = rememberTextFieldState()</code> を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreenPreviews.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import android.content.res.Configuration</span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.text.input.rememberTextFieldState</span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.tooling.preview.Preview</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.tooling.preview.PreviewFontScale</span><span class="diff-line">  import androidx.compose.ui.tooling.preview.PreviewLightDark</span><span class="diff-line diff-line--remove">- import androidx.compose.ui.tooling.preview.PreviewFontScale</span><span class="diff-line">  import androidx.compose.ui.tooling.preview.PreviewParameter</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = todos, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = todos, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-         TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+         TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>TodoListScreenTest</code> の <code>addButton_callsOnAddClick</code> は、空欄のままでは追加ボタンが押せなくなったので、先に文字を入力してから押す形に直します。空欄でボタンが無効になることを確かめるテストも足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListScreenTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.text.input.rememberTextFieldState</span><span class="diff-line">  import androidx.compose.ui.test.assertCountEquals</span><span class="diff-line">  import androidx.compose.ui.test.assertIsDisplayed</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.assertIsNotEnabled</span><span class="diff-line">  import androidx.compose.ui.test.junit4.v2.createComposeRule</span><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.onAllNodesWithText</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.onNodeWithTag</span><span class="diff-line">  import androidx.compose.ui.test.onNodeWithText</span><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.performClick</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.performTextInput</span><span class="diff-line">  import androidx.compose.ui.test.printToLog</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = emptyList(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = emptyList(), inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = { clickCount++ })</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = { clickCount++ })</span><span class="diff-line">              }</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+         // 空のままでは追加ボタンは無効（後述のテスト）。文字を入れてから押す</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;追加&quot;).performClick()</span><span class="diff-line">  ...</span><span class="diff-line">          assertEquals(1, clickCount)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     @Test</span><span class="diff-line diff-line--add">+     fun addButton_isDisabledWhenInputIsEmpty() {</span><span class="diff-line diff-line--add">+         composeTestRule.setContent {</span><span class="diff-line diff-line--add">+             HandsonAndroid01Theme {</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsNotEnabled()</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>入力の内容が回転の後も残ることを、<code>TodoListPageRestorationTest</code> に足して確かめます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListPageRestorationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import androidx.compose.ui.test.assertIsDisplayed</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.assertIsEnabled</span><span class="diff-line">  import androidx.compose.ui.test.isToggleable</span><span class="diff-line">  import androidx.compose.ui.test.junit4.StateRestorationTester</span><span class="diff-line">  import androidx.compose.ui.test.junit4.v2.createComposeRule</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.onNodeWithTag</span><span class="diff-line">  import androidx.compose.ui.test.onNodeWithText</span><span class="diff-line">  import androidx.compose.ui.test.performClick</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.performTextInput</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  ...</span><span class="diff-line">      @get:Rule</span><span class="diff-line">      val composeTestRule = createComposeRule()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     @Test</span><span class="diff-line diff-line--add">+     fun inputText_survivesRecreation() {</span><span class="diff-line diff-line--add">+         val tester = StateRestorationTester(composeTestRule)</span><span class="diff-line diff-line--add">+         tester.setContent {</span><span class="diff-line diff-line--add">+             HandsonAndroid01Theme {</span><span class="diff-line diff-line--add">+                 TodoListPage(initialTodos = demoTodoList)</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         tester.emulateSavedInstanceStateRestore()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         // 入力中の文字は画面回転の後も残り、追加ボタンは有効のまま</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsEnabled()</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span></pre>
+</div>
+
+          <p><code>TodoListScreenTest</code> は 7 件、<code>TodoListPageRestorationTest</code> は 2 件になり、すべて成功します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>addButton_isDisabledWhenInputIsEmpty</code> と <code>inputText_survivesRecreation</code> を含むテストがすべて成功すれば OK です。空欄では追加ボタンが無効、文字を入れると有効になることを、テストで確かめています。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>derivedStateOf</code> と再コンポーズ</h3>
+        </div>
+        <div class="step__body">
+
+          <p><code>derivedStateOf</code> は、ほかの State から計算した値を State にします。計算に使う State が変わると計算し直しますが、<strong>計算結果が前と同じなら、読んでいる側を再コンポーズしません</strong>。完了件数の表示を <code>derivedStateOf</code> で書き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.material3.TopAppBar</span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.derivedStateOf</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.getValue</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.remember</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line">  import androidx.compose.ui.tooling.preview.Preview</span><span class="diff-line">  import androidx.compose.ui.unit.dp</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line diff-line--remove">- import com.handson.android01.kotlin.summaryLine</span><span class="diff-line">  import com.handson.android01.ui.components.CountBadge</span><span class="diff-line">  import com.handson.android01.ui.components.TodoInput</span><span class="diff-line">  ...</span><span class="diff-line">                  .padding(innerPadding),</span><span class="diff-line">          ) {</span><span class="diff-line diff-line--add">+             // derivedStateOf: todos から計算する完了件数を State として覚える。remember(todos) のキーは、todos の参照が変わったら計算式を作り直すため</span><span class="diff-line diff-line--add">+             val doneCount by remember(todos) { derivedStateOf { todos.count { it.done } } }</span><span class="diff-line">              Text(</span><span class="diff-line diff-line--remove">-                 text = todos.summaryLine(),</span><span class="diff-line diff-line--add">+                 text = &quot;${todos.size} 件中 $doneCount 件完了&quot;,</span><span class="diff-line">                  modifier = Modifier.padding(16.dp),</span><span class="diff-line">                  style = MaterialTheme.typography.titleLarge,</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>derivedStateOf { todos.count { it.done } }</code>: <code>todos</code> の要素が変わると数え直します。</li>
+            <li><code>remember(todos) { ... }</code>: <code>derivedStateOf</code> も State なので <code>remember</code> で覚えます。キーに <code>todos</code> を渡すと、別のリストが渡されたときに計算式を作り直します。キーを省くと、最初に受け取ったリストを数え続けるおそれがあります（この画面ではリストの参照が変わらないので、実際に壊れることは確かめていません）。</li>
+            <li>02 で書いた拡張関数 <code>summaryLine()</code> は画面からは使わなくなりますが、関数とテストはそのまま残します。</li>
+          </ul>
+          <p>表示は 03 と同じ <code>3 件中 2 件完了</code> のままです。では、<code>derivedStateOf</code> で再コンポーズはどれだけ減るのでしょうか。</p>
+
+          <h4>実験: <code>derivedStateOf</code> で再コンポーズは減るか</h4>
+          <p>一時的なテストで、3 件の Todo に対して 3 つのラベルを置き、それぞれの再コンポーズ回数を <code>SideEffect</code> で数えました。ボタンで 1 件ずつ完了を切り替え、クリックごとに <code>waitForIdle()</code> で再コンポーズが終わるのを待ってから回数を記録しています。</p>
+
+          <table>
+            <thead>
+            <tr><th>ラベル</th><th>書き方</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>直接</td><td><code>Text(&quot;直接 ${todos.count { it.done }}&quot;)</code></td></tr>
+            <tr><td>件数を派生</td><td><code>remember(todos) { derivedStateOf { todos.count { it.done } } }</code></td></tr>
+            <tr><td>全完了を派生</td><td><code>remember(todos) { derivedStateOf { todos.all { it.done } } }</code></td></tr>
+            </tbody>
+          </table>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s Exp5</span><span class="terminal__line">D Exp5 : initial: direct=1 derivedCount=1 derivedAllDone=1</span><span class="terminal__line">D Exp5 : after t3: direct=2 derivedCount=2 derivedAllDone=1</span><span class="terminal__line">D Exp5 : after t2: direct=3 derivedCount=3 derivedAllDone=1</span><span class="terminal__line">D Exp5 : after t1: direct=4 derivedCount=4 derivedAllDone=1</span><span class="terminal__line">D Exp5 : after t3: direct=5 derivedCount=5 derivedAllDone=1</span><span class="terminal__line">D Exp5 : after t1: direct=6 derivedCount=6 derivedAllDone=2</span></pre>
+</div>
+
+          <p>初期状態は「完了 / 未完了 / 完了」で、t3 → t2 → t1 → t3 → t1 の順に切り替えています。</p>
+          <ul>
+            <li><strong>件数</strong>は、切り替えのたびに変わります。そのため、派生させても再コンポーズの回数は直接計算と同じです（どちらも 1 → 6）。件数の表示に <code>derivedStateOf</code> を使っても、再コンポーズは減りません。</li>
+            <li><strong>全完了フラグ</strong>は、最後の t1 で 3 件すべてが完了になったときだけ <code>false</code> → <code>true</code> に変わり、そのときだけ再コンポーズされました（1 → 2）。それまでの 4 回の切り替えでは、値が <code>false</code> のまま変わらないので再コンポーズされていません。</li>
+          </ul>
+          <p><code>derivedStateOf</code> が効くのは、「元の State は頻繁に変わるが、計算結果はあまり変わらない」場合です。件数のように毎回変わる値では効果がありません。この画面で件数に使っているのは、計算した値に <code>doneCount</code> という名前を付けて分けるためで、再コンポーズを減らす効果は無いことに注意してください。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">実験に使ったテスト（検証後にプロジェクトから外したもの）を見る</summary>
+            <div class="disclosure__body">
+              <p>次のテストは、実験のために一時的に置き、結果を確かめた後でプロジェクトから外しました。完成コードには含まれていません。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/DerivedStateExperimentTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import android.util.Log
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Button
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.toMutableStateList
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@Composable
+fun DirectCountLabel(todos: List&lt;Todo&gt;, counts: IntArray) {
+    SideEffect { counts[0]++ }
+    Text(&quot;直接 ${todos.count { it.done }}&quot;)
+}
+
+@Composable
+fun DerivedCountLabel(todos: List&lt;Todo&gt;, counts: IntArray) {
+    val doneCount by remember(todos) { derivedStateOf { todos.count { it.done } } }
+    SideEffect { counts[1]++ }
+    Text(&quot;派生 $doneCount&quot;)
+}
+
+@Composable
+fun DerivedAllDoneLabel(todos: List&lt;Todo&gt;, counts: IntArray) {
+    val allDone by remember(todos) { derivedStateOf { todos.all { it.done } } }
+    SideEffect { counts[2]++ }
+    Text(&quot;全部完了 $allDone&quot;)
+}
+
+@RunWith(AndroidJUnit4::class)
+class DerivedStateExperimentTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun derived_vs_direct() {
+        val counts = IntArray(3)
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                val todos = remember { demoTodoList.toMutableStateList() }
+                Column {
+                    DirectCountLabel(todos, counts)
+                    DerivedCountLabel(todos, counts)
+                    DerivedAllDoneLabel(todos, counts)
+                    for (i in 0..2) {
+                        Button(
+                            onClick = { todos[i] = todos[i].copy(done = !todos[i].done) },
+                            modifier = Modifier.testTag(&quot;t${i + 1}&quot;),
+                        ) { Text(&quot;t${i + 1}&quot;) }
+                    }
+                }
+            }
+        }
+        Log.d(&quot;Exp5&quot;, &quot;initial: direct=${counts[0]} derivedCount=${counts[1]} derivedAllDone=${counts[2]}&quot;)
+        // 初期 [完了, 未完了, 完了] から、t3 → t2 → t1 → t3 → t1 の順に切り替える
+        listOf(&quot;t3&quot;, &quot;t2&quot;, &quot;t1&quot;, &quot;t3&quot;, &quot;t1&quot;).forEach { tag -&gt;
+            composeTestRule.onNodeWithTag(tag).performClick()
+            composeTestRule.waitForIdle()
+            Log.d(&quot;Exp5&quot;, &quot;after $tag: direct=${counts[0]} derivedCount=${counts[1]} derivedAllDone=${counts[2]}&quot;)
+        }
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>derivedStateOf</code> を付けすぎない</p>
+              <p><code>derivedStateOf</code> には、計算結果を前の値と比べるための負担があります。上の実験のとおり、毎回変わる値に付けても再コンポーズは減りません。「スクロール位置がしきい値を超えたか」「全件完了か」のように、元の値より結果の変わる頻度がずっと低い場面に限って使います。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>アプリの件数表示が <code>3 件中 2 件完了</code> のまま変わらず、既存の UI テストが成功すれば OK です。件数と全完了フラグで、<code>derivedStateOf</code> の効果が違う理由を説明できるようにしておきます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">インタラクションの UI テスト</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、画面全体の操作をテストします。ステップ 2 で 1 件だけ書いた <code>TodoListPageTest</code> を、次の内容に置き換えます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListPageTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.isToggleable
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+// 画面（TodoListPage）全体の操作をテストする。状態は画面の中にあるので、操作の結果は画面の表示で確かめる
+@RunWith(AndroidJUnit4::class)
+class TodoListPageTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    private fun setPage() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListPage(initialTodos = demoTodoList)
+            }
+        }
+    }
+
+    @Test
+    fun togglingRow_updatesSummary() {
+        setPage()
+        composeTestRule.onNodeWithText(&quot;3 件中 2 件完了&quot;).assertIsDisplayed()
+
+        // 2 番目の行（未完了の &quot;build compose screen&quot;）のチェックボックスを押す
+        composeTestRule.onAllNodes(isToggleable())[1].performClick()
+
+        composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun addingTodo_appendsRowAndUpdatesSummary() {
+        setPage()
+
+        composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)
+        composeTestRule.onNodeWithText(&quot;追加&quot;).performClick()
+
+        // 行が 1 つ増え、件数の表示も変わる。未完了の行が増えるので完了数は 2 のまま
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(4)
+        composeTestRule.onNodeWithText(&quot;4 件中 2 件完了&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun addingTodo_clearsInputAndDisablesAddButton() {
+        setPage()
+
+        composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)
+        composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsEnabled()
+        composeTestRule.onNodeWithText(&quot;追加&quot;).performClick()
+
+        // 追加後は入力欄が空に戻り、空なので追加ボタンは再び無効になる
+        composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsNotEnabled()
+    }
+
+    @Test
+    fun addButton_staysDisabledForBlankInput() {
+        setPage()
+
+        composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;   &quot;)
+
+        // 空白だけでは追加できない（isNotBlank で判定している）
+        composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsNotEnabled()
+    }
+
+    @Test
+    fun newTodo_canBeCheckedAndCountIsUpdated() {
+        setPage()
+        composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)
+        composeTestRule.onNodeWithText(&quot;追加&quot;).performClick()
+
+        // 追加した行（4 番目のチェックボックス）は未完了で始まる
+        composeTestRule.onAllNodes(isToggleable())[3].assertIsOff()
+
+        composeTestRule.onAllNodes(isToggleable())[3].performClick()
+
+        // performClick の後は、テストが画面の再コンポーズ完了を待ってから検証する（waitForIdle の役割はこの後の説明）
+        composeTestRule.onAllNodes(isToggleable())[3].assertIsOn()
+        composeTestRule.onNodeWithText(&quot;4 件中 3 件完了&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun summaryTitle_isStillDisplayedAfterInteractions() {
+        setPage()
+        composeTestRule.onAllNodes(isToggleable())[1].performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithText(&quot;Todo&quot;).assertTextEquals(&quot;Todo&quot;)
+    }
+}</code></pre>
+</div>
+
+
+          <table>
+            <thead>
+            <tr><th>テスト</th><th>操作</th><th>確かめること</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>togglingRow_updatesSummary</code></td><td>2 番目のチェックボックスを押す</td><td><code>3 件中 2 件完了</code> → <code>3 件中 3 件完了</code></td></tr>
+            <tr><td><code>addingTodo_appendsRowAndUpdatesSummary</code></td><td><code>performTextInput(&quot;buy milk&quot;)</code> → 追加</td><td><code>todo_row</code> が 4 行（<code>assertCountEquals(4)</code>）、<code>4 件中 2 件完了</code></td></tr>
+            <tr><td><code>addingTodo_clearsInputAndDisablesAddButton</code></td><td>入力 → 追加</td><td>入力中は <code>assertIsEnabled()</code>、追加の後は <code>assertIsNotEnabled()</code></td></tr>
+            <tr><td><code>addButton_staysDisabledForBlankInput</code></td><td>空白だけを入力</td><td><code>assertIsNotEnabled()</code>（<code>isNotBlank</code> の判定）</td></tr>
+            <tr><td><code>newTodo_canBeCheckedAndCountIsUpdated</code></td><td>追加した行のチェックボックスを押す</td><td><code>assertIsOff()</code> → <code>assertIsOn()</code>、<code>4 件中 3 件完了</code></td></tr>
+            <tr><td><code>summaryTitle_isStillDisplayedAfterInteractions</code></td><td>押した後に <code>waitForIdle()</code></td><td>見出しの <code>Todo</code> が残っている</td></tr>
+            </tbody>
+          </table>
+
+          <p>使っている API の役割は次のとおりです。</p>
+
+          <table>
+            <thead>
+            <tr><th>API</th><th>役割</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>performClick()</code> / <code>performTextInput(文字列)</code></td><td>クリックと文字の入力を送ります。文字の入力は、入力欄のノード（<code>testTag(&quot;todo_input&quot;)</code> を付けた <code>OutlinedTextField</code>）に対して行います</td></tr>
+            <tr><td><code>assertIsOn()</code> / <code>assertIsOff()</code></td><td>チェックボックスのような切り替えられるノードの状態を確かめます。ノードは <code>isToggleable()</code> で探します</td></tr>
+            <tr><td><code>assertIsEnabled()</code> / <code>assertIsNotEnabled()</code></td><td>ボタンが押せる状態かを確かめます</td></tr>
+            <tr><td><code>assertCountEquals(件数)</code></td><td><code>onAllNodesWithTag</code> などで見つけたノードの数を確かめます</td></tr>
+            <tr><td><code>waitForIdle()</code></td><td>再コンポーズと描画が落ち着くまで待ちます</td></tr>
+            </tbody>
+          </table>
+
+          <p><code>onNode...</code> で見つけたノードの検証（<code>assert...</code>）は、Compose が落ち着くのを自動で待ってから行われます。そのため、<code>performClick()</code> の直後に <code>assertIsOn()</code> を書いても、押した結果を確かめられます。一方、ステップ 5 の実験のように <code>SideEffect</code> で数えた変数など、テストのコードから直接読む値は自動では待ってくれません。待たずに読むと、前のクリックの再コンポーズがまだ反映されておらず、数が 1 回ずれました。そうした値を読む前には <code>waitForIdle()</code> を呼びます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span></pre>
+</div>
+
+          <p><code>TodoListPageTest</code> の 6 件と <code>TodoListPageRestorationTest</code> の 2 件が、すべて成功します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>TodoListPageTest</code> の 6 件が成功すれば OK です。追加ボタンが空欄で無効になる前提で、テストが書かれていることも確かめてください。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>ビルド・lint・ユニットテスト・UI テストをまとめて実行します。エミュレータは起動したままにしておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest</span><span class="terminal__line">Running tests on devices: Handson_Android36(AVD) - 16</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 52s</span><span class="terminal__line">86 actionable tasks: 15 executed, 71 up-to-date</span></pre>
+</div>
+
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>ユニットテスト（<code>test</code>）</td><td>42 件すべて成功（この項目では増減なし）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>27 件すべて成功（<code>ExampleInstrumentedTest</code> 1 件を除く Compose UI テストは 26 件。03 の 11 件から 15 件増えた）</td></tr>
+            <tr><td>lint</td><td>成功。警告は残りますが、03 から引き継いだアイコン関連など（<code>ObsoleteSdkInt</code>・<code>MonochromeLauncherIcon</code> など）で、この項目の変更とは関係ありません</td></tr>
+            </tbody>
+          </table>
+
+
+          <table>
+            <thead>
+            <tr><th>テストクラス</th><th>件数</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>ExampleInstrumentedTest</code></td><td>1</td></tr>
+            <tr><td><code>MainActivityTest</code></td><td>1</td></tr>
+            <tr><td><code>CounterDisplayTest</code></td><td>2</td></tr>
+            <tr><td><code>GreetingTest</code></td><td>2</td></tr>
+            <tr><td><code>TodoRowTest</code></td><td>3</td></tr>
+            <tr><td><code>CounterScreenRestorationTest</code></td><td>1</td></tr>
+            <tr><td><code>CounterScreenTest</code></td><td>2</td></tr>
+            <tr><td><code>TodoListPageRestorationTest</code></td><td>2</td></tr>
+            <tr><td><code>TodoListPageTest</code></td><td>6</td></tr>
+            <tr><td><code>TodoListScreenTest</code></td><td>7</td></tr>
+            </tbody>
+          </table>
+
+          <p>02 のステップ 6 で書いた <code>CoroutinesTest.kt</code> について、03 と同じく <code>ExperimentalCoroutinesApi</code> の opt-in を求める警告が出ます。この項目の変更とは関係ありません。</p>
+          <p>エミュレータでも操作します。UI テストの後はアプリが外れているので、インストールし直して起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span></pre>
+</div>
+
+          <p>入力欄をタップしてフォーカスを移してから、<code>adb shell input text</code> で文字を入力し、「追加」をタップします（空白は <code>%s</code> で表します）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell input text &quot;buy%smilk&quot;</span></pre>
+</div>
+
+          <p>追加した後の画面の文字を <code>uiautomator</code> で取り出します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb exec-out uiautomator dump /dev/tty | grep -oE &#x27;text=&quot;[^&quot;]+&quot;&#x27;</span><span class="terminal__line">text=&quot;4 件中 2 件完了&quot;</span><span class="terminal__line">text=&quot;Learn Kotlin Basics&quot;</span><span class="terminal__line">text=&quot;完了&quot;</span><span class="terminal__line">text=&quot;Build Compose Screen&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Write Unit Tests&quot;</span><span class="terminal__line">text=&quot;完了&quot;</span><span class="terminal__line">text=&quot;Buy Milk&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;新しい Todo&quot;</span><span class="terminal__line">text=&quot;追加&quot;</span><span class="terminal__line">text=&quot;フィルタ&quot;</span><span class="terminal__line">text=&quot;閉じる&quot;</span><span class="terminal__line">text=&quot;Todo&quot;</span><span class="terminal__line">text=&quot;2&quot;</span></pre>
+</div>
+
+
+          <table>
+            <thead>
+            <tr><th>操作</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>起動直後</td><td><code>3 件中 2 件完了</code>（チェック: 完了 / 未完了 / 完了）</td></tr>
+            <tr><td><code>buy milk</code> を入力して追加</td><td><code>4 件中 2 件完了</code>。4 行目に <code>Buy Milk</code>（未完了）が増え、入力欄は空に戻る</td></tr>
+            <tr><td>4 行目のチェックボックスをタップ</td><td><code>4 件中 3 件完了</code>（4 行目が完了）</td></tr>
+            </tbody>
+          </table>
+
+          <p>入力した <code>buy milk</code> は、03 の <code>TodoRow</code> が使う <code>toTitleCase()</code> で <code>Buy Milk</code> と表示されます。TopAppBar のバッジは未完了の件数（<code>2</code>）に変わります。入力欄には、空のときラベルの「新しい Todo」が表示されます。追加ボタンが空欄で押せないことは、エミュレータではなく UI テスト（<code>addButton_isDisabledWhenInputIsEmpty</code> など）で確かめています。</p>
+          <p>確認が終わったら、回転の設定を戻し、エミュレータと Gradle デーモンを止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings put system user_rotation 0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>./gradlew assembleDebug lint test connectedDebugAndroidTest</code> が <code>BUILD SUCCESSFUL</code> で終わり、エミュレータで Todo の追加とチェックの切り替えができれば OK です。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid04</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>Counter</code> の <code>remember</code> を外すと <code>counter_incrementsOnEachClick</code> が失敗することを確かめ、元に戻した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>CounterDisplay</code>（stateless）と <code>CounterScreen</code>（stateful）に分け、それぞれのテストを通した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">「状態は下へ、イベントは上へ」を、<code>TodoListPage</code> → <code>TodoListScreen</code> → <code>TodoRow</code> の流れで説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>mutableStateOf&lt;List&gt;</code> の中身だけを書き換えると画面が更新されない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">エミュレータを回転させ、<code>remember</code> と <code>rememberSaveable</code> の違いを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>Todo</code> に <code>@Parcelize</code> を付け、<code>rememberSaveable</code> で一覧を保存した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>TextFieldState</code> の入力欄を作り、空欄で追加ボタンが無効になることをテストで確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>derivedStateOf</code> が件数では再コンポーズを減らさず、全完了フラグでは減らす理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-10" class="checklist__input">
+          <label for="check-10" class="checklist__label"><code>./gradlew assembleDebug lint test connectedDebugAndroidTest</code> で UI テスト 27 件を通した</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>by</code> で State を使うには <code>getValue</code> / <code>setValue</code> の import が必要</p>
+              <p><code>var count by remember { mutableStateOf(0) }</code> と書くときは、<code>androidx.compose.runtime.getValue</code> と <code>setValue</code> の import が必要です。無いと、委譲プロパティの <code>getValue</code> / <code>setValue</code> が見つからずコンパイルエラーになります。<code>mutableStateOf</code> と <code>remember</code> の import と合わせて、4 つを一緒に入れます。読み取りだけの <code>val ... by</code> なら <code>getValue</code> だけで足ります（ステップ 5 の <code>doneCount</code>）。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>remember</code> と <code>rememberSaveable</code> の使い分け</p>
+              <p><code>remember</code> は再コンポーズのあいだだけ値を覚えておき、画面回転などで Activity が作り直されると消えます。<code>rememberSaveable</code> は構成変更をまたいで値を残します。どちらを使うかは「回転の後もユーザーに残っていてほしい値か」で決めます。<code>rememberSaveable</code> で保存する値は、<code>Bundle</code> へ入れられる型（<code>Parcelable</code>）にするか、<code>Saver</code> で保存の方法を決めます（ステップ 3）。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>List</code> を <code>mutableStateOf</code> に入れて中身を書き換えない</p>
+              <p><code>mutableStateOf&lt;List&lt;Todo&gt;&gt;</code> に入れたリストの中身を書き換えても、State の参照が同じなので画面が更新されません（ステップ 2 の実験 A2）。リスト全体を新しいリストに置き換えるか、<code>mutableStateListOf</code> / <code>toMutableStateList()</code> で作った <code>SnapshotStateList</code> の要素を置き換えます。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>derivedStateOf</code> の使いすぎ</p>
+              <p><code>derivedStateOf</code> が再コンポーズを減らすのは、計算結果が元の State ほど頻繁に変わらないときだけです。完了件数のように毎回変わる値に使っても、再コンポーズの回数は変わりません（ステップ 5 の実験）。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">TextField の API は 2 系統ある</p>
+              <p><code>OutlinedTextField</code> には、<code>value</code> / <code>onValueChange</code> を渡す方式と、<code>state</code>（<code>TextFieldState</code>）を渡す方式があります。調べた記事やサンプルがどちらの方式かを確かめてから使います。<code>TextFieldState</code> の操作は <code>edit { ... }</code> の中で行います。<code>clearText()</code> は拡張関数なので、<code>androidx.compose.foundation.text.input.clearText</code> の import が無いと <code>Unresolved reference</code> のコンパイルエラーになります。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">空欄では追加ボタンが押せない</p>
+              <p>ステップ 4 から、追加ボタンは入力が空のとき無効です。03 の <code>addButton_callsOnAddClick</code> のように、いきなり「追加」を押すテストは失敗します。テストでは、先に <code>performTextInput</code> で文字を入れてから押します。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>adb shell input text</code> は入力欄にフォーカスを移してから</p>
+              <p>入力欄にフォーカスが無い状態で <code>adb shell input text &quot;buy%smilk&quot;</code> を送ると、空白（<code>%s</code>）がフォーカス中のチェックボックスに届き、完了状態が切り替わってしまいました。文字を送る前に、入力欄をタップします。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">回転の確認は自動回転を止めてから</p>
+              <p><code>adb shell settings put system user_rotation 1</code> で回転させるときは、先に <code>accelerometer_rotation 0</code> で自動回転を止めます。自動回転を止めないと、<code>user_rotation</code> の指定より自動回転の設定を優先する場合があります。確認が終わったら <code>user_rotation 0</code> で縦向きに戻します。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">UI テストの後はアプリをインストールし直す</p>
+              <p><code>connectedDebugAndroidTest</code> の後は、エミュレータからアプリが外れています。エミュレータで操作を確かめるときは、<code>./gradlew installDebug</code> でインストールし直してから起動します。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">構成変更と ViewModel（06）</p>
+              <p>この項目では、画面の状態を <code>rememberSaveable</code> で回転の後も残しました。ただし保存先の <code>Bundle</code> には大きさの上限があるため、<code>rememberSaveable</code> に入れる値は小さく保ちます。大きなデータや、通信・データベースから読み込む状態は、06 で扱う <code>ViewModel</code> に持たせます。状態を持つ場所が <code>TodoListPage</code> から <code>ViewModel</code> に移っても、<code>TodoListScreen</code> が値とイベントだけを受け取る形は変わりません。</p>
+            </div>
+          </div>
+
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>remember</code> と <code>mutableStateOf</code> でカウンターに状態を持たせ、値が変わると再コンポーズが起きることを確かめました。<code>remember</code> が無いと、再コンポーズのたびに状態が作り直されることも実験で見ました。
+        State hoisting で、状態を持つ <code>CounterScreen</code>・<code>TodoListPage</code> と、値とイベントだけを受け取る <code>CounterDisplay</code>・<code>TodoListScreen</code>・<code>TodoRow</code> に分けました。
+        <code>rememberSaveable</code> と <code>@Parcelize</code> で画面回転の後も状態を残し、<code>TextFieldState</code> の入力欄で Todo を追加できるようにしました。
+        <code>derivedStateOf</code> は、計算結果があまり変わらない値にだけ効くことを実測で確かめ、最後に操作の結果を UI テストで検証しました。
+        次の項目では、Material3 のコンポーネントと <code>LazyColumn</code> でリスト UI を作ります。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>android/04-state</code> の <code>android/04-state/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../03-compose-basics/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">03: Compose 入門</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">05: Material3 と LazyColumn</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
