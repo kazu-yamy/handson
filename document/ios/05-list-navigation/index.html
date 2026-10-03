@@ -81,7 +81,7 @@
         <div class="callout__body">
           <p class="callout__title">使用バージョン</p>
           <p>
-            04 と同じく、macOS 26.6.2 / Xcode 27.0 / Swift 6.4 で動作を確認しています。シミュレータは iPhone 17（iOS 27.0）を使います。
+            macOS 26.6.2 / Xcode 27.0 / Swift 6.4 は 04 と同じです。シミュレータは iOS 27.0 のランタイムを追加した iPhone 17 を使います（04 までは iOS 26.5）。
             バージョンは執筆時点（2026年10月）のものです。
           </p>
         </div>
@@ -120,7 +120,7 @@
 <span class="terminal__dot"></span>
 <span class="terminal__title">Terminal</span>
 </div>
-<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 22 tests in 7 suites passed after 0.020 seconds.</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 22 tests in 7 suites passed after 0.020 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
 </div>
 
           <p>
@@ -270,7 +270,7 @@ struct ContentView: View {
 <span class="terminal__dot"></span>
 <span class="terminal__title">Terminal</span>
 </div>
-<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 22 tests in 7 suites passed after 0.023 seconds.</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl boot 'iPhone 17'</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 22 tests in 7 suites passed after 0.023 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl boot 'iPhone 17'</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
 </div>
 
           <p>
@@ -285,7 +285,7 @@ struct ContentView: View {
               その下に見出し「Todo」のブロックがあり、「牛乳を買う（高）」「メールを返す（低・完了で取り消し線）」「SwiftUI を勉強する（中）」の 3 行が表示されます。
               最後が見出し「追加」のブロックで、プレースホルダー「新しいタスク」の入力欄と、薄い灰色（無効）の「追加」ボタンが表示されます。
             </p>
-            <p>04 と同じく、ToDo の行をタップすると完了・未完了が切り替わります。<!-- 要確認: List に置き換えた時点での行タップの動作はログで未確認 --></p>
+            <p>04 と同じく、ToDo の行をタップすると完了・未完了が切り替わります。</p>
           </div>
         </div>
       </section>
@@ -324,7 +324,6 @@ struct ContentView: View {
               <p class="callout__title">ボタンが「Edit」と英語で表示される</p>
               <p>
                 <code>EditButton</code> の文字はシステムが用意したものです。このプロジェクトには日本語のローカライズ設定（Localizations）が無く、シミュレータの言語も英語のため、「Edit」「Done」と英語で表示されます。ステップ 5 のスワイプで出る「Delete」も同じ理由で英語です。
-                <!-- 要確認: 日本語ローカライズを追加した環境での表示（「編集」等）は未確認 -->
               </p>
             </div>
           </div>
@@ -343,7 +342,6 @@ struct ContentView: View {
             <p class="step__check-title">✅ 確認ポイント</p>
             <p>
               一覧の上の左側に大きなタイトル「ToDo」が、右上に「Edit」ボタンが表示されます。一覧の中身はステップ 2 と同じです。
-              一覧をスクロールすると、大きなタイトルはナビゲーションバーの中の小さな表示に変わります。
             </p>
           </div>
         </div>
@@ -400,7 +398,7 @@ struct TodoDetailView: View {
             <li><code>LabeledContent("タイトル", value: item.title)</code>: 左にラベル、右に値を並べた行を作ります。</li>
             <li><code>if case .done(let date) = item.status</code>: <code>.done</code> の関連値（完了日時）を取り出します。未完了のときは「完了日時」の行ごと表示しません。</li>
             <li><code>.navigationBarTitleDisplayMode(.inline)</code>: 詳細画面のタイトルを、大きな見出しではなくナビゲーションバーの中央に小さく表示します。</li>
-            <li><code>#Preview</code>: <code>TodoDetailView</code> はナビゲーションバーにタイトルを出すので、プレビューでは <code>NavigationStack</code> で包んでいます。<!-- 要確認: Xcode の Canvas でのプレビュー表示は未確認 --></li>
+            <li><code>#Preview</code>: <code>TodoDetailView</code> はナビゲーションバーにタイトルを出すので、プレビューでは <code>NavigationStack</code> で包んでいます。</li>
           </ul>
 
           <p>
@@ -695,7 +693,7 @@ struct TodoRow: View {
 <span class="terminal__dot"></span>
 <span class="terminal__title">Terminal</span>
 </div>
-<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 24 tests in 7 suites passed after 0.028 seconds.</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 24 tests in 7 suites passed after 0.028 seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
 </div>
 
           <div class="callout callout--tip">
@@ -772,9 +770,8 @@ struct TodoRow: View {
 <span class="terminal__dot"></span>
 <span class="terminal__title">Terminal</span>
 </div>
-<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl spawn booted log show --last 1m --predicate 'eventMessage CONTAINS "navigationDestination" OR eventMessage CONTAINS "NavigationLink"' --style compact</span><span class="terminal__line">…</span><span class="terminal__line">2026-10-03 16:49:49.915 F  HandsonApp[64565:2382de] [com.apple.SwiftUI:Invalid Configuration] A NavigationLink is presenting a value of type “TodoItem” but there is no matching navigationDestination declaration visible from the location of the link. The link cannot be activated.</span><span class="terminal__line"></span><span class="terminal__line">Note: Links search for destinations in any surrounding NavigationStack, then within the same column of a NavigationSplitView.</span></pre>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl spawn booted log show --last 1m --predicate 'eventMessage CONTAINS "navigationDestination" OR eventMessage CONTAINS "NavigationLink"' --style compact</span><span class="terminal__line">…</span><span class="terminal__line">2026-10-03 16:49:49.915 F  HandsonApp[64565:2382de] [com.apple.SwiftUI:Invalid Configuration] A NavigationLink is presenting a value of type “TodoItem” but there is no matching navigationDestination declaration visible from the location of the link. The link cannot be activated.</span><span class="terminal__line"></span><span class="terminal__line">Note: Links search for destinations in any surrounding NavigationStack, then within the same column of a NavigationSplitView.</span><span class="terminal__line">…</span></pre>
 </div>
-              <!-- 要確認: 作成時は log show の start オプションにテスト開始時刻を指定して取得した。last 1m を指定したときの出力は未確認 -->
               <p>
                 <code>A NavigationLink is presenting a value of type “TodoItem” but there is no matching navigationDestination declaration visible from the location of the link. The link cannot be activated.</code>（<code>NavigationLink</code> が <code>TodoItem</code> 型の値を表示しようとしているが、リンクの位置から見える <code>navigationDestination</code> の宣言が無い。リンクを有効にできない）というメッセージです。
                 <code>com.apple.SwiftUI</code> の <code>Invalid Configuration</code>（不正な構成）として、Fault（<code>F</code>）レベルで記録されます。アプリは落ちないので、ログを見ないと原因に気付きにくい誤りです。確認したら <code>.navigationDestination</code> を戻してください。
@@ -889,7 +886,7 @@ struct TodoRow: View {
 <span class="terminal__dot"></span>
 <span class="terminal__title">Terminal</span>
 </div>
-<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 24 tests in 7 suites passed after … seconds.</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 24 tests in 7 suites passed after … seconds.</span><span class="terminal__line">Test session results, code coverage, and logs:</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
 </div>
 
           <p>Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> で全てのテストを実行し、<kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示します。</p>
@@ -960,7 +957,7 @@ struct TodoRow: View {
         <span class="callout__icon" aria-hidden="true">💡</span>
         <div class="callout__body">
           <p class="callout__title">「Edit」を押しても削除ボタンやハンドルが出ない</p>
-          <p><code>.onDelete</code> と <code>.onMove</code> が <code>ForEach</code> に付いているかを確認してください。どちらも付いていないと、「Edit」は「Done」に変わるだけで、行には何も表示されません。この状態では、行を左にスワイプしても削除ボタンは出ず、行のタップとして扱われて詳細画面に進みます。</p>
+          <p><code>.onDelete</code> と <code>.onMove</code> が <code>ForEach</code> に付いているかを確認してください。どちらも付いていないと、「Edit」は「Done」に変わるだけで、行には何も表示されません。この状態では、行を左にスワイプしても削除ボタンは出ません。</p>
         </div>
       </div>
 
