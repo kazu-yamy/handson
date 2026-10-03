@@ -1,0 +1,56 @@
+.progressTask {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 32px;
+}
+
+.button {
+  padding: 8px 20px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid var(--foreground);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.error {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: #d94545;
+}
+
+.barTrack {
+  position: relative;
+  width: 240px;
+  height: 20px;
+  margin-top: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--foreground);
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  background: var(--foreground);
+  opacity: 0.3;
+  transition: width 0.2s ease;
+}
+
+.barLabel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}

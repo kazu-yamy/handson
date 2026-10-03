@@ -1,0 +1,59 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "handson-tauri-03",
+  "version": "0.3.0",
+  "identifier": "com.handson.tauri03",
+  "build": {
+    "frontendDist": "../out",
+    "devUrl": "http://localhost:3000",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "handson-tauri-03",
+        "width": 800,
+        "height": 600,
+        "minWidth": 480,
+        "minHeight": 360,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "theme": null,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      },
+      {
+        "label": "about",
+        "url": "/about/",
+        "title": "About",
+        "width": 360,
+        "height": 240,
+        "resizable": false,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "copyright": "© 2026 Handson Materials",
+    "shortDescription": "Tauri ハンズオン 03: Rust コマンドの呼び出し",
+    "longDescription": "Tauri トラックの 03 番目の教材で作成するサンプルアプリです。invoke によるコマンド呼び出し、状態管理、エラーハンドリング、非同期処理とイベントを学びます。",
+    "category": "DeveloperTool",
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  }
+}

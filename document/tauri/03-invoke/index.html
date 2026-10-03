@@ -1,0 +1,2386 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03: Rust コマンドの呼び出し | Tauri ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Tauri</li>
+          <li aria-current="page">03</li>
+        </ol>
+        <h1 class="lesson-title">Rust コマンドの呼び出し</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: Tauri 02 を終えた人。Rust の基本文法（関数、構造体、<code>Result</code>）を読める程度の知識がある人</li>
+          <li class="lesson-meta__item">📋 前提: 02 と同じ開発環境（macOS）</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../02-window-build/index.html">02: ウィンドウ設定とビルド</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>#[tauri::command]</code> でコマンドを定義し、フロントエンドから <code>invoke</code> で呼び出す</li>
+          <li>引数名の camelCase 変換と、serde の <code>rename_all</code> で構造体を受け渡すときの決まりを知る</li>
+          <li><code>manage()</code> と <code>State</code>、<code>Mutex</code> でコマンド間の状態を保持する</li>
+          <li><code>Result</code> と <code>thiserror</code> でエラーをフロントエンドに返す</li>
+          <li><code>async</code> コマンドと <code>emit</code> / <code>listen</code> で処理の進捗を伝える</li>
+          <li>Rust 側のコマンドを IPC レベルのテストとユニットテストで確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        02 までは、Rust のコードには手を入れずに、設定ファイルとフロントエンドだけでアプリを作ってきました。
+        この項目から Rust のコードを書きます。フロントエンド（WebView 上の Next.js）から Rust の関数を呼び出す仕組みを使います。あいさつ文を返すコマンドから始めて、状態を持つ Todo リストと、進捗を知らせる重い処理まで作ります。
+      </p>
+
+      <h3 id="ipc">IPC の仕組み</h3>
+      <p>フロントエンドと Rust はプロセス間通信（IPC）でやり取りします。<code>invoke</code> を呼んでから結果が返るまでの流れは次のとおりです。</p>
+      <table>
+        <thead>
+        <tr><th>順番</th><th>場所</th><th>起きること</th></tr>
+        </thead>
+        <tbody>
+        <tr><td>1</td><td>フロントエンド</td><td><code>invoke("greet", { userName: "World" })</code> を呼ぶ。引数のオブジェクトは JSON になって Rust へ送られる</td></tr>
+        <tr><td>2</td><td>Rust（<code>generate_handler!</code>）</td><td>コマンド名 <code>greet</code> で、登録済みのコマンドから呼び出す関数を探す</td></tr>
+        <tr><td>3</td><td>Rust（serde）</td><td>JSON の <code>userName</code> を、関数の引数 <code>user_name</code> に変換する（Deserialize）</td></tr>
+        <tr><td>4</td><td>Rust（<code>#[tauri::command]</code>）</td><td>関数を実行する</td></tr>
+        <tr><td>5</td><td>Rust（serde）</td><td>戻り値を JSON にする（Serialize）。<code>Result</code> の場合は <code>Err</code> の値も JSON にする</td></tr>
+        <tr><td>6</td><td>フロントエンド</td><td><code>Ok</code> なら <code>invoke</code> の Promise が resolve し、<code>Err</code> なら reject する</td></tr>
+        </tbody>
+      </table>
+      <p>逆向きに、Rust からフロントエンドへ通知したいときは「イベント」を使います。Rust で <code>emit</code> し、フロントエンドで <code>listen</code> して受け取ります（ステップ 5）。</p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            使用するツールとライブラリのバージョンは 02 と同じです。Tauri 関連は Tauri CLI 2.11.5 / <code>tauri</code> クレート 2.11.6 / <code>@tauri-apps/api</code> 2.11.1 です。そのほかは Next.js 16.3.6 / rustc 1.98.1 / Node.js 24.21.0 などです。
+            このレッスンでは、Rust のクレートを次のように追加します。
+          </p>
+          <ul>
+            <li><code>thiserror</code> 2（執筆時に解決されたのは 2.0.21）: エラー型の定義（ステップ 4）</li>
+            <li><code>tokio</code> 1 の <code>time</code> フィーチャー（同 1.53.1）: 非同期の待機（ステップ 5）</li>
+            <li><code>tauri</code> の <code>test</code> フィーチャー（<code>[dev-dependencies]</code>）: IPC レベルのテスト（ステップ 1）</li>
+          </ul>
+          <p>バージョンは執筆時点（2026年10月）のものです。</p>
+        </div>
+      </div>
+
+      <h2 id="preparation">準備: 02 のプロジェクトを引き継ぐ</h2>
+      <p>
+        02 で作ったプロジェクトをそのまま出発点にします。本文ではプロジェクトのディレクトリ名を <code>03-invoke</code> として示します。
+        最初に、プロジェクト名に依存する値とバージョンを 03 用に直しておきます。
+      </p>
+      <table>
+        <thead>
+        <tr><th>ファイル</th><th>キー</th><th>02</th><th>03</th></tr>
+        </thead>
+        <tbody>
+        <tr><td><code>package.json</code></td><td><code>name</code> / <code>version</code></td><td><code>02-window-build</code> / <code>0.2.0</code></td><td><code>03-invoke</code> / <code>0.3.0</code></td></tr>
+        <tr><td><code>package-lock.json</code></td><td><code>name</code> / <code>version</code></td><td><code>02-window-build</code> / <code>0.2.0</code></td><td><code>03-invoke</code> / <code>0.3.0</code>（<code>npm install</code> で更新）</td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>productName</code> / <code>version</code> / <code>identifier</code></td><td><code>handson-tauri-02</code> / <code>0.2.0</code> / <code>com.handson.tauri02</code></td><td><code>handson-tauri-03</code> / <code>0.3.0</code> / <code>com.handson.tauri03</code></td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>app.windows[0].title</code></td><td><code>handson-tauri-02</code></td><td><code>handson-tauri-03</code></td></tr>
+        <tr><td><code>src-tauri/tauri.conf.json</code></td><td><code>bundle.shortDescription</code> / <code>longDescription</code></td><td>02 の説明</td><td>03 の説明</td></tr>
+        <tr><td><code>src-tauri/Cargo.toml</code></td><td><code>[package]</code> の <code>name</code> / <code>version</code></td><td><code>handson-tauri-02</code> / <code>0.1.0</code></td><td><code>handson-tauri-03</code> / <code>0.3.0</code></td></tr>
+        <tr><td><code>src-tauri/Cargo.toml</code></td><td><code>[lib]</code> の <code>name</code></td><td><code>handson_tauri_02_lib</code></td><td><code>handson_tauri_03_lib</code></td></tr>
+        <tr><td><code>src-tauri/src/main.rs</code></td><td>呼び出すクレート</td><td><code>handson_tauri_02_lib::run()</code></td><td><code>handson_tauri_03_lib::run()</code></td></tr>
+        <tr><td><code>src/app/layout.tsx</code></td><td><code>metadata.title</code> / <code>metadata.description</code></td><td><code>handson-tauri-02</code> / 「Tauri トラック 02: ウィンドウ設定とビルド」</td><td><code>handson-tauri-03</code> / 「Tauri トラック 03: Rust コマンドの呼び出し」</td></tr>
+        <tr><td><code>src/app/_components/TitleBar/TitleBar.tsx</code></td><td>表示する文字列</td><td><code>handson-tauri-02</code></td><td><code>handson-tauri-03</code></td></tr>
+        </tbody>
+      </table>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">package.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line diff-line--remove">-   "name": "02-window-build",</span><span class="diff-line diff-line--remove">-   "version": "0.2.0",</span><span class="diff-line diff-line--add">+   "name": "03-invoke",</span><span class="diff-line diff-line--add">+   "version": "0.3.0",</span><span class="diff-line">    "private": true,</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p><code>package-lock.json</code> にも <code>name</code> / <code>version</code> が記録されているので、<code>npm install</code> を実行して更新しておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm install</span><span class="terminal__line">up to date, audited 357 packages</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/tauri.conf.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  {</span><span class="diff-line">    "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",</span><span class="diff-line diff-line--remove">-   "productName": "handson-tauri-02",</span><span class="diff-line diff-line--remove">-   "version": "0.2.0",</span><span class="diff-line diff-line--remove">-   "identifier": "com.handson.tauri02",</span><span class="diff-line diff-line--add">+   "productName": "handson-tauri-03",</span><span class="diff-line diff-line--add">+   "version": "0.3.0",</span><span class="diff-line diff-line--add">+   "identifier": "com.handson.tauri03",</span><span class="diff-line">    "build": {</span><span class="diff-line">  ...</span><span class="diff-line">      "windows": [</span><span class="diff-line">        {</span><span class="diff-line diff-line--remove">-         "title": "handson-tauri-02",</span><span class="diff-line diff-line--add">+         "title": "handson-tauri-03",</span><span class="diff-line">          "width": 800,</span><span class="diff-line">  ...</span><span class="diff-line">      "copyright": "© 2026 Handson Materials",</span><span class="diff-line diff-line--remove">-     "shortDescription": "Tauri ハンズオン 02: ウィンドウ設定とビルド",</span><span class="diff-line diff-line--remove">-     "longDescription": "Tauri トラックの 02 番目の教材で作成するサンプルアプリです。ウィンドウ設定・複数ウィンドウ・アイコン・リリースビルドを学びます。",</span><span class="diff-line diff-line--add">+     "shortDescription": "Tauri ハンズオン 03: Rust コマンドの呼び出し",</span><span class="diff-line diff-line--add">+     "longDescription": "Tauri トラックの 03 番目の教材で作成するサンプルアプリです。invoke によるコマンド呼び出し、状態管理、エラーハンドリング、非同期処理とイベントを学びます。",</span><span class="diff-line">      "category": "DeveloperTool",</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "handson-tauri-02"</span><span class="diff-line diff-line--remove">- version = "0.1.0"</span><span class="diff-line diff-line--add">+ name = "handson-tauri-03"</span><span class="diff-line diff-line--add">+ version = "0.3.0"</span><span class="diff-line">  description = "A Tauri App"</span><span class="diff-line">  ...</span><span class="diff-line">  [lib]</span><span class="diff-line diff-line--remove">- name = "handson_tauri_02_lib"</span><span class="diff-line diff-line--add">+ name = "handson_tauri_03_lib"</span><span class="diff-line">  crate-type = ["staticlib", "cdylib", "rlib"]</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/main.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  fn main() {</span><span class="diff-line diff-line--remove">-     handson_tauri_02_lib::run();</span><span class="diff-line diff-line--add">+     handson_tauri_03_lib::run();</span><span class="diff-line">  }</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/layout.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  export const metadata: Metadata = {</span><span class="diff-line diff-line--remove">-   title: "handson-tauri-02",</span><span class="diff-line diff-line--remove">-   description: "Tauri トラック 02: ウィンドウ設定とビルド",</span><span class="diff-line diff-line--add">+   title: "handson-tauri-03",</span><span class="diff-line diff-line--add">+   description: "Tauri トラック 03: Rust コマンドの呼び出し",</span><span class="diff-line">  };</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/_components/TitleBar/TitleBar.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">      &lt;header className={styles.titleBar} data-tauri-drag-region&gt;</span><span class="diff-line">        &lt;span className={styles.label} data-tauri-drag-region&gt;</span><span class="diff-line diff-line--remove">-         handson-tauri-02</span><span class="diff-line diff-line--add">+         handson-tauri-03</span><span class="diff-line">        &lt;/span&gt;</span><span class="diff-line">      &lt;/header&gt;</span></pre>
+</div>
+
+      <p>Rust 側が壊れていないことを <code>cargo check</code> で確かめておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo check</span><span class="terminal__line">（中略）</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 40.13s</span></pre>
+</div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ディレクトリ名を変えた直後に <code>cargo check</code> が失敗する</p>
+              <p>プロジェクトのディレクトリを <code>mv</code> で改名した場合、<code>src-tauri/target</code> と <code>src-tauri/gen</code> に古い絶対パスが残っていて、次のようなエラーで失敗します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">failed to read plugin permissions: failed to read file</span><span class="terminal__line">'/path/to/02-window-build/src-tauri/target/debug/build/tauri-ff8d8ed9d810ebfd/out/permissions/app/autogenerated/commands/app_hide.toml':</span><span class="terminal__line">No such file or directory (os error 2)</span></pre>
+</div>
+<p>どちらもビルド時に自動生成されるディレクトリなので、<code>src-tauri</code> で <code>rm -rf target gen</code> を実行してから <code>cargo check</code> をやり直します。キャッシュを捨てるため、次のビルドは時間がかかります。</p>
+            </div>
+          </div>
+
+
+      <h2 id="step-by-step">手順</h2>
+      <p>このレッスンでは、Rust のコマンドの動作を <code>cargo test</code> で確かめながら進めます。<code>cargo</code> のコマンドは <code>src-tauri</code> で、<code>npm</code> のコマンドはプロジェクトのルートで実行します。</p>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">最初のコマンドを作る</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Rust 側の関数に <code>#[tauri::command]</code> 属性を付けると、フロントエンドから呼び出せる「コマンド」になります。名前を受け取ってあいさつ文を返す <code>greet</code> コマンドを作り、<code>generate_handler!</code> で登録します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+ #[tauri::command]</span><span class="diff-line diff-line--add">+ fn greet(user_name: &amp;str) -&gt; String {</span><span class="diff-line diff-line--add">+     format!("こんにちは、{user_name} さん！ Rust から呼び出されました。")</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  #[cfg_attr(mobile, tauri::mobile_entry_point)]</span><span class="diff-line">  pub fn run() {</span><span class="diff-line">      tauri::Builder::default()</span><span class="diff-line">  ...</span><span class="diff-line">              Ok(())</span><span class="diff-line">          })</span><span class="diff-line diff-line--add">+         .invoke_handler(tauri::generate_handler![greet])</span><span class="diff-line">          .run(tauri::generate_context!())</span><span class="diff-line">          .expect("error while running tauri application");</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>フロントエンドからは <code>@tauri-apps/api/core</code> の <code>invoke</code> で呼び出します。第 1 引数がコマンド名、第 2 引数が引数のオブジェクトです。型引数（<code>invoke&lt;string&gt;</code>）で戻り値の型を指定します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  "use client";</span><span class="diff-line"> </span><span class="diff-line">  import { useEffect, useState } from "react";</span><span class="diff-line diff-line--add">+ import { invoke } from "@tauri-apps/api/core";</span><span class="diff-line">  import { getVersion } from "@tauri-apps/api/app";</span><span class="diff-line">  import { WebviewWindow } from "@tauri-apps/api/webviewWindow";</span><span class="diff-line">  import { TitleBar } from "./_components/TitleBar";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line"> </span><span class="diff-line">  export default function Home() {</span><span class="diff-line">    const [version, setVersion] = useState("読み込み中...");</span><span class="diff-line diff-line--add">+   const [name, setName] = useState("");</span><span class="diff-line diff-line--add">+   const [greeting, setGreeting] = useState("");</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">      await about?.setFocus();</span><span class="diff-line">    };</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+   const greet = async () =&gt; {</span><span class="diff-line diff-line--add">+     // Rust 側は fn greet(user_name: &amp;str) なので、呼び出し側は camelCase の userName で渡す。</span><span class="diff-line diff-line--add">+     const result = await invoke&lt;string&gt;("greet", { userName: name });</span><span class="diff-line diff-line--add">+     setGreeting(result);</span><span class="diff-line diff-line--add">+   };</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">    return (</span><span class="diff-line">      &lt;div className={styles.page}&gt;</span><span class="diff-line">  ...</span><span class="diff-line">        &lt;button type="button" className={styles.button} onClick={showAbout}&gt;</span><span class="diff-line">          About を開く</span><span class="diff-line">        &lt;/button&gt;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+       &lt;section className={styles.greet}&gt;</span><span class="diff-line diff-line--add">+         &lt;input</span><span class="diff-line diff-line--add">+           type="text"</span><span class="diff-line diff-line--add">+           className={styles.greetInput}</span><span class="diff-line diff-line--add">+           placeholder="お名前"</span><span class="diff-line diff-line--add">+           value={name}</span><span class="diff-line diff-line--add">+           onChange={(e) =&gt; setName(e.target.value)}</span><span class="diff-line diff-line--add">+         /&gt;</span><span class="diff-line diff-line--add">+         &lt;button type="button" className={styles.button} onClick={greet}&gt;</span><span class="diff-line diff-line--add">+           greet を呼び出す</span><span class="diff-line diff-line--add">+         &lt;/button&gt;</span><span class="diff-line diff-line--add">+         {greeting &amp;&amp; &lt;p className={styles.greetResult}&gt;{greeting}&lt;/p&gt;}</span><span class="diff-line diff-line--add">+       &lt;/section&gt;</span><span class="diff-line">      &lt;/div&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    color: var(--foreground);</span><span class="diff-line">    cursor: pointer;</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ .greet {</span><span class="diff-line diff-line--add">+   display: flex;</span><span class="diff-line diff-line--add">+   flex-direction: column;</span><span class="diff-line diff-line--add">+   align-items: center;</span><span class="diff-line diff-line--add">+   margin-top: 32px;</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ .greetInput {</span><span class="diff-line diff-line--add">+   padding: 8px 12px;</span><span class="diff-line diff-line--add">+   font-size: 14px;</span><span class="diff-line diff-line--add">+   border-radius: 6px;</span><span class="diff-line diff-line--add">+   border: 1px solid var(--foreground);</span><span class="diff-line diff-line--add">+   background: transparent;</span><span class="diff-line diff-line--add">+   color: var(--foreground);</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ .greetResult {</span><span class="diff-line diff-line--add">+   margin-top: 12px;</span><span class="diff-line diff-line--add">+   font-size: 14px;</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+          <p>ここで注目したいのは引数名です。Rust 側の引数は <code>user_name</code>（snake_case）ですが、フロントエンドからは <code>userName</code>（camelCase）というキーで渡しています。Tauri は、Rust の引数名を camelCase にしたキーで引数オブジェクトを読み取ります。一方、コマンド名（<code>invoke</code> の第 1 引数）は変換されず、関数名の <code>greet</code> のまま呼び出します。</p>
+          <p>この変換を、ウィンドウを開かずに確かめます。Tauri には、モックのアプリを作って IPC（フロントエンドと Rust の間の通信）を再現するテスト用の機能があります。まず <code>Cargo.toml</code> の <code>[dev-dependencies]</code> で <code>tauri</code> の <code>test</code> フィーチャーを有効にします。<code>[dev-dependencies]</code> はテストのビルドだけで使われるので、アプリ本体には影響しません。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  tauri = { version = "2.11.6", features = [] }</span><span class="diff-line">  tauri-plugin-log = "2"</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ [dev-dependencies]</span><span class="diff-line diff-line--add">+ tauri = { version = "2.11.6", features = ["test"] }</span></pre>
+</div>
+
+          <p><code>lib.rs</code> の末尾にテストモジュールを追加します。<code>make_app</code> は <code>greet</code> だけを登録したモックのアプリを作り、<code>invoke_request</code> はフロントエンドの <code>invoke</code> に相当するリクエストを組み立てるヘルパーです。<code>get_ipc_response</code> にリクエストを渡すと、実際の IPC と同じ経路でコマンドが呼ばれ、結果が <code>Result</code> で返ります。テストの書き方はステップ 6 で改めて整理します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（末尾に追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+    use tauri::webview::InvokeRequest;
+
+    fn make_app() -&gt; tauri::App&lt;tauri::test::MockRuntime&gt; {
+        mock_builder()
+            .invoke_handler(tauri::generate_handler![greet])
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock app")
+    }
+
+    fn invoke_request(cmd: &amp;str, body: serde_json::Value) -&gt; InvokeRequest {
+        InvokeRequest {
+            cmd: cmd.into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: InvokeBody::Json(body),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        }
+    }
+
+    #[test]
+    fn greet_accepts_camel_case_argument_key() {
+        let app = make_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // コマンド引数のキーは camelCase（userName）に変換される。
+        let res = get_ipc_response(
+            &amp;webview,
+            invoke_request("greet", serde_json::json!({ "userName": "World" })),
+        );
+        assert_eq!(
+            res.unwrap().deserialize::&lt;String&gt;().unwrap(),
+            "こんにちは、World さん！ Rust から呼び出されました。"
+        );
+    }
+
+    #[test]
+    fn greet_rejects_snake_case_argument_key() {
+        let app = make_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // Rust 側の引数名 (user_name) のまま snake_case で渡すと見つからずエラーになる。
+        let res = get_ipc_response(
+            &amp;webview,
+            invoke_request("greet", serde_json::json!({ "user_name": "World" })),
+        );
+        assert!(res.is_err(), "snake_case キーは受理されないはず: {res:?}");
+    }
+}</code></pre>
+</div>
+
+          <p>1 つ目のテストは <code>userName</code> キーで、2 つ目は Rust の引数名そのままの <code>user_name</code> キーで <code>greet</code> を呼びます。<code>src-tauri</code> でテストを実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test greet</span><span class="terminal__line">（コンパイルの出力は省略）</span><span class="terminal__line">running 2 tests</span><span class="terminal__line">test tests::greet_rejects_snake_case_argument_key ... ok</span><span class="terminal__line">test tests::greet_accepts_camel_case_argument_key ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+
+          <p>出力は <code>lib.rs</code> のテストの部分だけを載せています。実際には <code>main.rs</code> 側の <code>running 0 tests</code> も続けて表示されますが、省略しています。</p>
+          <p>どちらも <code>ok</code> です。<code>userName</code> では「こんにちは、World さん！ Rust から呼び出されました。」が返り、<code>user_name</code> ではエラーになりました。エラーの文言は <code>invalid args `userName` for command `greet`: command greet missing required key userName</code> です。Rust の引数名は snake_case のまま、呼び出し側だけ camelCase で書く、というのが Tauri の決まりです。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>generate_handler!</code> への登録を忘れると実行時エラーになる</p>
+              <p><code>#[tauri::command]</code> を付けただけでは呼び出せません。<code>generate_handler!</code> への登録を忘れてもコンパイルは通り、<code>invoke</code> を実行した時点でエラー（Promise の reject）になります。実際に登録を外して <code>invoke</code> を呼ぶと、<code>Command add_todo not found</code> という文字列で Promise が reject されました。コマンドを追加したら、<code>generate_handler!</code> の一覧にも追加したかを確認しましょう。</p>
+            </div>
+          </div>
+
+          <p>最後に、フロントエンドの lint とビルドが通ることを確認します。プロジェクトのルートに戻って実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 03-invoke@0.3.0 lint</span><span class="terminal__line">&gt; eslint</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line"></span><span class="terminal__line">&gt; 03-invoke@0.3.0 build</span><span class="terminal__line">&gt; next build</span><span class="terminal__line"></span><span class="terminal__line">▲ Next.js 16.3.6 (Turbopack)</span><span class="terminal__line">✓ Compiled successfully in 1984ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 788ms ...</span><span class="terminal__line">✓ Generating static pages using 6 workers (5/5) in 210ms</span><span class="terminal__line">Route (app)</span><span class="terminal__line">┌ ○ /</span><span class="terminal__line">├ ○ /_not-found</span><span class="terminal__line">└ ○ /about</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo test greet</code> で 2 件とも <code>ok</code> になり、<code>npm run lint</code> と <code>npm run build</code> がエラーなく終われば完了です。<code>npm run tauri dev</code> で起動し、名前を入力して「greet を呼び出す」を押すと、ボタンの下にあいさつ文が表示されます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">構造体を受け渡す</h3>
+        </div>
+        <div class="step__body">
+
+          <p>引数や戻り値には、文字列や数値だけでなく構造体も使えます。Tauri は serde で値を JSON にして受け渡すので、構造体に <code>Serialize</code>（Rust → JSON）と <code>Deserialize</code>（JSON → Rust）を derive しておきます。Todo を表す構造体と、追加・一覧取得のコマンドを作ります。この段階ではまだ状態を持たず、<code>add_todo</code> は固定の id を返し、<code>list_todos</code> はサンプルのデータを返します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+ use serde::{Deserialize, Serialize};</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  #[tauri::command]</span><span class="diff-line">  fn greet(user_name: &amp;str) -&gt; String {</span><span class="diff-line">      format!("こんにちは、{user_name} さん！ Rust から呼び出されました。")</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ #[derive(Debug, Clone, Serialize, Deserialize)]</span><span class="diff-line diff-line--add">+ #[serde(rename_all = "camelCase")]</span><span class="diff-line diff-line--add">+ struct Todo {</span><span class="diff-line diff-line--add">+     id: u32,</span><span class="diff-line diff-line--add">+     title: String,</span><span class="diff-line diff-line--add">+     done: bool,</span><span class="diff-line diff-line--add">+     // rename_all = "camelCase" が無いと JSON のキーは created_at のままになり、</span><span class="diff-line diff-line--add">+     // フロントの todo.createdAt は undefined になる。</span><span class="diff-line diff-line--add">+     created_at: u64,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ #[tauri::command]</span><span class="diff-line diff-line--add">+ fn add_todo(title: String) -&gt; Todo {</span><span class="diff-line diff-line--add">+     Todo {</span><span class="diff-line diff-line--add">+         id: 1,</span><span class="diff-line diff-line--add">+         title,</span><span class="diff-line diff-line--add">+         done: false,</span><span class="diff-line diff-line--add">+         created_at: current_unix_time(),</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ #[tauri::command]</span><span class="diff-line diff-line--add">+ fn list_todos() -&gt; Vec&lt;Todo&gt; {</span><span class="diff-line diff-line--add">+     vec![</span><span class="diff-line diff-line--add">+         Todo { id: 1, title: "Tauri の invoke を学ぶ".into(), done: true, created_at: current_unix_time() },</span><span class="diff-line diff-line--add">+         Todo { id: 2, title: "状態管理を実装する".into(), done: false, created_at: current_unix_time() },</span><span class="diff-line diff-line--add">+     ]</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ fn current_unix_time() -&gt; u64 {</span><span class="diff-line diff-line--add">+     std::time::SystemTime::now()</span><span class="diff-line diff-line--add">+         .duration_since(std::time::UNIX_EPOCH)</span><span class="diff-line diff-line--add">+         .expect("system clock before unix epoch")</span><span class="diff-line diff-line--add">+         .as_secs()</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  #[cfg_attr(mobile, tauri::mobile_entry_point)]</span><span class="diff-line">  ...</span><span class="diff-line diff-line--remove">-         .invoke_handler(tauri::generate_handler![greet])</span><span class="diff-line diff-line--add">+         .invoke_handler(tauri::generate_handler![greet, add_todo, list_todos])</span><span class="diff-line">          .run(tauri::generate_context!())</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>#[serde(rename_all = "camelCase")]</code> は、JSON にするときのキー名を camelCase にする指定です。ステップ 1 の引数名とは違い、構造体のフィールド名は Tauri が自動では変換しません。付けないと <code>created_at</code> は <code>created_at</code> のまま JSON になります。テストで違いを確かめます。<code>greet_rejects_snake_case_argument_key</code> の後ろ（<code>mod tests</code> の閉じかっこの前）に追加します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（mod tests に追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">
+    #[test]
+    fn todo_serializes_created_at_as_camel_case() {
+        let todo = add_todo("テスト".into());
+        let value = serde_json::to_value(&amp;todo).unwrap();
+        assert!(
+            value.get("createdAt").is_some(),
+            "rename_all = \"camelCase\" により createdAt キーになるはず: {value:?}"
+        );
+        assert!(
+            value.get("created_at").is_none(),
+            "snake_case の created_at キーは残らないはず: {value:?}"
+        );
+    }
+
+    /// rename_all を外した場合の比較用の構造体。
+    /// これを使うと JSON のキーは created_at のままになり、
+    /// フロントエンドで todo.createdAt を読むと undefined になってしまう。
+    #[derive(Serialize)]
+    struct TodoWithoutRename {
+        created_at: u64,
+    }
+
+    #[test]
+    fn without_rename_all_key_stays_snake_case() {
+        let value = serde_json::to_value(TodoWithoutRename { created_at: 0 }).unwrap();
+        assert!(
+            value.get("created_at").is_some(),
+            "rename_all なしでは created_at のまま: {value:?}"
+        );
+        assert!(
+            value.get("createdAt").is_none(),
+            "rename_all なしでは createdAt キーは生成されない（フロントでは undefined になる）: {value:?}"
+        );
+    }</code></pre>
+</div>
+
+          <p><code>TodoWithoutRename</code> は、<code>rename_all</code> を付けなかった場合と比べるための構造体です。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">（コンパイルの出力は省略）</span><span class="terminal__line">running 4 tests</span><span class="terminal__line">test tests::without_rename_all_key_stays_snake_case ... ok</span><span class="terminal__line">test tests::todo_serializes_created_at_as_camel_case ... ok</span><span class="terminal__line">test tests::greet_rejects_snake_case_argument_key ... ok</span><span class="terminal__line">test tests::greet_accepts_camel_case_argument_key ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+
+          <p><code>Todo</code> では <code>createdAt</code> キーになり、<code>TodoWithoutRename</code> では <code>created_at</code> のままでした。フロントエンドの型は camelCase の <code>createdAt</code> で定義するので、<code>rename_all</code> を付け忘れると JSON に <code>createdAt</code> キーがなく、<code>todo.createdAt</code> は <code>undefined</code> になります。TypeScript の型は実行時の値を検査しないため、コンパイルエラーにもなりません。</p>
+          <p>フロントエンドに、Rust の <code>Todo</code> に対応する型と、コマンドを呼び出す関数を作ります。機能単位のまとまりなので <code>src/features/todos/</code> に置きます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/todos/types.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">// Rust 側の #[serde(rename_all = "camelCase")] と対応する型。
+// created_at は rename_all により createdAt として届く。
+export type Todo = {
+  id: number;
+  title: string;
+  done: boolean;
+  createdAt: number;
+};</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/features/todos/api/commands.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">import { invoke } from "@tauri-apps/api/core";
+import type { Todo } from "../types";
+
+export async function addTodo(title: string): Promise&lt;Todo&gt; {
+  return invoke&lt;Todo&gt;("add_todo", { title });
+}
+
+export async function listTodos(): Promise&lt;Todo[]&gt; {
+  return invoke&lt;Todo[]&gt;("list_todos");
+}</code></pre>
+</div>
+
+          <p>コマンド名（<code>"add_todo"</code>）は snake_case のままです。camelCase に変換されるのは引数オブジェクトのキーだけでした。UI への組み込みは、状態を持たせるステップ 3 で行います。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 03-invoke@0.3.0 lint</span><span class="terminal__line">&gt; eslint</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Compiled successfully in 118ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 569ms ...</span><span class="terminal__line">✓ Generating static pages using 6 workers (5/5) in 204ms</span><span class="terminal__line">（以下省略）</span></pre>
+</div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo test</code> で 4 件が <code>ok</code> になり、<code>npm run lint</code> と <code>npm run build</code> が通れば完了です。このテストにより、Rust の <code>created_at</code> が <code>createdAt</code> としてフロントエンドに届くと確認できます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">State で状態を保持する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>コマンドは呼び出しのたびに実行される関数なので、それだけではデータを覚えておけません。アプリ全体で共有する状態は <code>tauri::Builder::manage()</code> で登録し、コマンドの引数に <code>tauri::State&lt;'_, T&gt;</code> を書いて受け取ります。複数のコマンドから同時に呼ばれる可能性があるため、書き換える値は <code>Mutex</code> で包みます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  #[derive(Debug, Clone, Serialize, Deserialize)]</span><span class="diff-line">  ...</span><span class="diff-line">      created_at: u64,</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ /// Todo の一覧と次に割り振る id を保持するアプリ状態。</span><span class="diff-line diff-line--add">+ /// `tauri::Builder::manage()` で登録し、各コマンドは `tauri::State&lt;'_, AppState&gt;` で受け取る。</span><span class="diff-line diff-line--add">+ struct AppState {</span><span class="diff-line diff-line--add">+     todos: std::sync::Mutex&lt;Vec&lt;Todo&gt;&gt;,</span><span class="diff-line diff-line--add">+     next_id: std::sync::Mutex&lt;u32&gt;,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ impl AppState {</span><span class="diff-line diff-line--add">+     fn new() -&gt; Self {</span><span class="diff-line diff-line--add">+         Self {</span><span class="diff-line diff-line--add">+             todos: std::sync::Mutex::new(Vec::new()),</span><span class="diff-line diff-line--add">+             next_id: std::sync::Mutex::new(1),</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  #[tauri::command]</span><span class="diff-line diff-line--remove">- fn add_todo(title: String) -&gt; Todo {</span><span class="diff-line diff-line--remove">-     Todo {</span><span class="diff-line diff-line--remove">-         id: 1,</span><span class="diff-line diff-line--remove">-         title,</span><span class="diff-line diff-line--remove">-         done: false,</span><span class="diff-line diff-line--remove">-         created_at: current_unix_time(),</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--add">+ fn add_todo(title: String, state: tauri::State&lt;'_, AppState&gt;) -&gt; Todo {</span><span class="diff-line diff-line--add">+     let mut next_id = state.next_id.lock().unwrap();</span><span class="diff-line diff-line--add">+     let id = *next_id;</span><span class="diff-line diff-line--add">+     *next_id += 1;</span><span class="diff-line diff-line--add">+     let todo = Todo { id, title, done: false, created_at: current_unix_time() };</span><span class="diff-line diff-line--add">+     state.todos.lock().unwrap().push(todo.clone());</span><span class="diff-line diff-line--add">+     todo</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #[tauri::command]</span><span class="diff-line diff-line--remove">- fn list_todos() -&gt; Vec&lt;Todo&gt; {</span><span class="diff-line diff-line--remove">-     vec![</span><span class="diff-line diff-line--remove">-         Todo { id: 1, title: "Tauri の invoke を学ぶ".into(), done: true, created_at: current_unix_time() },</span><span class="diff-line diff-line--remove">-         Todo { id: 2, title: "状態管理を実装する".into(), done: false, created_at: current_unix_time() },</span><span class="diff-line diff-line--remove">-     ]</span><span class="diff-line diff-line--add">+ fn list_todos(state: tauri::State&lt;'_, AppState&gt;) -&gt; Vec&lt;Todo&gt; {</span><span class="diff-line diff-line--add">+     state.todos.lock().unwrap().clone()</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ #[tauri::command]</span><span class="diff-line diff-line--add">+ fn toggle_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Todo {</span><span class="diff-line diff-line--add">+     let mut todos = state.todos.lock().unwrap();</span><span class="diff-line diff-line--add">+     let todo = todos.iter_mut().find(|t| t.id == id).expect("todo not found");</span><span class="diff-line diff-line--add">+     todo.done = !todo.done;</span><span class="diff-line diff-line--add">+     todo.clone()</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ #[tauri::command]</span><span class="diff-line diff-line--add">+ fn delete_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) {</span><span class="diff-line diff-line--add">+     state.todos.lock().unwrap().retain(|t| t.id != id);</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  fn current_unix_time() -&gt; u64 {</span><span class="diff-line">  ...</span><span class="diff-line">              Ok(())</span><span class="diff-line">          })</span><span class="diff-line diff-line--remove">-         .invoke_handler(tauri::generate_handler![greet, add_todo, list_todos])</span><span class="diff-line diff-line--add">+         .manage(AppState::new())</span><span class="diff-line diff-line--add">+         .invoke_handler(tauri::generate_handler![</span><span class="diff-line diff-line--add">+             greet,</span><span class="diff-line diff-line--add">+             add_todo,</span><span class="diff-line diff-line--add">+             list_todos,</span><span class="diff-line diff-line--add">+             toggle_todo,</span><span class="diff-line diff-line--add">+             delete_todo</span><span class="diff-line diff-line--add">+         ])</span><span class="diff-line">          .run(tauri::generate_context!())</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>state</code> 引数は Tauri が自動で渡すので、フロントエンドからは指定しません。<code>add_todo</code> を呼ぶときに渡すのは、これまでどおり <code>title</code> だけです。<code>State</code> はライフタイム引数を 1 つ取る型で、コマンドの引数では <code>'_</code> と書いて省略します。</p>
+          <p><code>add_todo</code> に <code>state</code> 引数が増えたので、ステップ 2 のテストのように <code>add_todo</code> を直接呼ぶことはできなくなりました。<code>todo_serializes_created_at_as_camel_case</code> は <code>Todo</code> を直接作る形に直します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（mod tests）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">      #[test]</span><span class="diff-line">      fn todo_serializes_created_at_as_camel_case() {</span><span class="diff-line diff-line--remove">-         let todo = add_todo("テスト".into());</span><span class="diff-line diff-line--add">+         let todo = Todo {</span><span class="diff-line diff-line--add">+             id: 1,</span><span class="diff-line diff-line--add">+             title: "テスト".into(),</span><span class="diff-line diff-line--add">+             done: false,</span><span class="diff-line diff-line--add">+             created_at: 0,</span><span class="diff-line diff-line--add">+         };</span><span class="diff-line">          let value = serde_json::to_value(&amp;todo).unwrap();</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>状態を使うコマンドは、IPC 経由でテストします。<code>make_app</code> の後ろに、<code>manage()</code> 済みのモックアプリを作る <code>make_full_app</code> を追加します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（mod tests の make_app の後ろに追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">
+    fn make_full_app() -&gt; tauri::App&lt;tauri::test::MockRuntime&gt; {
+        mock_builder()
+            .manage(AppState::new())
+            .invoke_handler(tauri::generate_handler![
+                greet,
+                add_todo,
+                list_todos,
+                toggle_todo,
+                delete_todo
+            ])
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock app")
+    }</code></pre>
+</div>
+
+          <p>追加・一覧・完了切替・削除を続けて呼び、状態が引き継がれることを確かめるテストを <code>mod tests</code> の末尾に追加します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（mod tests に追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">    #[test]
+    fn add_list_toggle_delete_todo_via_state() {
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // 追加: 2 件追加すると id が 1, 2 と振られる。
+        let todo1 = get_ipc_response(
+            &amp;webview,
+            invoke_request("add_todo", serde_json::json!({ "title": "牛乳を買う" })),
+        )
+        .unwrap()
+        .deserialize::&lt;Todo&gt;()
+        .unwrap();
+        assert_eq!(todo1.id, 1);
+        assert_eq!(todo1.title, "牛乳を買う");
+        assert!(!todo1.done);
+
+        let todo2 = get_ipc_response(
+            &amp;webview,
+            invoke_request("add_todo", serde_json::json!({ "title": "本を返す" })),
+        )
+        .unwrap()
+        .deserialize::&lt;Todo&gt;()
+        .unwrap();
+        assert_eq!(todo2.id, 2);
+
+        // 一覧: 状態が Mutex に保持され、2 件とも取得できる。
+        let list = get_ipc_response(
+            &amp;webview,
+            invoke_request("list_todos", serde_json::json!({})),
+        )
+        .unwrap()
+        .deserialize::&lt;Vec&lt;Todo&gt;&gt;()
+        .unwrap();
+        assert_eq!(list.len(), 2);
+
+        // 完了切替: id=1 の done が true になる。
+        let toggled = get_ipc_response(
+            &amp;webview,
+            invoke_request("toggle_todo", serde_json::json!({ "id": 1 })),
+        )
+        .unwrap()
+        .deserialize::&lt;Todo&gt;()
+        .unwrap();
+        assert!(toggled.done);
+
+        // 削除: id=1 を消すと一覧は 1 件になる。
+        get_ipc_response(
+            &amp;webview,
+            invoke_request("delete_todo", serde_json::json!({ "id": 1 })),
+        )
+        .unwrap();
+        let list_after_delete = get_ipc_response(
+            &amp;webview,
+            invoke_request("list_todos", serde_json::json!({})),
+        )
+        .unwrap()
+        .deserialize::&lt;Vec&lt;Todo&gt;&gt;()
+        .unwrap();
+        assert_eq!(list_after_delete.len(), 1);
+        assert_eq!(list_after_delete[0].id, 2);
+    }</code></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">（コンパイルの出力は省略）</span><span class="terminal__line">running 5 tests</span><span class="terminal__line">test tests::without_rename_all_key_stays_snake_case ... ok</span><span class="terminal__line">test tests::todo_serializes_created_at_as_camel_case ... ok</span><span class="terminal__line">test tests::greet_accepts_camel_case_argument_key ... ok</span><span class="terminal__line">test tests::greet_rejects_snake_case_argument_key ... ok</span><span class="terminal__line">test tests::add_list_toggle_delete_todo_via_state ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s</span></pre>
+</div>
+
+          <p>2 件追加すると id が 1、2 と連番で振られ、<code>list_todos</code> で 2 件取得できました。<code>toggle_todo</code> で id 1 の <code>done</code> が <code>true</code> になり、<code>delete_todo</code> の後は id 2 だけが残ります。呼び出しをまたいで、<code>Mutex</code> の中の状態が保たれています。</p>
+          <p>フロントエンドに、完了切替と削除の呼び出しを追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/features/todos/api/commands.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  export async function listTodos(): Promise&lt;Todo[]&gt; {</span><span class="diff-line">    return invoke&lt;Todo[]&gt;("list_todos");</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ export async function toggleTodo(id: number): Promise&lt;Todo&gt; {</span><span class="diff-line diff-line--add">+   return invoke&lt;Todo&gt;("toggle_todo", { id });</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ export async function deleteTodo(id: number): Promise&lt;void&gt; {</span><span class="diff-line diff-line--add">+   return invoke&lt;void&gt;("delete_todo", { id });</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+          <p>Todo の一覧を表示するコンポーネントを <code>src/components/TodoList/</code> に作ります。起動時に <code>listTodos</code> で一覧を取得し、追加・切替・削除ではコマンドの戻り値で画面の状態を更新します。一覧の読み込みに失敗したとき（ブラウザで開いて Tauri API が使えないときなど）は、入力欄の上にエラーを表示します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TSX</span>
+    <span class="code-block__filename">src/components/TodoList/TodoList.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client";
+
+import { useEffect, useState } from "react";
+import {
+  addTodo,
+  deleteTodo,
+  listTodos,
+  toggleTodo,
+} from "@/features/todos/api/commands";
+import type { Todo } from "@/features/todos/types";
+import styles from "./TodoList.module.scss";
+
+export function TodoList() {
+  const [todos, setTodos] = useState&lt;Todo[]&gt;([]);
+  const [title, setTitle] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() =&gt; {
+    listTodos()
+      .then(setTodos)
+      .catch(() =&gt; setError("ブラウザで実行中（Tauri API は利用できません）"));
+  }, []);
+
+  const handleAdd = async () =&gt; {
+    const todo = await addTodo(title);
+    setTodos((prev) =&gt; [...prev, todo]);
+    setTitle("");
+  };
+
+  const handleToggle = async (id: number) =&gt; {
+    const updated = await toggleTodo(id);
+    setTodos((prev) =&gt; prev.map((t) =&gt; (t.id === id ? updated : t)));
+  };
+
+  const handleDelete = async (id: number) =&gt; {
+    await deleteTodo(id);
+    setTodos((prev) =&gt; prev.filter((t) =&gt; t.id !== id));
+  };
+
+  return (
+    &lt;section className={styles.todoList}&gt;
+      {error &amp;&amp; &lt;p className={styles.error}&gt;{error}&lt;/p&gt;}
+      &lt;div className={styles.form}&gt;
+        &lt;input
+          type="text"
+          className={styles.input}
+          placeholder="やることを入力"
+          value={title}
+          onChange={(e) =&gt; setTitle(e.target.value)}
+        /&gt;
+        &lt;button type="button" className={styles.addButton} onClick={handleAdd}&gt;
+          追加
+        &lt;/button&gt;
+      &lt;/div&gt;
+      &lt;ul className={styles.items}&gt;
+        {todos.map((todo) =&gt; (
+          &lt;li key={todo.id} className={styles.item}&gt;
+            &lt;label className={styles.itemLabel}&gt;
+              &lt;input
+                type="checkbox"
+                checked={todo.done}
+                onChange={() =&gt; handleToggle(todo.id)}
+              /&gt;
+              &lt;span className={todo.done ? styles.itemTitleDone : styles.itemTitle}&gt;
+                {todo.title}
+              &lt;/span&gt;
+            &lt;/label&gt;
+            &lt;button
+              type="button"
+              className={styles.deleteButton}
+              onClick={() =&gt; handleDelete(todo.id)}
+            &gt;
+              削除
+            &lt;/button&gt;
+          &lt;/li&gt;
+        ))}
+      &lt;/ul&gt;
+    &lt;/section&gt;
+  );
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/components/TodoList/TodoList.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.todoList {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  max-width: 360px;
+  margin-top: 32px;
+}
+
+.error {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #d94545;
+}
+
+.form {
+  display: flex;
+  gap: 8px;
+}
+
+.input {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid var(--foreground);
+  background: transparent;
+  color: var(--foreground);
+}
+
+.addButton {
+  padding: 8px 16px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid var(--foreground);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.items {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--foreground) 15%, transparent);
+}
+
+.itemLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.itemTitle {
+  font-size: 14px;
+}
+
+.itemTitleDone {
+  font-size: 14px;
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+
+.deleteButton {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--foreground);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/TodoList/index.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export { TodoList } from "./TodoList";</code></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import { TitleBar } from "./_components/TitleBar";</span><span class="diff-line diff-line--add">+ import { TodoList } from "@/components/TodoList";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line">  ...</span><span class="diff-line">          {greeting &amp;&amp; &lt;p className={styles.greetResult}&gt;{greeting}&lt;/p&gt;}</span><span class="diff-line">        &lt;/section&gt;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+       &lt;TodoList /&gt;</span><span class="diff-line">      &lt;/div&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 03-invoke@0.3.0 lint</span><span class="terminal__line">&gt; eslint</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Compiled successfully in 520ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 725ms ...</span><span class="terminal__line">✓ Generating static pages using 6 workers (5/5) in 204ms</span><span class="terminal__line">（以下省略）</span></pre>
+</div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>manage()</code> を忘れると呼び出し時にエラーになる</p>
+              <p>コマンドの引数に <code>State</code> を書いただけではコンパイルエラーにならず、<code>manage()</code> で登録していないと、そのコマンドを呼んだ時点でエラーになります。実際に <code>manage()</code> を外して <code>list_todos</code> を呼ぶと、パニックではなく Promise の reject になり、文言は <code>state not managed for field `state` on command `list_todos`. You must call `.manage()` before using this command</code> でした。テスト用の <code>make_full_app</code> でも <code>.manage(AppState::new())</code> を忘れると同じように失敗します。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>lock().unwrap()</code> と <code>PoisonError</code></p>
+              <p><code>Mutex</code> のロックを持ったままどこかのスレッドがパニックすると、その <code>Mutex</code> は「poisoned（汚染）」状態になり、以降の <code>lock()</code> は <code>Err(PoisonError)</code> を返します。<code>unwrap()</code> していると、そこで連鎖的にパニックします。このレッスンでは学習用に <code>unwrap()</code> のままにしていますが、本番のアプリでは <code>lock()</code> の結果をきちんと扱いましょう。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo test</code> で 5 件が <code>ok</code> になれば、状態の保持は IPC の経路で動いています。<code>npm run tauri dev</code> で起動すると、greet の下に入力欄と「追加」ボタンが表示されます。Todo を追加してチェックボックスを切り替えると、完了した項目に打ち消し線が付きます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">Result でエラーを返す</h3>
+        </div>
+        <div class="step__body">
+
+          <p>ステップ 3 では、存在しない id を <code>toggle_todo</code> に渡すと <code>expect</code> でパニックします。コマンドの戻り値を <code>Result&lt;T, E&gt;</code> にすると、<code>Ok</code> は <code>invoke</code> の Promise の resolve に、<code>Err</code> は reject になり、フロントエンドでエラーとして扱えます。</p>
+          <p><code>Result&lt;Todo, String&gt;</code> のように、エラーを文字列で返すだけでも動きます。ただ、エラーの種類が増えると文字列の組み立てが散らばるので、ここでは <code>thiserror</code> でアプリ独自のエラー型 <code>AppError</code> を作ります。まず依存クレートを追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  tauri-plugin-log = "2"</span><span class="diff-line diff-line--add">+ thiserror = "2"</span><span class="diff-line"> </span><span class="diff-line">  [dev-dependencies]</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>AppState</code> の <code>impl</code> の後ろに <code>AppError</code> を追加します。<code>#[error("...")]</code> に書いた文字列が、そのバリアントのメッセージ（<code>to_string()</code> の結果）になります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（impl AppState の後ろに追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">/// アプリ独自のエラー型。`thiserror` でメッセージを定義し、
+/// `impl serde::Serialize` でフロントエンドに文字列として返す。
+#[derive(Debug, thiserror::Error)]
+enum AppError {
+    #[error("タイトルを入力してください")]
+    EmptyTitle,
+    #[error("id {0} の Todo が見つかりません")]
+    NotFound(u32),
+}
+
+impl Serialize for AppError {
+    fn serialize&lt;S&gt;(&amp;self, serializer: S) -&gt; Result&lt;S::Ok, S::Error&gt;
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&amp;self.to_string())
+    }
+}</code></pre>
+</div>
+
+          <p><code>impl Serialize for AppError</code> が重要です。Tauri はエラー値も JSON にしてフロントエンドに返すため、<code>Result</code> の <code>E</code> は <code>serde::Serialize</code> を実装している必要があります。<code>thiserror::Error</code> の derive だけでは <code>Serialize</code> が実装されないので、メッセージをそのまま文字列にする実装を手で書きます。</p>
+          <p>コマンドの戻り値を <code>Result</code> に変えます。<code>add_todo</code> は前後の空白を取り除いたタイトルが空ならエラーにします。<code>toggle_todo</code> / <code>delete_todo</code> は、id が見つからなければエラーにします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  #[tauri::command]</span><span class="diff-line diff-line--remove">- fn add_todo(title: String, state: tauri::State&lt;'_, AppState&gt;) -&gt; Todo {</span><span class="diff-line diff-line--add">+ fn add_todo(title: String, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;Todo, AppError&gt; {</span><span class="diff-line diff-line--add">+     let title = title.trim().to_string();</span><span class="diff-line diff-line--add">+     if title.is_empty() {</span><span class="diff-line diff-line--add">+         return Err(AppError::EmptyTitle);</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">      let mut next_id = state.next_id.lock().unwrap();</span><span class="diff-line">      let id = *next_id;</span><span class="diff-line">      *next_id += 1;</span><span class="diff-line">      let todo = Todo { id, title, done: false, created_at: current_unix_time() };</span><span class="diff-line">      state.todos.lock().unwrap().push(todo.clone());</span><span class="diff-line diff-line--remove">-     todo</span><span class="diff-line diff-line--add">+     Ok(todo)</span><span class="diff-line">  }</span><span class="diff-line">  ...</span><span class="diff-line">  #[tauri::command]</span><span class="diff-line diff-line--remove">- fn toggle_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Todo {</span><span class="diff-line diff-line--add">+ fn toggle_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;Todo, AppError&gt; {</span><span class="diff-line">      let mut todos = state.todos.lock().unwrap();</span><span class="diff-line diff-line--remove">-     let todo = todos.iter_mut().find(|t| t.id == id).expect("todo not found");</span><span class="diff-line diff-line--add">+     let todo = todos.iter_mut().find(|t| t.id == id).ok_or(AppError::NotFound(id))?;</span><span class="diff-line">      todo.done = !todo.done;</span><span class="diff-line diff-line--remove">-     todo.clone()</span><span class="diff-line diff-line--add">+     Ok(todo.clone())</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #[tauri::command]</span><span class="diff-line diff-line--remove">- fn delete_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) {</span><span class="diff-line diff-line--remove">-     state.todos.lock().unwrap().retain(|t| t.id != id);</span><span class="diff-line diff-line--add">+ fn delete_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;(), AppError&gt; {</span><span class="diff-line diff-line--add">+     let mut todos = state.todos.lock().unwrap();</span><span class="diff-line diff-line--add">+     let len_before = todos.len();</span><span class="diff-line diff-line--add">+     todos.retain(|t| t.id != id);</span><span class="diff-line diff-line--add">+     if todos.len() == len_before { Err(AppError::NotFound(id)) } else { Ok(()) }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>エラーがフロントエンドにどう届くかを、テストで確かめます。<code>mod tests</code> の末尾に追加します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（mod tests に追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">    #[test]
+    fn add_todo_rejects_empty_title() {
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let res = get_ipc_response(
+            &amp;webview,
+            invoke_request("add_todo", serde_json::json!({ "title": "   " })),
+        );
+        let err = res.expect_err("空タイトルはエラーになるはず");
+        assert_eq!(err, serde_json::json!("タイトルを入力してください"));
+    }
+
+    #[test]
+    fn toggle_and_delete_unknown_id_return_error() {
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let toggle_err = get_ipc_response(
+            &amp;webview,
+            invoke_request("toggle_todo", serde_json::json!({ "id": 999 })),
+        )
+        .expect_err("存在しない id はエラーになるはず");
+        assert_eq!(
+            toggle_err,
+            serde_json::json!("id 999 の Todo が見つかりません")
+        );
+
+        let delete_err = get_ipc_response(
+            &amp;webview,
+            invoke_request("delete_todo", serde_json::json!({ "id": 999 })),
+        )
+        .expect_err("存在しない id はエラーになるはず");
+        assert_eq!(
+            delete_err,
+            serde_json::json!("id 999 の Todo が見つかりません")
+        );
+    }</code></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">（コンパイルの出力は省略）</span><span class="terminal__line">running 7 tests</span><span class="terminal__line">test tests::without_rename_all_key_stays_snake_case ... ok</span><span class="terminal__line">test tests::todo_serializes_created_at_as_camel_case ... ok</span><span class="terminal__line">test tests::greet_rejects_snake_case_argument_key ... ok</span><span class="terminal__line">test tests::toggle_and_delete_unknown_id_return_error ... ok</span><span class="terminal__line">test tests::add_todo_rejects_empty_title ... ok</span><span class="terminal__line">test tests::greet_accepts_camel_case_argument_key ... ok</span><span class="terminal__line">test tests::add_list_toggle_delete_todo_via_state ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+
+          <p>エラー値は、<code>#[error("...")]</code> のメッセージをそのまま JSON の文字列にしたものでした。</p>
+          <table>
+            <thead>
+            <tr><th>呼び出し</th><th>エラー値（JSON）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>add_todo</code> に <code>{ title: "   " }</code></td><td><code>"タイトルを入力してください"</code></td></tr>
+            <tr><td><code>toggle_todo</code> / <code>delete_todo</code> に <code>{ id: 999 }</code></td><td><code>"id 999 の Todo が見つかりません"</code></td></tr>
+            </tbody>
+          </table>
+          <p>フロントエンドでは、この値が <code>invoke</code> の reject の値になります。<code>TodoList</code> の各ハンドラーを <code>try/catch</code> で包み、エラーを表示します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/components/TodoList/TodoList.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">    const handleAdd = async () =&gt; {</span><span class="diff-line diff-line--remove">-     const todo = await addTodo(title);</span><span class="diff-line diff-line--remove">-     setTodos((prev) =&gt; [...prev, todo]);</span><span class="diff-line diff-line--remove">-     setTitle("");</span><span class="diff-line diff-line--add">+     try {</span><span class="diff-line diff-line--add">+       const todo = await addTodo(title);</span><span class="diff-line diff-line--add">+       setTodos((prev) =&gt; [...prev, todo]);</span><span class="diff-line diff-line--add">+       setTitle("");</span><span class="diff-line diff-line--add">+       setError("");</span><span class="diff-line diff-line--add">+     } catch (e) {</span><span class="diff-line diff-line--add">+       // Rust 側の AppError は Serialize でそのまま文字列化されて渡ってくる。</span><span class="diff-line diff-line--add">+       setError(String(e));</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">    };</span><span class="diff-line"> </span><span class="diff-line">    const handleToggle = async (id: number) =&gt; {</span><span class="diff-line diff-line--remove">-     const updated = await toggleTodo(id);</span><span class="diff-line diff-line--remove">-     setTodos((prev) =&gt; prev.map((t) =&gt; (t.id === id ? updated : t)));</span><span class="diff-line diff-line--add">+     try {</span><span class="diff-line diff-line--add">+       const updated = await toggleTodo(id);</span><span class="diff-line diff-line--add">+       setTodos((prev) =&gt; prev.map((t) =&gt; (t.id === id ? updated : t)));</span><span class="diff-line diff-line--add">+       setError("");</span><span class="diff-line diff-line--add">+     } catch (e) {</span><span class="diff-line diff-line--add">+       setError(String(e));</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">    };</span><span class="diff-line"> </span><span class="diff-line">    const handleDelete = async (id: number) =&gt; {</span><span class="diff-line diff-line--remove">-     await deleteTodo(id);</span><span class="diff-line diff-line--remove">-     setTodos((prev) =&gt; prev.filter((t) =&gt; t.id !== id));</span><span class="diff-line diff-line--add">+     try {</span><span class="diff-line diff-line--add">+       await deleteTodo(id);</span><span class="diff-line diff-line--add">+       setTodos((prev) =&gt; prev.filter((t) =&gt; t.id !== id));</span><span class="diff-line diff-line--add">+       setError("");</span><span class="diff-line diff-line--add">+     } catch (e) {</span><span class="diff-line diff-line--add">+       setError(String(e));</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">    };</span><span class="diff-line"> </span><span class="diff-line">    return (</span><span class="diff-line">      &lt;section className={styles.todoList}&gt;</span><span class="diff-line">        &lt;div className={styles.form}&gt;</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 03-invoke@0.3.0 lint</span><span class="terminal__line">&gt; eslint</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Compiled successfully in 277ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 620ms ...</span><span class="terminal__line">✓ Generating static pages using 6 workers (5/5) in 208ms</span><span class="terminal__line">（以下省略）</span></pre>
+</div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Err</code> の型は <code>Serialize</code> が必須</p>
+              <p><code>#[tauri::command]</code> の戻り値を <code>Result</code> にするとき、<code>E</code> が <code>serde::Serialize</code> を実装していないとコンパイルエラーになります。<code>thiserror</code> で作ったエラー型には、<code>impl Serialize</code> を忘れずに書きましょう。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo test</code> で 7 件が <code>ok</code> になれば完了です。追加した 2 つのテストで、表の文言がそのままエラー値として返ることを確認できます。<code>npm run tauri dev</code> で空のまま「追加」を押すと、入力欄の上に「タイトルを入力してください」と表示されます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">非同期コマンドとイベントで進捗を伝える</h3>
+        </div>
+        <div class="step__body">
+
+          <p>時間のかかる処理は <code>async fn</code> のコマンドにします。処理の途中経過は、Rust からフロントエンドへ「イベント」を送って知らせます。Rust 側で <code>emit</code> したイベントを、フロントエンドの <code>listen</code> で受け取ります。重い処理の代わりに、200 ミリ秒ずつ待ちながら進捗（0〜100%）を送るコマンドを作ります。待つために <code>tokio</code> の <code>time</code> フィーチャーを追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  thiserror = "2"</span><span class="diff-line diff-line--add">+ tokio = { version = "1", features = ["time"] }</span><span class="diff-line"> </span><span class="diff-line">  [dev-dependencies]</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>AppError</code> にイベント送信の失敗を表すバリアントを追加し、<code>delete_todo</code> の後ろに <code>slow_task</code> コマンドを追加して登録します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      #[error("id {0} の Todo が見つかりません")]</span><span class="diff-line">      NotFound(u32),</span><span class="diff-line diff-line--add">+     #[error("イベント送信に失敗しました: {0}")]</span><span class="diff-line diff-line--add">+     Emit(String),</span><span class="diff-line">  }</span><span class="diff-line">  ...</span><span class="diff-line diff-line--add">+ /// 進捗を `progress` イベントで通知しながら時間のかかる処理を模した非同期コマンド。</span><span class="diff-line diff-line--add">+ #[tauri::command]</span><span class="diff-line diff-line--add">+ async fn slow_task&lt;R: tauri::Runtime&gt;(app: tauri::AppHandle&lt;R&gt;) -&gt; Result&lt;(), AppError&gt; {</span><span class="diff-line diff-line--add">+     use tauri::Emitter;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     for percent in [0u8, 25, 50, 75, 100] {</span><span class="diff-line diff-line--add">+         tokio::time::sleep(std::time::Duration::from_millis(200)).await;</span><span class="diff-line diff-line--add">+         app.emit("progress", percent)</span><span class="diff-line diff-line--add">+             .map_err(|e| AppError::Emit(e.to_string()))?;</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+     Ok(())</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  fn current_unix_time() -&gt; u64 {</span><span class="diff-line">  ...</span><span class="diff-line">              toggle_todo,</span><span class="diff-line diff-line--remove">-             delete_todo</span><span class="diff-line diff-line--add">+             delete_todo,</span><span class="diff-line diff-line--add">+             slow_task</span><span class="diff-line">          ])</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>tauri::AppHandle</code> はアプリ全体を操作するハンドルで、<code>State</code> と同じく引数に書くと Tauri が渡してくれます。<code>emit</code> は <code>tauri::Emitter</code> トレイトのメソッドなので、<code>use</code> で取り込みます。<code>slow_task</code> を <code>&lt;R: tauri::Runtime&gt;</code> のジェネリック関数にしている理由は、この後のつまずきポイントで説明します。</p>
+          <p>テストでは、<code>make_full_app</code> の登録にも <code>slow_task</code> を加えます。そのうえで、Rust 側でイベントを受け取り、届いた値の並びを確かめるテストを追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（mod tests の make_full_app）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">                  toggle_todo,</span><span class="diff-line diff-line--remove">-                 delete_todo</span><span class="diff-line diff-line--add">+                 delete_todo,</span><span class="diff-line diff-line--add">+                 slow_task</span><span class="diff-line">              ])</span><span class="diff-line">  ...</span></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（mod tests に追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">    #[test]
+    fn slow_task_emits_progress_events() {
+        use std::sync::{Arc, Mutex as StdMutex};
+        use tauri::Listener;
+
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let received: Arc&lt;StdMutex&lt;Vec&lt;u8&gt;&gt;&gt; = Arc::new(StdMutex::new(Vec::new()));
+        let received_clone = received.clone();
+        app.listen_any("progress", move |event| {
+            let payload: u8 = serde_json::from_str(event.payload()).unwrap();
+            received_clone.lock().unwrap().push(payload);
+        });
+
+        let res = get_ipc_response(&amp;webview, invoke_request("slow_task", serde_json::json!({})));
+        assert!(res.is_ok(), "slow_task は成功するはず: {res:?}");
+
+        let payloads = received.lock().unwrap().clone();
+        assert_eq!(payloads, vec![0, 25, 50, 75, 100]);
+    }</code></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">（コンパイルの出力は省略）</span><span class="terminal__line">running 8 tests</span><span class="terminal__line">test tests::without_rename_all_key_stays_snake_case ... ok</span><span class="terminal__line">test tests::todo_serializes_created_at_as_camel_case ... ok</span><span class="terminal__line">test tests::add_todo_rejects_empty_title ... ok</span><span class="terminal__line">test tests::greet_accepts_camel_case_argument_key ... ok</span><span class="terminal__line">test tests::toggle_and_delete_unknown_id_return_error ... ok</span><span class="terminal__line">test tests::greet_rejects_snake_case_argument_key ... ok</span><span class="terminal__line">test tests::add_list_toggle_delete_todo_via_state ... ok</span><span class="terminal__line">test tests::slow_task_emits_progress_events ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s</span></pre>
+</div>
+
+          <p><code>progress</code> イベントが 0、25、50、75、100 の順に届きました。<code>slow_task_emits_progress_events</code> は 200 ミリ秒の待機を 5 回するため、全体の実行時間が約 1 秒になっています。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>AppHandle</code> を受け取る <code>async</code> コマンドとテストの型エラー</p>
+              <p><code>async fn slow_task(app: tauri::AppHandle)</code> のように <code>Runtime</code> の型引数を省略すると、<code>AppHandle</code> は既定のランタイム（Wry）に固定されます。その結果、<code>MockRuntime</code> を使うテストの <code>generate_handler!</code> で次のコンパイルエラーになりました。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">error[E0277]: the trait bound `AppHandle: CommandArg&lt;'_, MockRuntime&gt;` is not satisfied</span><span class="terminal__line">  --&gt; src/lib.rs:104:1</span><span class="terminal__line">   |</span><span class="terminal__line">104 | #[tauri::command]</span><span class="terminal__line">   | ^^^^^^^^^^^^^^^^^ the trait `_::_serde::Deserialize&lt;'_&gt;` is not implemented for `AppHandle`</span></pre>
+</div>
+<p><code>async fn slow_task&lt;R: tauri::Runtime&gt;(app: tauri::AppHandle&lt;R&gt;)</code> とジェネリックにすると解決します。アプリとして実行するときは <code>R</code> が <code>tauri::Wry</code> になるだけなので、動作は変わりません。</p>
+            </div>
+          </div>
+
+          <p>フロントエンドに呼び出し関数を追加し、進捗バーを表示するコンポーネントを作ります。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/features/todos/api/commands.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  export async function deleteTodo(id: number): Promise&lt;void&gt; {</span><span class="diff-line">    return invoke&lt;void&gt;("delete_todo", { id });</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ export async function slowTask(): Promise&lt;void&gt; {</span><span class="diff-line diff-line--add">+   return invoke&lt;void&gt;("slow_task");</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TSX</span>
+    <span class="code-block__filename">src/components/ProgressTask/ProgressTask.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">"use client";
+
+import { useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { slowTask } from "@/features/todos/api/commands";
+import styles from "./ProgressTask.module.scss";
+
+export function ProgressTask() {
+  const [progress, setProgress] = useState&lt;number | null&gt;(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() =&gt; {
+    const unlistenPromise = listen&lt;number&gt;("progress", (event) =&gt; {
+      setProgress(event.payload);
+    });
+
+    // クリーンアップで unlisten しないと、再マウント時にリスナーが二重登録される。
+    return () =&gt; {
+      unlistenPromise.then((unlisten) =&gt; unlisten());
+    };
+  }, []);
+
+  const handleRun = async () =&gt; {
+    setRunning(true);
+    setProgress(0);
+    setError("");
+    try {
+      await slowTask();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    &lt;section className={styles.progressTask}&gt;
+      &lt;button
+        type="button"
+        className={styles.button}
+        onClick={handleRun}
+        disabled={running}
+      &gt;
+        重い処理を実行
+      &lt;/button&gt;
+      {error &amp;&amp; &lt;p className={styles.error}&gt;{error}&lt;/p&gt;}
+      {progress !== null &amp;&amp; (
+        &lt;div className={styles.barTrack}&gt;
+          &lt;div className={styles.barFill} style={{ width: `${progress}%` }} /&gt;
+          &lt;span className={styles.barLabel}&gt;{progress}%&lt;/span&gt;
+        &lt;/div&gt;
+      )}
+    &lt;/section&gt;
+  );
+}</code></pre>
+</div>
+
+          <p><code>listen</code> は、登録を解除する関数（<code>unlisten</code>）を Promise で返します。<code>useEffect</code> のクリーンアップでこの関数を呼び、コンポーネントが外れるときにリスナーを解除します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SCSS</span>
+    <span class="code-block__filename">src/components/ProgressTask/ProgressTask.module.scss</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-scss">.progressTask {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 32px;
+}
+
+.button {
+  padding: 8px 20px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid var(--foreground);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+
+  &amp;:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.error {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: #d94545;
+}
+
+.barTrack {
+  position: relative;
+  width: 240px;
+  height: 20px;
+  margin-top: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--foreground);
+  overflow: hidden;
+}
+
+.barFill {
+  height: 100%;
+  background: var(--foreground);
+  opacity: 0.3;
+  transition: width 0.2s ease;
+}
+
+.barLabel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}</code></pre>
+</div>
+
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TypeScript</span>
+    <span class="code-block__filename">src/components/ProgressTask/index.ts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-typescript">export { ProgressTask } from "./ProgressTask";</code></pre>
+</div>
+
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/app/page.tsx</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import { TodoList } from "@/components/TodoList";</span><span class="diff-line diff-line--add">+ import { ProgressTask } from "@/components/ProgressTask";</span><span class="diff-line">  import styles from "./page.module.scss";</span><span class="diff-line">  ...</span><span class="diff-line">        &lt;TodoList /&gt;</span><span class="diff-line diff-line--add">+       &lt;ProgressTask /&gt;</span><span class="diff-line">      &lt;/div&gt;</span><span class="diff-line">    );</span><span class="diff-line">  }</span></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 03-invoke@0.3.0 lint</span><span class="terminal__line">&gt; eslint</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Compiled successfully in 324ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 684ms ...</span><span class="terminal__line">✓ Generating static pages using 6 workers (5/5) in 208ms</span><span class="terminal__line">（以下省略）</span></pre>
+</div>
+
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>listen</code> の解除を忘れるとイベントが二重に処理される</p>
+              <p><code>listen()</code> の戻り値を捨てると、コンポーネントが再マウントされたときにリスナーが重ねて登録されます（開発時の React の Strict Mode による二重実行や、画面遷移など）。その結果、同じイベントを二重に処理します。<code>useEffect</code> のクリーンアップで必ず <code>unlisten()</code> を呼びましょう。</p>
+            </div>
+          </div>
+
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">イベントの権限</p>
+              <p>このプロジェクトの <code>capabilities/default.json</code> には <code>core:default</code> が含まれています。<code>core:default</code> は <code>core:event:default</code>（<code>allow-listen</code> / <code>allow-unlisten</code> / <code>allow-emit</code> / <code>allow-emit-to</code> を含む）を含むため、<code>listen</code> のためのイベント権限は追加の設定なしで使えます。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo test</code> で 8 件が <code>ok</code> になれば完了です。<code>slow_task_emits_progress_events</code> で、進捗が 0、25、50、75、100 の順に届くことを確認できます。<code>npm run tauri dev</code> で「重い処理を実行」を押すと、約 1 秒かけて進捗バーが 100% まで伸び、その間はボタンが押せなくなります。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">ロジックを切り出してテストする</h3>
+        </div>
+        <div class="step__body">
+
+          <p>ここまでのテストは、モックのアプリを作って IPC 経由でコマンドを呼ぶ「IPC レベルのテスト」でした。引数名の変換や状態の注入、エラー値の形まで確かめられる反面、テストごとにアプリとウィンドウを作る必要があります。Todo を操作するロジックそのものは、<code>Mutex</code> や <code>State</code> と関係ありません。ロジックを素のデータだけを受け取る関数（純粋関数）に切り出せば、普通の <code>#[test]</code> で手軽にテストできます。</p>
+          <p><code>impl Serialize for AppError</code> の後ろに、3 つの純粋関数を追加します。中身はステップ 4 でコマンドに書いた処理と同じです。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（impl Serialize for AppError の後ろに追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">// --- ここから下は Mutex や tauri::State から切り離した純粋関数。
+// ロジック自体は `&amp;mut Vec&lt;Todo&gt;` 等の素のデータ構造だけを操作するため、
+// Tauri のモックアプリを使わないテスト（cargo test の高速なユニットテスト）がそのまま書ける。
+
+fn add_todo_pure(
+    todos: &amp;mut Vec&lt;Todo&gt;,
+    next_id: &amp;mut u32,
+    title: String,
+) -&gt; Result&lt;Todo, AppError&gt; {
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err(AppError::EmptyTitle);
+    }
+    let id = *next_id;
+    *next_id += 1;
+    let todo = Todo {
+        id,
+        title,
+        done: false,
+        created_at: current_unix_time(),
+    };
+    todos.push(todo.clone());
+    Ok(todo)
+}
+
+fn toggle_todo_pure(todos: &amp;mut [Todo], id: u32) -&gt; Result&lt;Todo, AppError&gt; {
+    let todo = todos
+        .iter_mut()
+        .find(|t| t.id == id)
+        .ok_or(AppError::NotFound(id))?;
+    todo.done = !todo.done;
+    Ok(todo.clone())
+}
+
+fn delete_todo_pure(todos: &amp;mut Vec&lt;Todo&gt;, id: u32) -&gt; Result&lt;(), AppError&gt; {
+    let len_before = todos.len();
+    todos.retain(|t| t.id != id);
+    if todos.len() == len_before {
+        Err(AppError::NotFound(id))
+    } else {
+        Ok(())
+    }
+}</code></pre>
+</div>
+
+          <p>コマンド本体は、ロックを取って純粋関数に任せるだけの薄い関数にします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  #[tauri::command]</span><span class="diff-line">  fn add_todo(title: String, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;Todo, AppError&gt; {</span><span class="diff-line diff-line--remove">-     let title = title.trim().to_string();</span><span class="diff-line diff-line--remove">-     if title.is_empty() {</span><span class="diff-line diff-line--remove">-         return Err(AppError::EmptyTitle);</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line">      let mut next_id = state.next_id.lock().unwrap();</span><span class="diff-line diff-line--remove">-     let id = *next_id;</span><span class="diff-line diff-line--remove">-     *next_id += 1;</span><span class="diff-line diff-line--remove">-     let todo = Todo { id, title, done: false, created_at: current_unix_time() };</span><span class="diff-line diff-line--remove">-     state.todos.lock().unwrap().push(todo.clone());</span><span class="diff-line diff-line--remove">-     Ok(todo)</span><span class="diff-line diff-line--add">+     let mut todos = state.todos.lock().unwrap();</span><span class="diff-line diff-line--add">+     add_todo_pure(&amp;mut todos, &amp;mut next_id, title)</span><span class="diff-line">  }</span><span class="diff-line">  ...</span><span class="diff-line">  #[tauri::command]</span><span class="diff-line">  fn toggle_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;Todo, AppError&gt; {</span><span class="diff-line">      let mut todos = state.todos.lock().unwrap();</span><span class="diff-line diff-line--remove">-     let todo = todos.iter_mut().find(|t| t.id == id).ok_or(AppError::NotFound(id))?;</span><span class="diff-line diff-line--remove">-     todo.done = !todo.done;</span><span class="diff-line diff-line--remove">-     Ok(todo.clone())</span><span class="diff-line diff-line--add">+     toggle_todo_pure(&amp;mut todos, id)</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  #[tauri::command]</span><span class="diff-line">  fn delete_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;(), AppError&gt; {</span><span class="diff-line">      let mut todos = state.todos.lock().unwrap();</span><span class="diff-line diff-line--remove">-     let len_before = todos.len();</span><span class="diff-line diff-line--remove">-     todos.retain(|t| t.id != id);</span><span class="diff-line diff-line--remove">-     if todos.len() == len_before { Err(AppError::NotFound(id)) } else { Ok(()) }</span><span class="diff-line diff-line--add">+     delete_todo_pure(&amp;mut todos, id)</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>&amp;mut todos</code> は <code>MutexGuard</code> への可変参照です。参照外し型強制（deref coercion）により、<code>&amp;mut Vec&lt;Todo&gt;</code> や <code>&amp;mut [Todo]</code> として渡せます。</p>
+          <p>純粋関数だけを対象にしたユニットテストを <code>mod tests</code> の末尾に追加します。モックのアプリは使いません。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs（mod tests に追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">    // --- ここから Mutex や Tauri のモックアプリを使わない、純粋関数だけのユニットテスト。
+
+    #[test]
+    fn add_todo_pure_assigns_incrementing_ids() {
+        let mut todos = Vec::new();
+        let mut next_id = 1u32;
+
+        let todo1 = add_todo_pure(&amp;mut todos, &amp;mut next_id, "牛乳を買う".into()).unwrap();
+        let todo2 = add_todo_pure(&amp;mut todos, &amp;mut next_id, "本を返す".into()).unwrap();
+
+        assert_eq!(todo1.id, 1);
+        assert_eq!(todo2.id, 2);
+        assert_eq!(next_id, 3);
+        assert_eq!(todos.len(), 2);
+        assert!(!todo1.done);
+    }
+
+    #[test]
+    fn add_todo_pure_trims_and_rejects_blank_title() {
+        let mut todos = Vec::new();
+        let mut next_id = 1u32;
+
+        // 前後の空白は trim される。
+        let todo = add_todo_pure(&amp;mut todos, &amp;mut next_id, "  牛乳を買う  ".into()).unwrap();
+        assert_eq!(todo.title, "牛乳を買う");
+
+        // 空白だけのタイトルは拒否される。
+        let err = add_todo_pure(&amp;mut todos, &amp;mut next_id, "   ".into()).unwrap_err();
+        assert!(matches!(err, AppError::EmptyTitle));
+    }
+
+    #[test]
+    fn toggle_todo_pure_flips_done_and_errors_on_missing_id() {
+        let mut todos = vec![Todo {
+            id: 1,
+            title: "牛乳を買う".into(),
+            done: false,
+            created_at: 0,
+        }];
+
+        let toggled = toggle_todo_pure(&amp;mut todos, 1).unwrap();
+        assert!(toggled.done);
+        assert!(todos[0].done);
+
+        // 再度切り替えると false に戻る。
+        let toggled_again = toggle_todo_pure(&amp;mut todos, 1).unwrap();
+        assert!(!toggled_again.done);
+
+        let err = toggle_todo_pure(&amp;mut todos, 999).unwrap_err();
+        assert!(matches!(err, AppError::NotFound(999)));
+    }
+
+    #[test]
+    fn delete_todo_pure_removes_item_and_errors_on_missing_id() {
+        let mut todos = vec![
+            Todo {
+                id: 1,
+                title: "牛乳を買う".into(),
+                done: false,
+                created_at: 0,
+            },
+            Todo {
+                id: 2,
+                title: "本を返す".into(),
+                done: false,
+                created_at: 0,
+            },
+        ];
+
+        delete_todo_pure(&amp;mut todos, 1).unwrap();
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].id, 2);
+
+        let err = delete_todo_pure(&amp;mut todos, 1).unwrap_err();
+        assert!(matches!(err, AppError::NotFound(1)));
+    }</code></pre>
+</div>
+
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">（コンパイルの出力は省略）</span><span class="terminal__line">running 12 tests</span><span class="terminal__line">test tests::toggle_todo_pure_flips_done_and_errors_on_missing_id ... ok</span><span class="terminal__line">test tests::delete_todo_pure_removes_item_and_errors_on_missing_id ... ok</span><span class="terminal__line">test tests::add_todo_pure_trims_and_rejects_blank_title ... ok</span><span class="terminal__line">test tests::add_todo_pure_assigns_incrementing_ids ... ok</span><span class="terminal__line">test tests::todo_serializes_created_at_as_camel_case ... ok</span><span class="terminal__line">test tests::without_rename_all_key_stays_snake_case ... ok</span><span class="terminal__line">test tests::greet_accepts_camel_case_argument_key ... ok</span><span class="terminal__line">test tests::add_todo_rejects_empty_title ... ok</span><span class="terminal__line">test tests::greet_rejects_snake_case_argument_key ... ok</span><span class="terminal__line">test tests::toggle_and_delete_unknown_id_return_error ... ok</span><span class="terminal__line">test tests::add_list_toggle_delete_todo_via_state ... ok</span><span class="terminal__line">test tests::slow_task_emits_progress_events ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.03s</span></pre>
+</div>
+
+          <p>リファクタリングの前からある 8 件も、そのまま通っています。コマンドの外から見た振る舞いが変わっていないことを、IPC レベルのテストが保証しています。2 種類のテストの使い分けは次のとおりです。</p>
+          <table>
+            <thead>
+            <tr><th>種類</th><th>書き方</th><th>確かめられること</th><th>このレッスンのテスト</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>IPC レベルのテスト</td><td><code>mock_builder</code> でモックアプリを作り、<code>get_ipc_response</code> で呼ぶ</td><td>引数名の変換、<code>State</code> の注入、<code>generate_handler!</code> への登録、エラー値の JSON、イベント</td><td><code>greet_*</code>、<code>add_list_toggle_delete_todo_via_state</code>、<code>*_return_error</code>、<code>slow_task_emits_progress_events</code> など</td></tr>
+            <tr><td>素のユニットテスト</td><td>純粋関数を直接呼ぶ</td><td>ロジックの分岐（id の採番、空白の除去、見つからないときのエラー）</td><td><code>*_pure_*</code> の 4 件</td></tr>
+            </tbody>
+          </table>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">借用は関数の中で終わらせる</p>
+              <p><code>toggle_todo_pure</code> の <code>todo</code> は、<code>todos.iter_mut().find(...)</code> が返した可変参照です。戻り値には <code>todo.clone()</code> した値を返しているので、関数を抜けた時点で借用は終わります。純粋関数に切り出すときは、戻り値が借用を引きずっていないかに注意しましょう。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo test</code> で 12 件すべてが <code>ok</code> になれば完了です。追加した <code>*_pure_*</code> の 4 件は、モックのアプリを作らずに実行されます。</p>
+          </div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">全体を確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、フロントエンドと Rust の両方のチェックを通し、デバッグビルドを作ります。まずプロジェクトのルートで実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run build</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Compiled successfully in 119ms</span><span class="terminal__line">  Running TypeScript ...</span><span class="terminal__line">  Finished TypeScript in 536ms ...</span><span class="terminal__line">✓ Generating static pages using 6 workers (5/5) in 202ms</span><span class="terminal__line">（以下省略）</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run lint</span><span class="terminal__line"></span><span class="terminal__line">&gt; 03-invoke@0.3.0 lint</span><span class="terminal__line">&gt; eslint</span></pre>
+</div>
+
+          <p>続いて <code>src-tauri</code> で Rust 側のチェックをします。<code>cargo clippy -- -D warnings</code> は、Clippy の警告を 1 件でもエラーとして扱います。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd src-tauri</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo check</span><span class="terminal__line">    Checking handson-tauri-03 v0.3.0 (/path/to/03-invoke/src-tauri)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.56s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy -- -D warnings</span><span class="terminal__line">    Compiling handson-tauri-03 v0.3.0 (/path/to/03-invoke/src-tauri)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.86s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">（コンパイルの出力は省略）</span><span class="terminal__line">running 12 tests</span><span class="terminal__line">（12 件の結果は省略）</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.03s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ..</span></pre>
+</div>
+
+          <p>教材のコードを手で入力すると、<code>cargo fmt --check</code> が差分を表示することがあります（執筆時も 1 回目は差分が出ました）。その場合は <code>cargo fmt</code> で整形してから、もう一度 <code>cargo fmt --check</code> を実行してください。何も出力されなければ問題ありません。</p>
+          <p>デバッグビルドで <code>.app</code> と <code>.dmg</code> を作ります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri build -- --debug</span><span class="terminal__line">（Next.js のビルドと Rust のコンパイルは省略）</span><span class="terminal__line">       Built application at: /path/to/03-invoke/src-tauri/target/debug/handson-tauri-03</span><span class="terminal__line">    Bundling handson-tauri-03.app (/path/to/03-invoke/src-tauri/target/debug/bundle/macos/handson-tauri-03.app)</span><span class="terminal__line">    Bundling handson-tauri-03_0.3.0_aarch64.dmg (/path/to/03-invoke/src-tauri/target/debug/bundle/dmg/handson-tauri-03_0.3.0_aarch64.dmg)</span><span class="terminal__line">    Finished 2 bundles</span></pre>
+</div>
+
+          <p>開発モードでも起動してみます。ポート 3000 が空いていることを確かめてから実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> lsof -iTCP:3000 -sTCP:LISTEN</span><span class="terminal__line"><span class="terminal__prompt">$</span> npm run tauri dev</span><span class="terminal__line">（中略）</span><span class="terminal__line">✓ Ready in 397ms</span><span class="terminal__line">     Running DevCommand (`cargo  run --no-default-features --color always --`)</span><span class="terminal__line">        Info Watching /path/to/03-invoke/src-tauri for changes...</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 25.73s</span><span class="terminal__line">     Running `target/debug/handson-tauri-03`</span><span class="terminal__line"> GET /about/ 200 in 1029ms (next.js: 902ms, application-code: 127ms)</span><span class="terminal__line"> GET / 200 in 1027ms (next.js: 953ms, application-code: 73ms)</span></pre>
+</div>
+
+          <p>メインウィンドウ（<code>/</code>）と、非表示の About ウィンドウ（<code>/about/</code>）のページが読み込まれました。ウィンドウで次の操作を試してください。</p>
+          <ul>
+            <li>名前を入力して「greet を呼び出す」を押すと、あいさつ文が表示される</li>
+            <li>Todo を追加し、チェックボックスで完了を切り替え、「削除」で消せる</li>
+            <li>空のまま「追加」を押すと「タイトルを入力してください」と表示される</li>
+            <li>「重い処理を実行」を押すと、進捗バーが 0% から 100% まで伸びる</li>
+          </ul>
+          <p>確認が終わったら、ターミナルで <code>Ctrl + C</code> を押して <code>tauri dev</code> を止めます。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>tauri dev</code> 中に Rust のコードを変えると再起動する</p>
+              <p>上のログの <code>Watching ... for changes...</code> のとおり、<code>tauri dev</code> は <code>src-tauri</code> を監視しています。Rust のコードを保存すると、再コンパイルしてアプリのプロセスごと起動し直します。フロントエンドの変更が Fast Refresh ですぐ反映されるのとは違い、反映まで数秒から数十秒かかります。状態（<code>AppState</code>）もリセットされるので、追加した Todo は消えます。</p>
+            </div>
+          </div>
+
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ここまでの 6 つのチェック（<code>npm run build</code> から <code>cargo test</code> まで）がすべてエラーなく終わり、<code>npm run tauri build -- --debug</code> で <code>Finished 2 bundles</code> と表示されれば完了です。</p>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">完成した src-tauri/src/lib.rs の全文を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src-tauri/src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">use serde::{Deserialize, Serialize};
+
+#[tauri::command]
+fn greet(user_name: &amp;str) -&gt; String {
+    format!("こんにちは、{user_name} さん！ Rust から呼び出されました。")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Todo {
+    id: u32,
+    title: String,
+    done: bool,
+    // rename_all = "camelCase" が無いと JSON のキーは created_at のままになり、
+    // フロントの todo.createdAt は undefined になる。
+    created_at: u64,
+}
+
+/// Todo の一覧と次に割り振る id を保持するアプリ状態。
+/// `tauri::Builder::manage()` で登録し、各コマンドは `tauri::State&lt;'_, AppState&gt;` で受け取る。
+struct AppState {
+    todos: std::sync::Mutex&lt;Vec&lt;Todo&gt;&gt;,
+    next_id: std::sync::Mutex&lt;u32&gt;,
+}
+
+impl AppState {
+    fn new() -&gt; Self {
+        Self {
+            todos: std::sync::Mutex::new(Vec::new()),
+            next_id: std::sync::Mutex::new(1),
+        }
+    }
+}
+
+/// アプリ独自のエラー型。`thiserror` でメッセージを定義し、
+/// `impl serde::Serialize` でフロントエンドに文字列として返す。
+#[derive(Debug, thiserror::Error)]
+enum AppError {
+    #[error("タイトルを入力してください")]
+    EmptyTitle,
+    #[error("id {0} の Todo が見つかりません")]
+    NotFound(u32),
+    #[error("イベント送信に失敗しました: {0}")]
+    Emit(String),
+}
+
+impl Serialize for AppError {
+    fn serialize&lt;S&gt;(&amp;self, serializer: S) -&gt; Result&lt;S::Ok, S::Error&gt;
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&amp;self.to_string())
+    }
+}
+
+// --- ここから下は Mutex や tauri::State から切り離した純粋関数。
+// ロジック自体は `&amp;mut Vec&lt;Todo&gt;` 等の素のデータ構造だけを操作するため、
+// Tauri のモックアプリを使わないテスト（cargo test の高速なユニットテスト）がそのまま書ける。
+
+fn add_todo_pure(
+    todos: &amp;mut Vec&lt;Todo&gt;,
+    next_id: &amp;mut u32,
+    title: String,
+) -&gt; Result&lt;Todo, AppError&gt; {
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err(AppError::EmptyTitle);
+    }
+    let id = *next_id;
+    *next_id += 1;
+    let todo = Todo {
+        id,
+        title,
+        done: false,
+        created_at: current_unix_time(),
+    };
+    todos.push(todo.clone());
+    Ok(todo)
+}
+
+fn toggle_todo_pure(todos: &amp;mut [Todo], id: u32) -&gt; Result&lt;Todo, AppError&gt; {
+    let todo = todos
+        .iter_mut()
+        .find(|t| t.id == id)
+        .ok_or(AppError::NotFound(id))?;
+    todo.done = !todo.done;
+    Ok(todo.clone())
+}
+
+fn delete_todo_pure(todos: &amp;mut Vec&lt;Todo&gt;, id: u32) -&gt; Result&lt;(), AppError&gt; {
+    let len_before = todos.len();
+    todos.retain(|t| t.id != id);
+    if todos.len() == len_before {
+        Err(AppError::NotFound(id))
+    } else {
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn add_todo(title: String, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;Todo, AppError&gt; {
+    let mut next_id = state.next_id.lock().unwrap();
+    let mut todos = state.todos.lock().unwrap();
+    add_todo_pure(&amp;mut todos, &amp;mut next_id, title)
+}
+
+#[tauri::command]
+fn list_todos(state: tauri::State&lt;'_, AppState&gt;) -&gt; Vec&lt;Todo&gt; {
+    state.todos.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn toggle_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;Todo, AppError&gt; {
+    let mut todos = state.todos.lock().unwrap();
+    toggle_todo_pure(&amp;mut todos, id)
+}
+
+#[tauri::command]
+fn delete_todo(id: u32, state: tauri::State&lt;'_, AppState&gt;) -&gt; Result&lt;(), AppError&gt; {
+    let mut todos = state.todos.lock().unwrap();
+    delete_todo_pure(&amp;mut todos, id)
+}
+
+/// 進捗を `progress` イベントで通知しながら時間のかかる処理を模した非同期コマンド。
+#[tauri::command]
+async fn slow_task&lt;R: tauri::Runtime&gt;(app: tauri::AppHandle&lt;R&gt;) -&gt; Result&lt;(), AppError&gt; {
+    use tauri::Emitter;
+
+    for percent in [0u8, 25, 50, 75, 100] {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        app.emit("progress", percent)
+            .map_err(|e| AppError::Emit(e.to_string()))?;
+    }
+    Ok(())
+}
+
+fn current_unix_time() -&gt; u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_secs()
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .setup(|app| {
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
+            Ok(())
+        })
+        .manage(AppState::new())
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            add_todo,
+            list_todos,
+            toggle_todo,
+            delete_todo,
+            slow_task
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+    use tauri::webview::InvokeRequest;
+
+    fn make_app() -&gt; tauri::App&lt;tauri::test::MockRuntime&gt; {
+        mock_builder()
+            .invoke_handler(tauri::generate_handler![greet])
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock app")
+    }
+
+    fn make_full_app() -&gt; tauri::App&lt;tauri::test::MockRuntime&gt; {
+        mock_builder()
+            .manage(AppState::new())
+            .invoke_handler(tauri::generate_handler![
+                greet,
+                add_todo,
+                list_todos,
+                toggle_todo,
+                delete_todo,
+                slow_task
+            ])
+            .build(mock_context(noop_assets()))
+            .expect("failed to build mock app")
+    }
+
+    fn invoke_request(cmd: &amp;str, body: serde_json::Value) -&gt; InvokeRequest {
+        InvokeRequest {
+            cmd: cmd.into(),
+            callback: CallbackFn(0),
+            error: CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: InvokeBody::Json(body),
+            headers: Default::default(),
+            invoke_key: INVOKE_KEY.to_string(),
+        }
+    }
+
+    #[test]
+    fn greet_accepts_camel_case_argument_key() {
+        let app = make_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // コマンド引数のキーは camelCase（userName）に変換される。
+        let res = get_ipc_response(
+            &amp;webview,
+            invoke_request("greet", serde_json::json!({ "userName": "World" })),
+        );
+        assert_eq!(
+            res.unwrap().deserialize::&lt;String&gt;().unwrap(),
+            "こんにちは、World さん！ Rust から呼び出されました。"
+        );
+    }
+
+    #[test]
+    fn greet_rejects_snake_case_argument_key() {
+        let app = make_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // Rust 側の引数名 (user_name) のまま snake_case で渡すと見つからずエラーになる。
+        let res = get_ipc_response(
+            &amp;webview,
+            invoke_request("greet", serde_json::json!({ "user_name": "World" })),
+        );
+        assert!(res.is_err(), "snake_case キーは受理されないはず: {res:?}");
+    }
+
+    #[test]
+    fn todo_serializes_created_at_as_camel_case() {
+        let todo = Todo {
+            id: 1,
+            title: "テスト".into(),
+            done: false,
+            created_at: 0,
+        };
+        let value = serde_json::to_value(&amp;todo).unwrap();
+        assert!(
+            value.get("createdAt").is_some(),
+            "rename_all = \"camelCase\" により createdAt キーになるはず: {value:?}"
+        );
+        assert!(
+            value.get("created_at").is_none(),
+            "snake_case の created_at キーは残らないはず: {value:?}"
+        );
+    }
+
+    /// rename_all を外した場合の比較用の構造体。
+    /// これを使うと JSON のキーは created_at のままになり、
+    /// フロントエンドで todo.createdAt を読むと undefined になってしまう。
+    #[derive(Serialize)]
+    struct TodoWithoutRename {
+        created_at: u64,
+    }
+
+    #[test]
+    fn without_rename_all_key_stays_snake_case() {
+        let value = serde_json::to_value(TodoWithoutRename { created_at: 0 }).unwrap();
+        assert!(
+            value.get("created_at").is_some(),
+            "rename_all なしでは created_at のまま: {value:?}"
+        );
+        assert!(
+            value.get("createdAt").is_none(),
+            "rename_all なしでは createdAt キーは生成されない（フロントでは undefined になる）: {value:?}"
+        );
+    }
+
+    #[test]
+    fn add_list_toggle_delete_todo_via_state() {
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        // 追加: 2 件追加すると id が 1, 2 と振られる。
+        let todo1 = get_ipc_response(
+            &amp;webview,
+            invoke_request("add_todo", serde_json::json!({ "title": "牛乳を買う" })),
+        )
+        .unwrap()
+        .deserialize::&lt;Todo&gt;()
+        .unwrap();
+        assert_eq!(todo1.id, 1);
+        assert_eq!(todo1.title, "牛乳を買う");
+        assert!(!todo1.done);
+
+        let todo2 = get_ipc_response(
+            &amp;webview,
+            invoke_request("add_todo", serde_json::json!({ "title": "本を返す" })),
+        )
+        .unwrap()
+        .deserialize::&lt;Todo&gt;()
+        .unwrap();
+        assert_eq!(todo2.id, 2);
+
+        // 一覧: 状態が Mutex に保持され、2 件とも取得できる。
+        let list = get_ipc_response(
+            &amp;webview,
+            invoke_request("list_todos", serde_json::json!({})),
+        )
+        .unwrap()
+        .deserialize::&lt;Vec&lt;Todo&gt;&gt;()
+        .unwrap();
+        assert_eq!(list.len(), 2);
+
+        // 完了切替: id=1 の done が true になる。
+        let toggled = get_ipc_response(
+            &amp;webview,
+            invoke_request("toggle_todo", serde_json::json!({ "id": 1 })),
+        )
+        .unwrap()
+        .deserialize::&lt;Todo&gt;()
+        .unwrap();
+        assert!(toggled.done);
+
+        // 削除: id=1 を消すと一覧は 1 件になる。
+        get_ipc_response(
+            &amp;webview,
+            invoke_request("delete_todo", serde_json::json!({ "id": 1 })),
+        )
+        .unwrap();
+        let list_after_delete = get_ipc_response(
+            &amp;webview,
+            invoke_request("list_todos", serde_json::json!({})),
+        )
+        .unwrap()
+        .deserialize::&lt;Vec&lt;Todo&gt;&gt;()
+        .unwrap();
+        assert_eq!(list_after_delete.len(), 1);
+        assert_eq!(list_after_delete[0].id, 2);
+    }
+
+    #[test]
+    fn add_todo_rejects_empty_title() {
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let res = get_ipc_response(
+            &amp;webview,
+            invoke_request("add_todo", serde_json::json!({ "title": "   " })),
+        );
+        let err = res.expect_err("空タイトルはエラーになるはず");
+        assert_eq!(err, serde_json::json!("タイトルを入力してください"));
+    }
+
+    #[test]
+    fn toggle_and_delete_unknown_id_return_error() {
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let toggle_err = get_ipc_response(
+            &amp;webview,
+            invoke_request("toggle_todo", serde_json::json!({ "id": 999 })),
+        )
+        .expect_err("存在しない id はエラーになるはず");
+        assert_eq!(
+            toggle_err,
+            serde_json::json!("id 999 の Todo が見つかりません")
+        );
+
+        let delete_err = get_ipc_response(
+            &amp;webview,
+            invoke_request("delete_todo", serde_json::json!({ "id": 999 })),
+        )
+        .expect_err("存在しない id はエラーになるはず");
+        assert_eq!(
+            delete_err,
+            serde_json::json!("id 999 の Todo が見つかりません")
+        );
+    }
+
+    #[test]
+    fn slow_task_emits_progress_events() {
+        use std::sync::{Arc, Mutex as StdMutex};
+        use tauri::Listener;
+
+        let app = make_full_app();
+        let webview = tauri::WebviewWindowBuilder::new(&amp;app, "main", Default::default())
+            .build()
+            .unwrap();
+
+        let received: Arc&lt;StdMutex&lt;Vec&lt;u8&gt;&gt;&gt; = Arc::new(StdMutex::new(Vec::new()));
+        let received_clone = received.clone();
+        app.listen_any("progress", move |event| {
+            let payload: u8 = serde_json::from_str(event.payload()).unwrap();
+            received_clone.lock().unwrap().push(payload);
+        });
+
+        let res = get_ipc_response(&amp;webview, invoke_request("slow_task", serde_json::json!({})));
+        assert!(res.is_ok(), "slow_task は成功するはず: {res:?}");
+
+        let payloads = received.lock().unwrap().clone();
+        assert_eq!(payloads, vec![0, 25, 50, 75, 100]);
+    }
+
+    // --- ここから Mutex や Tauri のモックアプリを使わない、純粋関数だけのユニットテスト。
+
+    #[test]
+    fn add_todo_pure_assigns_incrementing_ids() {
+        let mut todos = Vec::new();
+        let mut next_id = 1u32;
+
+        let todo1 = add_todo_pure(&amp;mut todos, &amp;mut next_id, "牛乳を買う".into()).unwrap();
+        let todo2 = add_todo_pure(&amp;mut todos, &amp;mut next_id, "本を返す".into()).unwrap();
+
+        assert_eq!(todo1.id, 1);
+        assert_eq!(todo2.id, 2);
+        assert_eq!(next_id, 3);
+        assert_eq!(todos.len(), 2);
+        assert!(!todo1.done);
+    }
+
+    #[test]
+    fn add_todo_pure_trims_and_rejects_blank_title() {
+        let mut todos = Vec::new();
+        let mut next_id = 1u32;
+
+        // 前後の空白は trim される。
+        let todo = add_todo_pure(&amp;mut todos, &amp;mut next_id, "  牛乳を買う  ".into()).unwrap();
+        assert_eq!(todo.title, "牛乳を買う");
+
+        // 空白だけのタイトルは拒否される。
+        let err = add_todo_pure(&amp;mut todos, &amp;mut next_id, "   ".into()).unwrap_err();
+        assert!(matches!(err, AppError::EmptyTitle));
+    }
+
+    #[test]
+    fn toggle_todo_pure_flips_done_and_errors_on_missing_id() {
+        let mut todos = vec![Todo {
+            id: 1,
+            title: "牛乳を買う".into(),
+            done: false,
+            created_at: 0,
+        }];
+
+        let toggled = toggle_todo_pure(&amp;mut todos, 1).unwrap();
+        assert!(toggled.done);
+        assert!(todos[0].done);
+
+        // 再度切り替えると false に戻る。
+        let toggled_again = toggle_todo_pure(&amp;mut todos, 1).unwrap();
+        assert!(!toggled_again.done);
+
+        let err = toggle_todo_pure(&amp;mut todos, 999).unwrap_err();
+        assert!(matches!(err, AppError::NotFound(999)));
+    }
+
+    #[test]
+    fn delete_todo_pure_removes_item_and_errors_on_missing_id() {
+        let mut todos = vec![
+            Todo {
+                id: 1,
+                title: "牛乳を買う".into(),
+                done: false,
+                created_at: 0,
+            },
+            Todo {
+                id: 2,
+                title: "本を返す".into(),
+                done: false,
+                created_at: 0,
+            },
+        ];
+
+        delete_todo_pure(&amp;mut todos, 1).unwrap();
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].id, 2);
+
+        let err = delete_todo_pure(&amp;mut todos, 1).unwrap_err();
+        assert!(matches!(err, AppError::NotFound(1)));
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>#[tauri::command]</code> の関数を <code>generate_handler!</code> に登録し、<code>invoke</code> で呼び出せた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">Rust の引数 <code>user_name</code> を、フロントエンドから <code>userName</code> で渡す理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>#[serde(rename_all = "camelCase")]</code> を付けないと、フロントエンドの <code>todo.createdAt</code> が <code>undefined</code> になる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>manage()</code> と <code>State&lt;'_, AppState&gt;</code>、<code>Mutex</code> で、コマンド間で共有する状態を持てた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>thiserror</code> で <code>AppError</code> を作り、<code>impl Serialize</code> でフロントエンドにエラー文言を返せた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>async</code> コマンドから <code>emit</code> したイベントを <code>listen</code> で受け取り、クリーンアップで <code>unlisten</code> した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>get_ipc_response</code> を使う IPC レベルのテストと、純粋関数のユニットテストを書き分けられた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>cargo clippy -- -D warnings</code> と <code>cargo test</code> がすべて通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">引数を渡しているのにコマンドがエラーになる</p>
+              <p>Rust の引数名が <code>user_name</code> なら、<code>invoke</code> では <code>{ userName: ... }</code> と camelCase のキーで渡します。<code>user_name</code> のまま渡すとエラーになることを、ステップ 1 のテストで確かめました。一方、コマンド名は変換されないので、<code>invoke("add_todo")</code> のように snake_case のまま書きます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">コマンドを追加したのに呼び出せない</p>
+              <p><code>generate_handler!</code> への登録漏れを疑います。登録を忘れてもコンパイルは通るので、<code>invoke</code> を実行するまで気づけません（エラーは <code>Command add_todo not found</code> という文字列の reject です）。テスト用の <code>make_full_app</code> にも同じ一覧があるので、両方に追加します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">フロントエンドで構造体のプロパティが <code>undefined</code> になる</p>
+              <p>構造体に <code>#[serde(rename_all = "camelCase")]</code> が付いているかを確認します。付いていないと、<code>created_at</code> は <code>created_at</code> のまま JSON になり、TypeScript の型で <code>createdAt</code> と書いていても値は届きません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Result</code> を返すコマンドがコンパイルできない</p>
+              <p><code>Err</code> の型が <code>serde::Serialize</code> を実装しているかを確認します。<code>thiserror::Error</code> の derive だけでは足りないので、<code>impl Serialize for AppError</code> を書きます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>AppHandle</code> を受け取るコマンドで、テストだけコンパイルエラーになる</p>
+              <p><code>AppHandle</code> の型引数を省略すると既定のランタイムに固定され、<code>MockRuntime</code> を使うテストと合わなくなります。<code>async fn slow_task&lt;R: tauri::Runtime&gt;(app: tauri::AppHandle&lt;R&gt;)</code> のようにジェネリックにします。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>State</code> を使うなら <code>manage()</code> を忘れない</p>
+              <p><code>State&lt;'_, AppState&gt;</code> を引数に書いても、<code>Builder::manage()</code> で登録していなければ、呼び出した時点で reject されます（文言は <code>state not managed for field `state` on command ...</code>）。コンパイルは通るので注意しましょう。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>lock().unwrap()</code> は連鎖的にパニックすることがある</p>
+              <p>ロックを持ったスレッドがパニックすると <code>Mutex</code> は poisoned になり、以降の <code>lock().unwrap()</code> もパニックします。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>listen</code> は必ず解除する</p>
+              <p><code>listen()</code> が返す <code>unlisten</code> を <code>useEffect</code> のクリーンアップで呼ばないと、再マウントのたびにリスナーが増え、同じイベントを何度も処理します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">Rust の変更は反映に時間がかかる</p>
+              <p><code>tauri dev</code> 中に <code>src-tauri</code> のコードを保存すると、再コンパイルとアプリの再起動が走ります。反映まで数秒から数十秒かかり、<code>AppState</code> の中身もリセットされます。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>#[tauri::command]</code> と <code>generate_handler!</code> で Rust の関数をコマンドにし、フロントエンドから <code>invoke</code> で呼び出しました。
+        引数と戻り値は serde で JSON になるため、引数名は camelCase で渡し、構造体には <code>rename_all</code> を付けます。
+        さらに、<code>State</code> による状態の保持、<code>Result</code> と <code>AppError</code> によるエラー、<code>async</code> コマンドとイベントによる進捗の通知を実装し、IPC レベルのテストとユニットテストで確かめました。
+        次の項目では、Tauri のファイルシステム API とダイアログ API を使います。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>tauri/03-invoke</code> の <code>tauri/03-invoke/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../02-window-build/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">02: ウィンドウ設定とビルド</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">04: ファイルシステム API の利用</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
