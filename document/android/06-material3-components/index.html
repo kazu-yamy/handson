@@ -1,0 +1,1905 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06: Material3 の画面部品 | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">06</li>
+        </ol>
+        <h1 class="lesson-title">Material3 の画面部品</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 05 で <code>LazyColumn</code> と <code>Scaffold</code> の一覧を作った人</li>
+          <li class="lesson-meta__item">📋 前提: 05 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../05-material3-lazycolumn/index.html">05: Material3 と LazyColumn</a></li>
+          <li class="lesson-meta__item">🧩 版: Kotlin 2.4.20 / AGP 9.4.1 / Compose BOM 2026.09.00（Material3 1.4.0）</li>
+          <li class="lesson-meta__item">🌿 完成コード: ブランチ <code>android/06-material3-components</code></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>SwipeToDismissBox</code> でスワイプ削除を実装し、<code>key</code> と状態の保存の関係を説明できる</li>
+          <li><code>stickyHeader</code> と <code>FilterChip</code> で、セクション分けと絞り込みを実装できる</li>
+          <li><code>ModalBottomSheet</code> と <code>AlertDialog</code> を使い分けられる</li>
+          <li><code>@OptIn(ExperimentalMaterial3Api::class)</code> が必要な API を、ビルドで見分けられる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        05 では、Todo の一覧を <code>LazyColumn</code> に置き換え、<code>Scaffold</code> のスロットに「先頭へ」ボタンと「元に戻す」付きの Snackbar を置きました。
+        この項目では、その一覧に Material3 の部品を足して、操作を増やします。行を左へスワイプして削除できるようにし、一覧を「未完了」と「完了」のセクションに分けて絞り込みを付けます。最後に、追加用の入力欄をボトムシートへ移し、完了済みをまとめて消す前に確認ダイアログを出します。
+      </p>
+
+      <h3 id="components">この項目で使う部品</h3>
+      <p>この項目で使う部品と、<code>@OptIn(ExperimentalMaterial3Api::class)</code> が必要かどうかを示します。opt-in の要否は、<code>@OptIn</code> を外してビルドしたときのエラーで確かめました（Material3 1.4.0 / Compose Foundation 1.12.1）。</p>
+
+          <table>
+            <thead>
+            <tr><th>部品</th><th>役割</th><th>ステップ</th><th>opt-in</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>SwipeToDismissBox</code></td><td>行をスワイプして消す（Material3）</td><td>1</td><td>不要</td></tr>
+            <tr><td><code>Modifier.animateItem()</code></td><td>追加・削除で行を滑らかに動かす（Foundation）</td><td>1</td><td>不要</td></tr>
+            <tr><td><code>stickyHeader</code></td><td>スクロールしても上端に残るセクション見出し（Foundation）</td><td>2</td><td>不要</td></tr>
+            <tr><td><code>FilterChip</code></td><td>選択状態を持つ小さな絞り込みボタン（Material3）</td><td>2</td><td>不要</td></tr>
+            <tr><td><code>ModalBottomSheet</code></td><td>画面の下から出るシート（Material3）</td><td>3</td><td><strong>必要</strong></td></tr>
+            <tr><td><code>AlertDialog</code></td><td>確認のダイアログ（Material3）</td><td>3</td><td>不要</td></tr>
+            <tr><td><code>TopAppBar</code></td><td>画面上部のバー。03 から使っていて、ステップ 3 で削除ボタンを足す</td><td>3</td><td><strong>必要</strong>（03 から付けている）</td></tr>
+            </tbody>
+          </table>
+
+      <p>opt-in が必要なのは <code>TopAppBar</code> と <code>ModalBottomSheet</code> 系だけです。Foundation の <code>stickyHeader</code> と <code>animateItem()</code> では、<code>ExperimentalFoundationApi</code> の警告も出ません。</p>
+
+      <h3 id="what-we-build">この項目で作るもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>作るもの</th><th>主に変えるファイル</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>行を左へスワイプして削除する（<code>SwipeToDismissBox</code>・<code>animateItem</code>）</td><td><code>TodoListScreen.kt</code></td></tr>
+            <tr><td>2</td><td>「未完了」「完了」のセクション見出しと絞り込み（<code>stickyHeader</code>・<code>FilterChip</code>）</td><td><code>TodoFilter.kt</code>・<code>TodoListPage.kt</code>・<code>TodoListScreen.kt</code></td></tr>
+            <tr><td>3</td><td>追加用のボトムシートと、完了済みを消す前の確認ダイアログ（<code>ModalBottomSheet</code>・<code>AlertDialog</code>）</td><td><code>TodoListPage.kt</code>・<code>TodoListScreen.kt</code></td></tr>
+            <tr><td>4</td><td>完成状態のテスト結果を確かめ、エミュレータで操作する</td><td>なし</td></tr>
+            </tbody>
+          </table>
+
+      <p>ステップ 1〜3 で UI テストを 1 ファイルずつ足します。UI テストは 05 の 37 件から 53 件に増えます。ステップ 2・3 では画面の並びと入力欄の場所が変わるので、05 までのテストの一部を、意図を変えずに直します。</p>
+
+
+      <h3 id="versions">使用バージョン</h3>
+      <p>01〜05 と同じく、Kotlin 2.4.20 / AGP 9.4.1 / Gradle 9.6.0 / Compose BOM 2026.09.00 で作成しています。Compose の各ライブラリは BOM が決めるバージョン（Compose UI・Foundation 1.12.1、Material3 1.4.0、material-icons-core 1.7.8）のままです。この項目で使うアイコン（<code>Icons.Default.Delete</code> など）も、03 で追加済みの material-icons-core のものです。ライブラリとプラグインの追加はありません。バージョンは執筆時点（2026年10月）の最新安定版です。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Android Studio の画面について</p>
+              <p>Android Studio の画面の名称や配置はバージョンで変わります。画面の名称は Rabbit 1（2026.2.1.8）同梱のリソースで確認して書いています。本文のコードとコマンドの出力は、ターミナル（Gradle・<code>adb</code>）で実際に動かして確認したものです。Preview パネルの表示は確認していません。Preview パネルの切り替えボタンや表示が本文と違う場合は、同じ意味の項目を選んでください。</p>
+            </div>
+          </div>
+
+      <h2 id="prepare">準備</h2>
+      <p>05 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 06 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid05&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid06&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid05&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid06&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // Step 1: 変数・関数・文字列テンプレート・when 式</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid05&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid06&quot;</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できる。型は推論されるが、ここでは Int のまま</span><span class="diff-line">  var counter = 0</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          counter = 0</span><span class="diff-line">          assertEquals(1, incrementCounter())</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid05&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid06&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>パッケージ名（<code>com.handson.android01</code>）は 05 と同じく変えません。ビルド構成（依存・プラグイン）の変更もありません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">BUILD SUCCESSFUL in 8s</span><span class="terminal__line">38 actionable tasks: 38 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+      <p><code>BUILD SUCCESSFUL</code> と表示されれば準備は完了です。かかる時間は、Gradle デーモンが起動済みかどうかで変わります（上の結果はデーモンが起動済みの状態のもの）。エミュレータも 05 と同じ手順で起動しておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">emulator-5554	device</span></pre>
+</div>
+
+      <p><code>adb devices</code> に <code>emulator-5554	device</code> と表示されれば、テストとアプリの実行に使えます。</p>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">スワイプで削除する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>行を左へスワイプしても削除できるようにします。使う <code>SwipeToDismissBox</code> が opt-in の必要な API かどうかを、先に確かめておきます。スワイプのコード（この後の差分）を入れた状態で、<code>TodoListScreen</code> の <code>@OptIn(ExperimentalMaterial3Api::class)</code> を一時的に外してビルドしました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">e: TodoListScreen.kt:82:13 This material API is experimental and is likely to change or to be removed in the future.</span><span class="terminal__line">BUILD FAILED in 1s</span></pre>
+</div>
+
+          <p>エラーは 1 件だけで、<code>TopAppBar(</code> の行です。<code>@OptIn</code> の 1 行を外した状態でビルドしているので、行番号は元のファイルより 1 つ小さく出ます。ほかの API は、Material3 1.4.0 / Foundation 1.12.1 では opt-in なしで使えます。<code>SwipeToDismissBox</code>・<code>rememberSwipeToDismissBoxState</code>・<code>Modifier.animateItem()</code> が該当します。05 で使った FAB と <code>SnackbarHost</code> も同じです。確かめたら <code>@OptIn</code> を元に戻します。</p>
+          <p><code>items</code> の中の行を <code>SwipeToDismissBox</code> で包みます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.background</span><span class="diff-line">  import androidx.compose.foundation.layout.Arrangement</span><span class="diff-line diff-line--add">+ import androidx.compose.foundation.layout.Box</span><span class="diff-line">  import androidx.compose.foundation.layout.Column</span><span class="diff-line">  import androidx.compose.foundation.layout.PaddingValues</span><span class="diff-line">  import androidx.compose.foundation.layout.Row</span><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.foundation.text.input.rememberTextFieldState</span><span class="diff-line">  import androidx.compose.material.icons.Icons</span><span class="diff-line">  import androidx.compose.material.icons.filled.Add</span><span class="diff-line diff-line--add">+ import androidx.compose.material.icons.filled.Delete</span><span class="diff-line">  import androidx.compose.material.icons.filled.KeyboardArrowUp</span><span class="diff-line">  import androidx.compose.material3.Card</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.CardDefaults</span><span class="diff-line">  import androidx.compose.material3.ExperimentalMaterial3Api</span><span class="diff-line">  import androidx.compose.material3.ExtendedFloatingActionButton</span><span class="diff-line">  import androidx.compose.material3.Icon</span><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.material3.SmallFloatingActionButton</span><span class="diff-line">  import androidx.compose.material3.SnackbarHost</span><span class="diff-line">  import androidx.compose.material3.SnackbarHostState</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.SwipeToDismissBox</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.SwipeToDismissBoxValue</span><span class="diff-line">  import androidx.compose.material3.Text</span><span class="diff-line">  import androidx.compose.material3.TextButton</span><span class="diff-line">  import androidx.compose.material3.TopAppBar</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.rememberSwipeToDismissBoxState</span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line">  import androidx.compose.runtime.derivedStateOf</span><span class="diff-line">  import androidx.compose.runtime.getValue</span><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.runtime.rememberCoroutineScope</span><span class="diff-line">  import androidx.compose.ui.Alignment</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.draw.clip</span><span class="diff-line">  import androidx.compose.ui.platform.testTag</span><span class="diff-line">  import androidx.compose.ui.tooling.preview.Preview</span><span class="diff-line">  import androidx.compose.ui.unit.dp</span><span class="diff-line">  ...</span><span class="diff-line">                  verticalArrangement = Arrangement.spacedBy(8.dp),</span><span class="diff-line">              ) {</span><span class="diff-line">                  items(todos, key = { it.id }) { todo -&gt;</span><span class="diff-line diff-line--remove">-                     Card(modifier = Modifier.fillMaxWidth()) {</span><span class="diff-line diff-line--remove">-                         TodoRow(</span><span class="diff-line diff-line--remove">-                             todo = todo,</span><span class="diff-line diff-line--remove">-                             onToggle = { done -&gt; onToggle(todo.id, done) },</span><span class="diff-line diff-line--remove">-                             onDelete = { onDelete(todo) },</span><span class="diff-line diff-line--remove">-                         )</span><span class="diff-line diff-line--add">+                     // 行ごとに、スワイプの状態を持つ。key があるので、行を消しても他の行の状態とは混ざらない</span><span class="diff-line diff-line--add">+                     val dismissState = rememberSwipeToDismissBoxState()</span><span class="diff-line diff-line--add">+                     val rowScope = rememberCoroutineScope()</span><span class="diff-line diff-line--add">+                     SwipeToDismissBox(</span><span class="diff-line diff-line--add">+                         state = dismissState,</span><span class="diff-line diff-line--add">+                         // animateItem: 追加・削除・並べ替えで、行が滑らかに動く（LazyItemScope の拡張）</span><span class="diff-line diff-line--add">+                         modifier = Modifier.animateItem(),</span><span class="diff-line diff-line--add">+                         // 右へのスワイプは使わず、左へのスワイプ（EndToStart）だけで削除する</span><span class="diff-line diff-line--add">+                         enableDismissFromStartToEnd = false,</span><span class="diff-line diff-line--add">+                         // 確定（しきい値を超えて動きが止まった）ときに呼ばれる。削除は状態の持ち主に任せる。</span><span class="diff-line diff-line--add">+                         // rememberSwipeToDismissBoxState は rememberSaveable なので、「消えた」状態が同じ key で保存される。</span><span class="diff-line diff-line--add">+                         // そのままだと「元に戻す」で戻した行が、再び消えた状態で復元され、すぐ削除し直される。</span><span class="diff-line diff-line--add">+                         // 先に snapTo で状態を Settled に戻してから削除する</span><span class="diff-line diff-line--add">+                         onDismiss = {</span><span class="diff-line diff-line--add">+                             rowScope.launch {</span><span class="diff-line diff-line--add">+                                 dismissState.snapTo(SwipeToDismissBoxValue.Settled)</span><span class="diff-line diff-line--add">+                                 onDelete(todo)</span><span class="diff-line diff-line--add">+                             }</span><span class="diff-line diff-line--add">+                         },</span><span class="diff-line diff-line--add">+                         backgroundContent = {</span><span class="diff-line diff-line--add">+                             // 動かしている間だけ、赤い背景とゴミ箱を出す</span><span class="diff-line diff-line--add">+                             if (dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart) {</span><span class="diff-line diff-line--add">+                                 Box(</span><span class="diff-line diff-line--add">+                                     modifier = Modifier</span><span class="diff-line diff-line--add">+                                         .fillMaxSize()</span><span class="diff-line diff-line--add">+                                         .clip(CardDefaults.shape)</span><span class="diff-line diff-line--add">+                                         .background(MaterialTheme.colorScheme.errorContainer)</span><span class="diff-line diff-line--add">+                                         .padding(end = 24.dp),</span><span class="diff-line diff-line--add">+                                     contentAlignment = Alignment.CenterEnd,</span><span class="diff-line diff-line--add">+                                 ) {</span><span class="diff-line diff-line--add">+                                     Icon(</span><span class="diff-line diff-line--add">+                                         Icons.Default.Delete,</span><span class="diff-line diff-line--add">+                                         contentDescription = null,</span><span class="diff-line diff-line--add">+                                         tint = MaterialTheme.colorScheme.onErrorContainer,</span><span class="diff-line diff-line--add">+                                     )</span><span class="diff-line diff-line--add">+                                 }</span><span class="diff-line diff-line--add">+                             }</span><span class="diff-line diff-line--add">+                         },</span><span class="diff-line diff-line--add">+                     ) {</span><span class="diff-line diff-line--add">+                         Card(modifier = Modifier.fillMaxWidth()) {</span><span class="diff-line diff-line--add">+                             TodoRow(</span><span class="diff-line diff-line--add">+                                 todo = todo,</span><span class="diff-line diff-line--add">+                                 onToggle = { done -&gt; onToggle(todo.id, done) },</span><span class="diff-line diff-line--add">+                                 onDelete = { onDelete(todo) },</span><span class="diff-line diff-line--add">+                             )</span><span class="diff-line diff-line--add">+                         }</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <ul>
+            <li><code>rememberSwipeToDismissBoxState()</code>: 行ごとのスワイプの状態です。<code>items</code> の中で呼ぶので、行ごとに 1 つずつ作られます。</li>
+            <li><code>enableDismissFromStartToEnd = false</code>: 右へのスワイプを無効にし、左へのスワイプ（<code>EndToStart</code>）だけで削除します。</li>
+            <li><code>onDismiss</code>: スワイプがしきい値を超え、行が消えた位置で止まったときに呼ばれます。削除そのものは、05 のステップ 3 で作った <code>onDelete</code> に任せます。先に <code>snapTo</code> を呼ぶ理由は、下の注意で説明します。</li>
+            <li><code>backgroundContent</code>: スワイプ中に行の後ろに見える部分です。左へ動かしている間（<code>dismissDirection == EndToStart</code>）だけ、<code>Card</code> と同じ角丸で <code>errorContainer</code> 色の背景とゴミ箱を出します。止まっている間も出すと、<code>Card</code> の角から背景色がはみ出します。</li>
+            <li><code>Modifier.animateItem()</code>: 行の追加・削除で、ほかの行が滑らかに動きます。<code>items</code> の中（<code>LazyItemScope</code>）でだけ使える Modifier です。</li>
+          </ul>
+          <p>05 のステップ 3 で付けた削除ボタンは残します。スワイプが使いにくい人でも、ボタンで同じ削除ができます。<code>onDismiss</code> 引数は Material3 1.4.0 の <code>SwipeToDismissBox</code> にあるものです。以前の書き方の <code>confirmValueChange</code> 引数付きの <code>rememberSwipeToDismissBoxState</code> は、1.4.0 では非推奨（<code>@Deprecated</code>）なので使いません。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">「元に戻す」で戻した行が、すぐまた消える</p>
+              <p>最初は <code>onDismiss = { onDelete(todo) }</code> とだけ書きました。<code>rememberSwipeToDismissBoxState</code> は内部で <code>rememberSaveable</code> を使うので、「消えた」状態が <code>LazyColumn</code> の <code>key</code>（Todo の <code>id</code>）ごとに保存されます。「元に戻す」で同じ <code>id</code> の行を戻すと、保存されていた「消えた」状態も戻ります。すると <code>onDismiss</code> がもう一度呼ばれ、戻した直後に削除し直されました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">テスト結果の失敗メッセージ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">TodoSwipeTest.swipeLeft_thenUndo_restoresRow</span><span class="terminal__line">java.lang.AssertionError: Failed to assert count of nodes.</span><span class="terminal__line">Reason: Expected &#x27;3&#x27; nodes but found &#x27;2&#x27; nodes that satisfy: (TestTag = &#x27;todo_row&#x27;)</span></pre>
+</div>
+<p><code>onDismiss</code> の中で、先に <code>dismissState.snapTo(SwipeToDismissBoxValue.Settled)</code> で状態を「動いていない」に戻してから <code>onDelete</code> を呼びます。こうすると保存される状態は <code>Settled</code> になり、戻した行は普通に表示されます。<code>snapTo</code> は suspend 関数なので、行ごとの <code>rememberCoroutineScope()</code> で <code>launch</code> します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>key</code> を外すと、全部の行が次々に消える</p>
+              <p><code>items(todos) { ... }</code> のように <code>key</code> を渡さないと、行の状態は位置に結び付きます。<code>snapTo</code> を入れる前の版で先頭の行をスワイプすると、2 番目の行が先頭の位置に来て「消えた」状態を引き継ぎ、それがまた次の行に引き継がれて、全部の行が消えました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">テスト結果の失敗メッセージ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">TodoSwipeTest.swipeLeft_deletesRowAndShowsSnackbar</span><span class="terminal__line">Failed to assert count of nodes.</span><span class="terminal__line">Reason: Expected &#x27;2&#x27; nodes but could not find any node that satisfies: (TestTag = &#x27;todo_row&#x27;)</span></pre>
+</div>
+<p><code>snapTo</code> を入れた後は、<code>key</code> が無くてもこのテストは通りました。それでも <code>key</code> は付けておきます。並べ替え・挿入・削除のときに、行と状態（チェック・スワイプ・<code>animateItem</code> のアニメーション）を <code>id</code> で正しく対応付けるためです。</p>
+            </div>
+          </div>
+
+          <p>UI テストを足します。<code>androidTest/.../ui/screens/TodoSwipeTest.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoSwipeTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeLeft
+import androidx.compose.ui.test.swipeRight
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+// 行を左へスワイプして削除する（SwipeToDismissBox）
+@RunWith(AndroidJUnit4::class)
+class TodoSwipeTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    private fun setPage() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListPage(initialTodos = demoTodoList)
+            }
+        }
+    }
+
+    @Test
+    fun swipeLeft_deletesRowAndShowsSnackbar() {
+        setPage()
+
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;)[0].performTouchInput { swipeLeft() }
+
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(2)
+        composeTestRule.onNodeWithText(&quot;「learn kotlin basics」を削除しました&quot;).assertIsDisplayed()
+        // 次の行が（スワイプの状態を引き継がず）普通に見えている
+        composeTestRule.onNodeWithText(&quot;Build Compose Screen&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun swipeRight_doesNotDelete() {
+        setPage()
+
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;)[0].performTouchInput { swipeRight() }
+
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(3)
+    }
+
+    @Test
+    fun swipeLeft_thenUndo_restoresRow() {
+        setPage()
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;)[0].performTouchInput { swipeLeft() }
+
+        composeTestRule.onNodeWithText(&quot;元に戻す&quot;).performClick()
+
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(3)
+        // 戻った行は、スワイプで消えた状態ではなく、普通に見えている
+        composeTestRule.onNodeWithText(&quot;Learn Kotlin Basics&quot;).assertIsDisplayed()
+    }
+}</code></pre>
+</div>
+
+          <p><code>performTouchInput { swipeLeft() }</code> は、ノードの右端から左端まで指を動かす操作です。<code>todo_row</code>（<code>SwipeToDismissBox</code> の中の行）に対して行っても、外側の <code>SwipeToDismissBox</code> がジェスチャーを受け取ります。<code>swipeLeft_thenUndo_restoresRow</code> が、上の注意の不具合を防ぐテストです。</p>
+          <p>ビルド・lint・ユニットテスト・UI テストをまとめて実行します。エミュレータは起動したままにしておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 5s</span><span class="terminal__line">86 actionable tasks: 48 executed, 38 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+          <p>UI テストは 40 件（05 の 37 件と <code>TodoSwipeTest</code> の 3 件）、ユニットテストは 42 件で、すべて成功します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>テストが <code>BUILD SUCCESSFUL</code> で終われば OK です。アプリでは、行を左へスワイプすると赤い背景とゴミ箱が見え、離すと行が消えて Snackbar が出ます。右へのスワイプでは消えないこと、「元に戻す」で戻した行がそのまま残ることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">セクション見出しと絞り込み</h3>
+        </div>
+        <div class="step__body">
+
+          <p>一覧を「未完了」と「完了」のセクションに分けます。スクロール中も、セクションの見出しは画面の上端に残します。04 から置いていた「フィルタ」「閉じる」のダミーのボタンは、<code>FilterChip</code> の絞り込みに置き換えます。</p>
+          <p>ここでも先に opt-in の要否を確かめました。<code>stickyHeader</code>（Foundation）と <code>FilterChip</code>（Material3）を使った状態で <code>@OptIn</code> を外してビルドした結果です。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">e: TodoListScreen.kt:85:13 This material API is experimental and is likely to change or to be removed in the future.</span><span class="terminal__line">BUILD FAILED in 1s</span></pre>
+</div>
+
+          <p>エラーは <code>TopAppBar(</code> の行の 1 件だけです。<code>stickyHeader</code> と <code>FilterChip</code> はどちらも opt-in 不要です。<code>ExperimentalFoundationApi</code> の警告も出ません。</p>
+          <p>絞り込みの選択肢を enum にまとめます。<code>ui/screens/TodoFilter.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoFilter.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import com.handson.android01.kotlin.Todo
+
+// 一覧の絞り込み。enum は Serializable なので、rememberSaveable にそのまま入れられる
+enum class TodoFilter(val label: String) {
+    All(&quot;すべて&quot;),
+    Active(&quot;未完了&quot;),
+    Done(&quot;完了&quot;),
+}
+
+// 絞り込みの結果に、そのセクションの Todo が含まれるか
+fun TodoFilter.showsActive(): Boolean = this != TodoFilter.Done
+fun TodoFilter.showsDone(): Boolean = this != TodoFilter.Active
+
+// 一覧が空のときに出す文言
+fun TodoFilter.emptyMessage(): String = when (this) {
+    TodoFilter.All -&gt; &quot;Todo はありません&quot;
+    TodoFilter.Active -&gt; &quot;未完了の Todo はありません&quot;
+    TodoFilter.Done -&gt; &quot;完了した Todo はありません&quot;
+}
+
+fun List&lt;Todo&gt;.activeTodos(): List&lt;Todo&gt; = filter { !it.done }
+fun List&lt;Todo&gt;.doneTodos(): List&lt;Todo&gt; = filter { it.done }</code></pre>
+</div>
+
+          <p>enum は <code>Serializable</code> なので、<code>rememberSaveable</code> にそのまま入れられます。選択中の絞り込みは、状態の持ち主の <code>TodoListPage</code> が持ちます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.material3.SnackbarHostState</span><span class="diff-line">  import androidx.compose.material3.SnackbarResult</span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.getValue</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.mutableStateOf</span><span class="diff-line">  import androidx.compose.runtime.remember</span><span class="diff-line">  import androidx.compose.runtime.rememberCoroutineScope</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.setValue</span><span class="diff-line">  import androidx.compose.runtime.saveable.rememberSaveable</span><span class="diff-line">  import androidx.compose.runtime.toMutableStateList</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line">  ...</span><span class="diff-line">      // rememberTextFieldState: 入力中の文字列の状態を作る。画面回転後も入力の内容は残る</span><span class="diff-line">      val inputState = rememberTextFieldState()</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // 絞り込みの選択。画面回転のあとも残すので rememberSaveable（enum は Serializable なのでそのまま保存できる）</span><span class="diff-line diff-line--add">+     var filter by rememberSaveable { mutableStateOf(TodoFilter.All) }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      // Snackbar の状態と、イベントから呼ぶためのコルーチンスコープ</span><span class="diff-line">      val snackbarHostState = remember { SnackbarHostState() }</span><span class="diff-line">      val scope = rememberCoroutineScope()</span><span class="diff-line">  ...</span><span class="diff-line">      TodoListScreen(</span><span class="diff-line">          todos = todos,</span><span class="diff-line">          snackbarHostState = snackbarHostState,</span><span class="diff-line diff-line--add">+         filter = filter,</span><span class="diff-line diff-line--add">+         onFilterChange = { filter = it },</span><span class="diff-line">          onDelete = { todo -&gt;</span><span class="diff-line">              val index = todos.indexOf(todo)</span><span class="diff-line">              if (index &gt;= 0) {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>TodoListScreen.kt</code> は変更が多いので、全文を示します。スワイプ付きの行は、2 つのセクションで同じものを使うため <code>SwipeableTodoRow</code> に切り出しました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.ui.components.CountBadge
+import com.handson.android01.ui.components.TodoInput
+import com.handson.android01.ui.components.TodoRow
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import kotlinx.coroutines.launch
+
+// TopAppBar は Material3 1.4 時点で実験的 API。使うには @OptIn が必要（未指定だとコンパイルエラー）
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TodoListScreen(
+    todos: List&lt;Todo&gt;,
+    inputState: TextFieldState,
+    onToggle: (id: Int, done: Boolean) -&gt; Unit,
+    onAddClick: () -&gt; Unit,
+    modifier: Modifier = Modifier,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+    onDelete: (Todo) -&gt; Unit = {},
+    onFabClick: () -&gt; Unit = {},
+    filter: TodoFilter = TodoFilter.All,
+    onFilterChange: (TodoFilter) -&gt; Unit = {},
+) {
+    // rememberLazyListState: スクロール位置を覚える。LazyColumn に渡すと、位置を読んだり動かしたりできる
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    // derivedStateOf: firstVisibleItemIndex はスクロールのたびに変わるが、知りたいのは「先頭から離れたか」だけ。
+    // 結果の Boolean が変わったときにだけ、これを読む側が再コンポーズされる
+    val showToTop by remember { derivedStateOf { listState.firstVisibleItemIndex &gt; 0 } }
+
+    // Scaffold: TopAppBar・本文・FAB などの置き場所を用意する Material3 の土台。
+    // 本文には innerPadding を必ず適用し、TopAppBar の下に隠れないようにする
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                title = { Text(&quot;Todo&quot;) },
+                actions = { CountBadge(count = todos.count { !it.done }) },
+            )
+        },
+        // snackbarHost: Snackbar の表示場所。状態（SnackbarHostState）は呼び出し側が持ち、showSnackbar で表示を依頼する
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        // floatingActionButton: 右下に浮かぶボタンの置き場所。2 つ並べたいときは Column に入れる
+        floatingActionButton = {
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (showToTop) {
+                    SmallFloatingActionButton(
+                        onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                        modifier = Modifier.testTag(&quot;scroll_to_top&quot;),
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = &quot;先頭へ&quot;)
+                    }
+                }
+                ExtendedFloatingActionButton(
+                    onClick = onFabClick,
+                    icon = { Icon(Icons.Default.Add, contentDescription = &quot;追加&quot;) },
+                    text = { Text(&quot;追加&quot;) },
+                    modifier = Modifier.testTag(&quot;fab_add&quot;),
+                )
+            }
+        },
+    ) { innerPadding -&gt;
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+        ) {
+            // derivedStateOf: todos から計算する完了件数を State として覚える。remember(todos) のキーは、todos の参照が変わったら計算式を作り直すため
+            val doneCount by remember(todos) { derivedStateOf { todos.count { it.done } } }
+            Text(
+                text = &quot;${todos.size} 件中 $doneCount 件完了&quot;,
+                modifier = Modifier.padding(16.dp),
+                style = MaterialTheme.typography.titleLarge,
+            )
+
+            // 入力欄と追加ボタン。入力の文字列は状態の持ち主（TodoListPage）が持つ
+            TodoInput(state = inputState, onAddClick = onAddClick)
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // FilterChip: 選択中かどうかを持つ小さな絞り込みボタン。選択は呼び出し側の状態（filter）が決める
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TodoFilter.entries.forEach { option -&gt;
+                    FilterChip(
+                        selected = filter == option,
+                        onClick = { onFilterChange(option) },
+                        label = { Text(option.label) },
+                        modifier = Modifier.testTag(&quot;filter_${option.name}&quot;),
+                    )
+                }
+            }
+
+            val activeTodos = todos.activeTodos()
+            val doneTodos = todos.doneTodos()
+            val visibleCount =
+                (if (filter.showsActive()) activeTodos.size else 0) + (if (filter.showsDone()) doneTodos.size else 0)
+
+            if (visibleCount == 0) {
+                // 空状態: 何も無いことと、その理由を伝える
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .testTag(&quot;empty_state&quot;),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = filter.emptyMessage(),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                return@Column
+            }
+
+            // LazyColumn: 画面に見えている行だけを compose する遅延リスト。残りの高さを weight(1f) で使い切る。
+            // 入力欄を下に置くと、キーボードが出たとき画面全体が押し上げられるので、リストを最後に置く
+            // key に id を渡すと、並べ替えや削除のあとも、行と状態の対応が id で保たれる
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(&quot;todo_list&quot;),
+                // 下の余白は、FAB が最後の行に重なって押せなくならないように広げる
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 88.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // stickyHeader: スクロールしても、次のセクションが来るまで画面の上端に貼り付く見出し。
+                // 見出しにも、行と重ならない key を付ける（Int の id と区別するため文字列にする）
+                if (filter.showsActive() &amp;&amp; activeTodos.isNotEmpty()) {
+                    stickyHeader(key = &quot;header_active&quot;) { SectionHeader(&quot;未完了&quot;, Modifier.testTag(&quot;header_active&quot;)) }
+                    items(activeTodos, key = { it.id }) { todo -&gt;
+                        SwipeableTodoRow(todo, onToggle, onDelete, Modifier.animateItem())
+                    }
+                }
+                if (filter.showsDone() &amp;&amp; doneTodos.isNotEmpty()) {
+                    stickyHeader(key = &quot;header_done&quot;) { SectionHeader(&quot;完了&quot;, Modifier.testTag(&quot;header_done&quot;)) }
+                    items(doneTodos, key = { it.id }) { todo -&gt;
+                        SwipeableTodoRow(todo, onToggle, onDelete, Modifier.animateItem())
+                    }
+                }
+            }
+        }
+    }
+}
+
+// 貼り付く見出し。背景を塗らないと、後ろを通る行が透けて見える
+@Composable
+private fun SectionHeader(title: String, modifier: Modifier = Modifier) {
+    Text(
+        text = title,
+        modifier = modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(vertical = 8.dp),
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+    )
+}
+
+// 左へスワイプして削除できる行。LazyItemScope の animateItem は、呼び出し側から modifier で受け取る
+@Composable
+private fun SwipeableTodoRow(
+    todo: Todo,
+    onToggle: (id: Int, done: Boolean) -&gt; Unit,
+    onDelete: (Todo) -&gt; Unit,
+    modifier: Modifier = Modifier,
+) {
+    // 行ごとに、スワイプの状態を持つ。key があるので、行を消しても他の行の状態とは混ざらない
+    val dismissState = rememberSwipeToDismissBoxState()
+    val rowScope = rememberCoroutineScope()
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = modifier,
+        // 右へのスワイプは使わず、左へのスワイプ（EndToStart）だけで削除する
+        enableDismissFromStartToEnd = false,
+        // 確定（しきい値を超えて動きが止まった）ときに呼ばれる。削除は状態の持ち主に任せる。
+        // rememberSwipeToDismissBoxState は rememberSaveable なので、「消えた」状態が同じ key で保存される。
+        // そのままだと「元に戻す」で戻した行が、再び消えた状態で復元され、すぐ削除し直される。
+        // 先に snapTo で状態を Settled に戻してから削除する
+        onDismiss = {
+            rowScope.launch {
+                dismissState.snapTo(SwipeToDismissBoxValue.Settled)
+                onDelete(todo)
+            }
+        },
+        backgroundContent = {
+            // 動かしている間だけ、赤い背景とゴミ箱を出す
+            if (dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CardDefaults.shape)
+                        .background(MaterialTheme.colorScheme.errorContainer)
+                        .padding(end = 24.dp),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+        },
+    ) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            TodoRow(
+                todo = todo,
+                onToggle = { done -&gt; onToggle(todo.id, done) },
+                onDelete = { onDelete(todo) },
+            )
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun TodoListScreenPreview() {
+    HandsonAndroid01Theme {
+        TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>FilterChip</code>: <code>selected</code> に選択中かどうかを渡します。チップ自身は選択状態を持たず、押されたら <code>onFilterChange</code> で親に知らせます（04 の State hoisting と同じ形）。</li>
+            <li><code>stickyHeader(key = &quot;header_active&quot;) { ... }</code>: スクロールしても、次の見出しが来るまで画面の上端に貼り付く見出しです。行の <code>key</code> は Int の <code>id</code> なので、重ならないよう見出しの <code>key</code> は文字列にしています。行の無いセクションは、見出しごと出しません。</li>
+            <li><code>SectionHeader</code> は <code>background(MaterialTheme.colorScheme.surface)</code> で背景を塗っています。塗らないと、見出しの後ろを通る行が透けて見えます。</li>
+            <li>表示する行が 0 件のときは、<code>LazyColumn</code> の代わりに空状態（アイコンと「完了した Todo はありません」などの文言）を出し、<code>return@Column</code> で残りを描きません。</li>
+            <li><code>Modifier.animateItem()</code> は <code>LazyItemScope</code> の拡張なので、<code>SwipeableTodoRow</code> の中では呼べません。呼び出し側（<code>items</code> の中）で作り、<code>modifier</code> 引数で渡します。</li>
+          </ul>
+
+          <h4>05 までのテストを直す</h4>
+          <p>一覧は「未完了 → 完了」の順で並びます。また「完了」という文字が、見出しとチップにも出ます。そのため、05 までとステップ 1 で書いたテストの一部が失敗します。たとえば <code>TodoListScreenTest.doneStatus_appearsOncePerDoneTodo</code> は、次のメッセージで失敗しました。</p>
+          <p><code>Expected &#x27;2&#x27; nodes but found &#x27;4&#x27; nodes that satisfy: (Text + InputText + EditableText contains &#x27;完了&#x27; (ignoreCase: false))</code></p>
+          <p>テストの意図は変えずに、探し方と位置を直します。</p>
+
+          <table>
+            <thead>
+            <tr><th>テスト</th><th>失敗した理由</th><th>直し方</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>TodoListScreenTest</code></td><td>「完了」「未完了」が見出しとチップにもある</td><td><code>hasAnyAncestor(hasTestTag(&quot;todo_row&quot;))</code> で、行の中の文字だけを数える</td></tr>
+            <tr><td><code>TodoListPageTest</code>・<code>TodoListPageRestorationTest</code></td><td>未完了の行が 2 番目から先頭に移った</td><td>チェックボックスの番号 <code>[1]</code> → <code>[0]</code> など</td></tr>
+            <tr><td><code>TodoScrollToTopTest</code></td><td>先頭の行が <code>Task 1</code>（完了）から未完了の <code>Task 2</code> に変わった</td><td>探す文字を変える</td></tr>
+            <tr><td><code>TodoLazyListTest</code></td><td>一覧の番号に見出しも 1 つと数えられる</td><td>500 番目は未完了の 499 番目の <code>Task 750</code></td></tr>
+            <tr><td><code>TodoSnackbarTest</code>・<code>TodoSwipeTest</code></td><td>先頭の行が <code>build compose screen</code> に変わった</td><td>Snackbar の文言と、確かめる行を変える</td></tr>
+            </tbody>
+          </table>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListScreenTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.assertCountEquals</span><span class="diff-line">  import androidx.compose.ui.test.assertIsDisplayed</span><span class="diff-line">  import androidx.compose.ui.test.assertIsNotEnabled</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.hasAnyAncestor</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.hasTestTag</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.test.hasText</span><span class="diff-line">  import androidx.compose.ui.test.junit4.v2.createComposeRule</span><span class="diff-line">  import androidx.compose.ui.test.onAllNodesWithTag</span><span class="diff-line">  import androidx.compose.ui.test.onAllNodesWithText</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun doneStatus_appearsOncePerDoneTodo() {</span><span class="diff-line diff-line--remove">-         // テキストの完全一致で数える。「未完了」は「完了」と一致しないので数えられない</span><span class="diff-line diff-line--add">+         // テキストの完全一致で数える。「未完了」は「完了」と一致しないので数えられない。</span><span class="diff-line diff-line--add">+         // 見出し（「未完了」「完了」）とフィルタのチップにも同じ文字があるので、行（todo_row）の中だけを数える</span><span class="diff-line">          composeTestRule.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line">                  TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         composeTestRule.onAllNodesWithText(&quot;完了&quot;).assertCountEquals(2)</span><span class="diff-line diff-line--remove">-         composeTestRule.onAllNodesWithText(&quot;未完了&quot;).assertCountEquals(1)</span><span class="diff-line diff-line--add">+         composeTestRule.onAllNodes(hasText(&quot;完了&quot;) and hasAnyAncestor(hasTestTag(&quot;todo_row&quot;))).assertCountEquals(2)</span><span class="diff-line diff-line--add">+         composeTestRule.onAllNodes(hasText(&quot;未完了&quot;) and hasAnyAncestor(hasTestTag(&quot;todo_row&quot;))).assertCountEquals(1)</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListPageTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          setPage()</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;3 件中 2 件完了&quot;).assertIsDisplayed()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         // 2 番目の行（未完了の &quot;build compose screen&quot;）のチェックボックスを押す</span><span class="diff-line diff-line--remove">-         composeTestRule.onAllNodes(isToggleable())[1].performClick()</span><span class="diff-line diff-line--add">+         // 一覧は「未完了」「完了」の順なので、先頭の行が未完了の &quot;build compose screen&quot;。そのチェックボックスを押す</span><span class="diff-line diff-line--add">+         composeTestRule.onAllNodes(isToggleable())[0].performClick()</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;追加&quot;).performClick()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         // 追加した行（4 番目のチェックボックス）は未完了で始まる</span><span class="diff-line diff-line--remove">-         composeTestRule.onAllNodes(isToggleable())[3].assertIsOff()</span><span class="diff-line diff-line--add">+         // 追加した行は未完了で始まる。未完了のセクションの 2 番目（全体の 2 番目のチェックボックス）に並ぶ</span><span class="diff-line diff-line--add">+         composeTestRule.onAllNodes(isToggleable())[1].assertIsOff()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         composeTestRule.onAllNodes(isToggleable())[3].performClick()</span><span class="diff-line diff-line--add">+         composeTestRule.onAllNodes(isToggleable())[1].performClick()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         // performClick の後は、テストが画面の再コンポーズ完了を待ってから検証する（waitForIdle の役割はこの後の説明）</span><span class="diff-line diff-line--add">+         // 完了にすると、行は「完了」のセクションの末尾（全体の 4 番目）へ移る</span><span class="diff-line">          composeTestRule.onAllNodes(isToggleable())[3].assertIsOn()</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;4 件中 3 件完了&quot;).assertIsDisplayed()</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      @Test</span><span class="diff-line">      fun summaryTitle_isStillDisplayedAfterInteractions() {</span><span class="diff-line">          setPage()</span><span class="diff-line diff-line--remove">-         composeTestRule.onAllNodes(isToggleable())[1].performClick()</span><span class="diff-line diff-line--add">+         composeTestRule.onAllNodes(isToggleable())[0].performClick()</span><span class="diff-line">          composeTestRule.waitForIdle()</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;Todo&quot;).assertTextEquals(&quot;Todo&quot;)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListPageRestorationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">                  TodoListPage(initialTodos = demoTodoList)</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line diff-line--remove">-         composeTestRule.onAllNodes(isToggleable())[1].performClick()</span><span class="diff-line diff-line--add">+         composeTestRule.onAllNodes(isToggleable())[0].performClick()</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;3 件中 3 件完了&quot;).assertIsDisplayed()</span><span class="diff-line">  </span><span class="diff-line">          // 画面回転と同じく、保存された状態から作り直す</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoScrollToTopTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;scroll_to_top&quot;).performClick()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         // animateScrollToItem(0) が終わると先頭の行が見え、ボタンは消える</span><span class="diff-line diff-line--remove">-         composeTestRule.onNodeWithText(&quot;Task 1&quot;).assertIsDisplayed()</span><span class="diff-line diff-line--add">+         // animateScrollToItem(0) が終わると先頭の行（未完了の最初、id 2）が見え、ボタンは消える</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithText(&quot;Task 2&quot;).assertIsDisplayed()</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;scroll_to_top&quot;).assertDoesNotExist()</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoLazyListTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      fun performScrollToIndex_showsTheItem() {</span><span class="diff-line">          setScreen(1000)</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+         // 一覧の 0 番目は見出し「未完了」、1 番目以降が未完了の行。500 番目は、未完了の行の 499 番目（0 始まり）で、</span><span class="diff-line diff-line--add">+         // 未完了は id が 2, 3, 5, 6, 8, 9, ... と並ぶので 499 番目は id 750 の &quot;Task 750&quot;</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;todo_list&quot;).performScrollToIndex(500)</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         composeTestRule.onNodeWithText(&quot;Task 501&quot;).assertIsDisplayed()</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithText(&quot;Task 750&quot;).assertIsDisplayed()</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoSnackbarTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          deleteFirstRow()</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(2)</span><span class="diff-line diff-line--remove">-         composeTestRule.onNodeWithText(&quot;「learn kotlin basics」を削除しました&quot;).assertIsDisplayed()</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithText(&quot;「build compose screen」を削除しました&quot;).assertIsDisplayed()</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;元に戻す&quot;).assertIsDisplayed()</span><span class="diff-line diff-line--remove">-         composeTestRule.onNodeWithText(&quot;2 件中 1 件完了&quot;).assertIsDisplayed()</span><span class="diff-line diff-line--add">+         // 削除したのは未完了の行なので、完了数は 2 のまま</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithText(&quot;2 件中 2 件完了&quot;).assertIsDisplayed()</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;元に戻す&quot;).performClick()</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(3)</span><span class="diff-line diff-line--remove">-         // 先頭に戻っている（末尾に追加されていない）</span><span class="diff-line diff-line--remove">-         composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;)[0].assert(hasAnyDescendant(hasText(&quot;Learn Kotlin Basics&quot;)))</span><span class="diff-line diff-line--add">+         // 一覧の先頭（未完了のセクションの先頭）に戻っている</span><span class="diff-line diff-line--add">+         composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;)[0].assert(hasAnyDescendant(hasText(&quot;Build Compose Screen&quot;)))</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;3 件中 2 件完了&quot;).assertIsDisplayed()</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoSwipeTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;)[0].performTouchInput { swipeLeft() }</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(2)</span><span class="diff-line diff-line--remove">-         composeTestRule.onNodeWithText(&quot;「learn kotlin basics」を削除しました&quot;).assertIsDisplayed()</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithText(&quot;「build compose screen」を削除しました&quot;).assertIsDisplayed()</span><span class="diff-line">          // 次の行が（スワイプの状態を引き継がず）普通に見えている</span><span class="diff-line diff-line--remove">-         composeTestRule.onNodeWithText(&quot;Build Compose Screen&quot;).assertIsDisplayed()</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithText(&quot;Learn Kotlin Basics&quot;).assertIsDisplayed()</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(3)</span><span class="diff-line">          // 戻った行は、スワイプで消えた状態ではなく、普通に見えている</span><span class="diff-line diff-line--remove">-         composeTestRule.onNodeWithText(&quot;Learn Kotlin Basics&quot;).assertIsDisplayed()</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithText(&quot;Build Compose Screen&quot;).assertIsDisplayed()</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>新しいテストを足します。<code>androidTest/.../ui/screens/TodoFilterTest.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoFilterTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+// セクション見出し・FilterChip での絞り込み・空状態
+@RunWith(AndroidJUnit4::class)
+class TodoFilterTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    private fun setPage(initial: List&lt;Todo&gt; = demoTodoList) {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListPage(initialTodos = initial)
+            }
+        }
+    }
+
+    @Test
+    fun allFilter_showsBothSections() {
+        setPage()
+
+        composeTestRule.onNodeWithTag(&quot;filter_All&quot;).assertIsSelected()
+        composeTestRule.onNodeWithTag(&quot;header_active&quot;).assertIsDisplayed()
+        composeTestRule.onNodeWithTag(&quot;header_done&quot;).assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(3)
+    }
+
+    @Test
+    fun activeFilter_showsOnlyActiveSection() {
+        setPage()
+
+        composeTestRule.onNodeWithTag(&quot;filter_Active&quot;).performClick()
+
+        composeTestRule.onNodeWithTag(&quot;filter_Active&quot;).assertIsSelected()
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(1)
+        composeTestRule.onNodeWithTag(&quot;header_active&quot;).assertIsDisplayed()
+        composeTestRule.onNodeWithTag(&quot;header_done&quot;).assertDoesNotExist()
+    }
+
+    @Test
+    fun doneFilter_showsOnlyDoneSection() {
+        setPage()
+
+        composeTestRule.onNodeWithTag(&quot;filter_Done&quot;).performClick()
+
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(2)
+        composeTestRule.onNodeWithTag(&quot;header_active&quot;).assertDoesNotExist()
+        composeTestRule.onNodeWithTag(&quot;header_done&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun emptyFilterResult_showsEmptyState() {
+        // 全部が未完了のとき、「完了」で絞り込むと空になる
+        setPage(listOf(Todo(1, &quot;only active&quot;)))
+
+        composeTestRule.onNodeWithTag(&quot;filter_Done&quot;).performClick()
+
+        composeTestRule.onNodeWithTag(&quot;empty_state&quot;).assertIsDisplayed()
+        composeTestRule.onNodeWithText(&quot;完了した Todo はありません&quot;).assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(0)
+    }
+
+    @Test
+    fun emptyList_showsEmptyState() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = emptyList(), inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;Todo はありません&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun selectedFilter_survivesRecreation() {
+        val tester = StateRestorationTester(composeTestRule)
+        tester.setContent {
+            HandsonAndroid01Theme {
+                TodoListPage(initialTodos = demoTodoList)
+            }
+        }
+        composeTestRule.onNodeWithTag(&quot;filter_Done&quot;).performClick()
+
+        // 画面回転と同じく、保存された状態から作り直す（フィルタは rememberSaveable）
+        tester.emulateSavedInstanceStateRestore()
+
+        composeTestRule.onNodeWithTag(&quot;filter_Done&quot;).assertIsSelected()
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(2)
+    }
+
+    @Test
+    fun stickyHeader_staysAtTopWhileScrolling() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodos(60), inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})
+            }
+        }
+
+        // 未完了のセクションの途中までスクロールしても、見出しは画面の上端に残る
+        composeTestRule.onNodeWithTag(&quot;todo_list&quot;).performScrollToIndex(15)
+
+        composeTestRule.onNodeWithTag(&quot;header_active&quot;).assertIsDisplayed()
+        composeTestRule.onNodeWithTag(&quot;header_done&quot;).assertDoesNotExist()
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li>チップの選択状態は <code>assertIsSelected()</code> で確かめます。</li>
+            <li><code>selectedFilter_survivesRecreation</code>: 04 で使った <code>StateRestorationTester</code> で、絞り込みが画面回転の後も残ることを確かめます。</li>
+            <li><code>stickyHeader_staysAtTopWhileScrolling</code>: 60 件のデータで 15 番目までスクロールしても、見出し「未完了」が表示されたままです。</li>
+          </ul>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 33s</span></pre>
+</div>
+
+          <p>UI テストは 47 件、ユニットテストは 42 件で、すべて成功します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>テストが <code>BUILD SUCCESSFUL</code> で終われば OK です。アプリでは見出し「未完了」「完了」が表示され、スクロール中も見出しが上端に残ります。チップの「未完了」「完了」で一覧が絞り込まれ、行が無いときは空状態の文言が出ることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">ボトムシートと確認ダイアログ</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、ダイアログ系の部品を使います。画面の中にあった入力欄を、FAB で開くボトムシートの中へ移します。トップバーには、完了済みの Todo をまとめて削除するボタンと、その確認ダイアログを足します。</p>
+          <p>ここで使う <code>ModalBottomSheet</code> は、opt-in が必要な API です。このステップのコードを入れた状態で <code>@OptIn</code> を外してビルドすると、次のエラーになります。3 件目以降も同じ文言なので、文言を <code>...</code> と省略して載せています。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">e: TodoListScreen.kt:97:13  This material API is experimental and is likely to change or to be removed in the future.</span><span class="terminal__line">e: TodoListScreen.kt:250:26 This material API is experimental and is likely to change or to be removed in the future.</span><span class="terminal__line">e: TodoListScreen.kt:254:28 ...</span><span class="terminal__line">e: TodoListScreen.kt:255:22 ...</span><span class="terminal__line">e: TodoListScreen.kt:258:9  ...</span><span class="terminal__line">e: TodoListScreen.kt:261:26 ...</span><span class="terminal__line">BUILD FAILED in 611ms</span></pre>
+</div>
+
+          <p>行番号は <code>@OptIn</code> の 1 行を外した状態のものなので、完成した <code>TodoListScreen.kt</code> では 1 行ずつ後ろにずれます。エラーの出た箇所と、使っている API は次のとおりです。</p>
+
+          <table>
+            <thead>
+            <tr><th>エラーの行</th><th>使っている API</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>97</td><td><code>TopAppBar(</code></td></tr>
+            <tr><td>250</td><td><code>rememberModalBottomSheetState(skipPartiallyExpanded = true)</code></td></tr>
+            <tr><td>254・255</td><td><code>sheetState.hide()</code>・<code>sheetState.isVisible</code></td></tr>
+            <tr><td>258・261</td><td><code>ModalBottomSheet(</code>・<code>sheetState = sheetState</code></td></tr>
+            </tbody>
+          </table>
+
+          <p><code>ModalBottomSheet</code>・<code>rememberModalBottomSheetState</code>・<code>SheetState</code> の <code>hide()</code> と <code>isVisible</code> は Material3 1.4.0 で実験的 API です。<code>AlertDialog</code> と <code>TextButton</code> はエラーに出ないので不要です。<code>TodoListScreen</code> には <code>TopAppBar</code> のための <code>@OptIn(ExperimentalMaterial3Api::class)</code> がすでに付いているので、それで足ります。</p>
+          <p><code>TodoListPage</code> に、シートの表示フラグと、完了済みを消す処理を足します。05 のステップ 3 で置いた仮の <code>onFabClick</code>（<code>new todo …</code> を 1 件足す処理）は、シートを開く処理に置き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      // rememberTextFieldState: 入力中の文字列の状態を作る。画面回転後も入力の内容は残る</span><span class="diff-line">      val inputState = rememberTextFieldState()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // 追加用ボトムシートの表示フラグ。回転しても開いたままにする</span><span class="diff-line diff-line--add">+     var showAddSheet by rememberSaveable { mutableStateOf(false) }</span><span class="diff-line">  </span><span class="diff-line">      // 絞り込みの選択。画面回転のあとも残すので rememberSaveable（enum は Serializable なのでそのまま保存できる）</span><span class="diff-line">      var filter by rememberSaveable { mutableStateOf(TodoFilter.All) }</span><span class="diff-line">  ...</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">          },</span><span class="diff-line diff-line--remove">-         onFabClick = {</span><span class="diff-line diff-line--remove">-             // 追加の入口。次の項目（06）でボトムシートを開く処理に置き換える。ここでは仮に、題名つきで 1 件足す</span><span class="diff-line diff-line--remove">-             val id = (todos.maxOfOrNull { it.id } ?: 0) + 1</span><span class="diff-line diff-line--remove">-             todos.add(Todo(id = id, title = &quot;new todo $id&quot;))</span><span class="diff-line diff-line--add">+         // 追加の入口は FAB。押すと入力用のボトムシートを開く</span><span class="diff-line diff-line--add">+         inputState = inputState,</span><span class="diff-line diff-line--add">+         onFabClick = { showAddSheet = true },</span><span class="diff-line diff-line--add">+         showAddSheet = showAddSheet,</span><span class="diff-line diff-line--add">+         onAddSheetDismiss = { showAddSheet = false },</span><span class="diff-line diff-line--add">+         onDeleteDone = {</span><span class="diff-line diff-line--add">+             val count = todos.count { it.done }</span><span class="diff-line diff-line--add">+             todos.removeAll { it.done }</span><span class="diff-line diff-line--add">+             snackbarHostState.currentSnackbarData?.dismiss()</span><span class="diff-line diff-line--add">+             scope.launch { snackbarHostState.showSnackbar(&quot;完了済み $count 件を削除しました&quot;) }</span><span class="diff-line">          },</span><span class="diff-line diff-line--remove">-         inputState = inputState,</span><span class="diff-line">          onToggle = { id, done -&gt;</span><span class="diff-line">              // 完了状態を変えるのは状態の持ち主（ここ）の役目。要素を新しい Todo に置き換えると、読んでいる画面が再コンポーズされる</span><span class="diff-line">              val index = todos.indexOfFirst { it.id == id }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>TodoListScreen</code> では、画面の中の入力欄を外し、シートとダイアログを足します。差分の後半では、<code>if (showDeleteDoneDialog) { AlertDialog(...) }</code> と <code>if (showAddSheet) { ModalBottomSheet(...) }</code> を足します。置く場所は <code>Scaffold(...) { ... }</code> の閉じ括弧のすぐ後ろで、この順に並べます。どちらも <code>TodoListScreen</code> 関数の中で、関数の最後の閉じ括弧より前に置きます。その下にある <code>SectionHeader</code> と <code>SwipeableTodoRow</code> の関数は変わりません。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.foundation.layout.Column</span><span class="diff-line">  import androidx.compose.foundation.layout.PaddingValues</span><span class="diff-line">  import androidx.compose.foundation.layout.Row</span><span class="diff-line diff-line--remove">- import androidx.compose.foundation.layout.Spacer</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxSize</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxWidth</span><span class="diff-line">  import androidx.compose.foundation.layout.size</span><span class="diff-line diff-line--remove">- import androidx.compose.foundation.layout.height</span><span class="diff-line">  import androidx.compose.foundation.layout.padding</span><span class="diff-line">  import androidx.compose.foundation.lazy.LazyColumn</span><span class="diff-line">  import androidx.compose.foundation.lazy.items</span><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.material.icons.filled.Check</span><span class="diff-line">  import androidx.compose.material.icons.filled.Delete</span><span class="diff-line">  import androidx.compose.material.icons.filled.KeyboardArrowUp</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.AlertDialog</span><span class="diff-line">  import androidx.compose.material3.Card</span><span class="diff-line">  import androidx.compose.material3.CardDefaults</span><span class="diff-line">  import androidx.compose.material3.ExperimentalMaterial3Api</span><span class="diff-line">  import androidx.compose.material3.ExtendedFloatingActionButton</span><span class="diff-line">  import androidx.compose.material3.FilterChip</span><span class="diff-line">  import androidx.compose.material3.Icon</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.IconButton</span><span class="diff-line">  import androidx.compose.material3.MaterialTheme</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.ModalBottomSheet</span><span class="diff-line">  import androidx.compose.material3.Scaffold</span><span class="diff-line">  import androidx.compose.material3.SmallFloatingActionButton</span><span class="diff-line">  import androidx.compose.material3.SnackbarHost</span><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.material3.SwipeToDismissBox</span><span class="diff-line">  import androidx.compose.material3.SwipeToDismissBoxValue</span><span class="diff-line">  import androidx.compose.material3.Text</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.TextButton</span><span class="diff-line">  import androidx.compose.material3.TopAppBar</span><span class="diff-line diff-line--add">+ import androidx.compose.material3.rememberModalBottomSheetState</span><span class="diff-line">  import androidx.compose.material3.rememberSwipeToDismissBoxState</span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line">  import androidx.compose.runtime.derivedStateOf</span><span class="diff-line">  import androidx.compose.runtime.getValue</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.mutableStateOf</span><span class="diff-line">  import androidx.compose.runtime.remember</span><span class="diff-line">  import androidx.compose.runtime.rememberCoroutineScope</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.saveable.rememberSaveable</span><span class="diff-line diff-line--add">+ import androidx.compose.runtime.setValue</span><span class="diff-line">  import androidx.compose.ui.Alignment</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line">  import androidx.compose.ui.draw.clip</span><span class="diff-line">  ...</span><span class="diff-line">      onFabClick: () -&gt; Unit = {},</span><span class="diff-line">      filter: TodoFilter = TodoFilter.All,</span><span class="diff-line">      onFilterChange: (TodoFilter) -&gt; Unit = {},</span><span class="diff-line diff-line--add">+     showAddSheet: Boolean = false,</span><span class="diff-line diff-line--add">+     onAddSheetDismiss: () -&gt; Unit = {},</span><span class="diff-line diff-line--add">+     onDeleteDone: () -&gt; Unit = {},</span><span class="diff-line">  ) {</span><span class="diff-line">      // rememberLazyListState: スクロール位置を覚える。LazyColumn に渡すと、位置を読んだり動かしたりできる</span><span class="diff-line">      val listState = rememberLazyListState()</span><span class="diff-line">  ...</span><span class="diff-line">      // 結果の Boolean が変わったときにだけ、これを読む側が再コンポーズされる</span><span class="diff-line">      val showToTop by remember { derivedStateOf { listState.firstVisibleItemIndex &gt; 0 } }</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // 確認ダイアログを出すかどうか。画面回転のあとも開いたままにするので rememberSaveable</span><span class="diff-line diff-line--add">+     var showDeleteDoneDialog by rememberSaveable { mutableStateOf(false) }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      // Scaffold: TopAppBar・本文・FAB などの置き場所を用意する Material3 の土台。</span><span class="diff-line">      // 本文には innerPadding を必ず適用し、TopAppBar の下に隠れないようにする</span><span class="diff-line">      Scaffold(</span><span class="diff-line">  ...</span><span class="diff-line">          topBar = {</span><span class="diff-line">              TopAppBar(</span><span class="diff-line">                  title = { Text(&quot;Todo&quot;) },</span><span class="diff-line diff-line--remove">-                 actions = { CountBadge(count = todos.count { !it.done }) },</span><span class="diff-line diff-line--add">+                 actions = {</span><span class="diff-line diff-line--add">+                     // 完了済みをまとめて削除する。取り消せない操作なので、確認ダイアログを挟む</span><span class="diff-line diff-line--add">+                     IconButton(</span><span class="diff-line diff-line--add">+                         onClick = { showDeleteDoneDialog = true },</span><span class="diff-line diff-line--add">+                         enabled = todos.any { it.done },</span><span class="diff-line diff-line--add">+                         modifier = Modifier.testTag(&quot;delete_done_button&quot;),</span><span class="diff-line diff-line--add">+                     ) {</span><span class="diff-line diff-line--add">+                         Icon(Icons.Default.Delete, contentDescription = &quot;完了済みをすべて削除&quot;)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                     CountBadge(count = todos.count { !it.done })</span><span class="diff-line diff-line--add">+                 },</span><span class="diff-line">              )</span><span class="diff-line">          },</span><span class="diff-line">          // snackbarHost: Snackbar の表示場所。状態（SnackbarHostState）は呼び出し側が持ち、showSnackbar で表示を依頼する</span><span class="diff-line">  ...</span><span class="diff-line">                  modifier = Modifier.padding(16.dp),</span><span class="diff-line">                  style = MaterialTheme.typography.titleLarge,</span><span class="diff-line">              )</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-             // 入力欄と追加ボタン。入力の文字列は状態の持ち主（TodoListPage）が持つ</span><span class="diff-line diff-line--remove">-             TodoInput(state = inputState, onAddClick = onAddClick)</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-             Spacer(modifier = Modifier.height(8.dp))</span><span class="diff-line">  </span><span class="diff-line">              // FilterChip: 選択中かどうかを持つ小さな絞り込みボタン。選択は呼び出し側の状態（filter）が決める</span><span class="diff-line">              Row(</span><span class="diff-line">  ...</span><span class="diff-line">              // LazyColumn: 画面に見えている行だけを compose する遅延リスト。残りの高さを weight(1f) で使い切る。</span><span class="diff-line diff-line--remove">-             // 入力欄を下に置くと、キーボードが出たとき画面全体が押し上げられるので、リストを最後に置く</span><span class="diff-line">              // key に id を渡すと、並べ替えや削除のあとも、行と状態の対応が id で保たれる</span><span class="diff-line">  ...</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     if (showDeleteDoneDialog) {</span><span class="diff-line diff-line--add">+         val doneCount = todos.count { it.done }</span><span class="diff-line diff-line--add">+         AlertDialog(</span><span class="diff-line diff-line--add">+             onDismissRequest = { showDeleteDoneDialog = false },</span><span class="diff-line diff-line--add">+             title = { Text(&quot;完了済みをすべて削除&quot;) },</span><span class="diff-line diff-line--add">+             text = { Text(&quot;完了済みの Todo $doneCount 件を削除します。この操作は元に戻せません。&quot;) },</span><span class="diff-line diff-line--add">+             confirmButton = {</span><span class="diff-line diff-line--add">+                 TextButton(</span><span class="diff-line diff-line--add">+                     onClick = {</span><span class="diff-line diff-line--add">+                         onDeleteDone()</span><span class="diff-line diff-line--add">+                         showDeleteDoneDialog = false</span><span class="diff-line diff-line--add">+                     },</span><span class="diff-line diff-line--add">+                     modifier = Modifier.testTag(&quot;confirm_delete_done&quot;),</span><span class="diff-line diff-line--add">+                 ) { Text(&quot;削除&quot;) }</span><span class="diff-line diff-line--add">+             },</span><span class="diff-line diff-line--add">+             dismissButton = {</span><span class="diff-line diff-line--add">+                 TextButton(onClick = { showDeleteDoneDialog = false }) { Text(&quot;キャンセル&quot;) }</span><span class="diff-line diff-line--add">+             },</span><span class="diff-line diff-line--add">+         )</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // ModalBottomSheet: 画面の下から出る入力用のシート。出す・出さないは showAddSheet（呼び出し側の状態）で決める。</span><span class="diff-line diff-line--add">+     // skipPartiallyExpanded = true: 「半分だけ開いた」状態を飛ばして、開くときは最初から全部開く</span><span class="diff-line diff-line--add">+     if (showAddSheet) {</span><span class="diff-line diff-line--add">+         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)</span><span class="diff-line diff-line--add">+         // 閉じるときは、先に sheetState.hide() でシートを下げ終えてから表示フラグを落とす（先に落とすと、下がるアニメーションを待たずにシートがコンポジションから外れる）</span><span class="diff-line diff-line--add">+         val closeSheet: () -&gt; Unit = {</span><span class="diff-line diff-line--add">+             scope.launch { sheetState.hide() }.invokeOnCompletion {</span><span class="diff-line diff-line--add">+                 if (!sheetState.isVisible) onAddSheetDismiss()</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+         ModalBottomSheet(</span><span class="diff-line diff-line--add">+             // 背景のタップ・下へのドラッグ・戻るボタンで呼ばれる（hide のアニメーションは済んでいる）</span><span class="diff-line diff-line--add">+             onDismissRequest = onAddSheetDismiss,</span><span class="diff-line diff-line--add">+             sheetState = sheetState,</span><span class="diff-line diff-line--add">+             modifier = Modifier.testTag(&quot;add_sheet&quot;),</span><span class="diff-line diff-line--add">+         ) {</span><span class="diff-line diff-line--add">+             Text(</span><span class="diff-line diff-line--add">+                 text = &quot;新しい Todo&quot;,</span><span class="diff-line diff-line--add">+                 modifier = Modifier.padding(horizontal = 16.dp),</span><span class="diff-line diff-line--add">+                 style = MaterialTheme.typography.titleLarge,</span><span class="diff-line diff-line--add">+             )</span><span class="diff-line diff-line--add">+             // 入力欄と追加ボタン（04 では画面の中に置いていた部品）。入力の文字列は状態の持ち主（TodoListPage）が持つ</span><span class="diff-line diff-line--add">+             TodoInput(</span><span class="diff-line diff-line--add">+                 state = inputState,</span><span class="diff-line diff-line--add">+                 onAddClick = {</span><span class="diff-line diff-line--add">+                     onAddClick()</span><span class="diff-line diff-line--add">+                     closeSheet()</span><span class="diff-line diff-line--add">+                 },</span><span class="diff-line diff-line--add">+                 modifier = Modifier.padding(vertical = 16.dp),</span><span class="diff-line diff-line--add">+             )</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">完成した <code>TodoListScreen.kt</code> の全文を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.ui.components.CountBadge
+import com.handson.android01.ui.components.TodoInput
+import com.handson.android01.ui.components.TodoRow
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import kotlinx.coroutines.launch
+
+// TopAppBar は Material3 1.4 時点で実験的 API。使うには @OptIn が必要（未指定だとコンパイルエラー）
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TodoListScreen(
+    todos: List&lt;Todo&gt;,
+    inputState: TextFieldState,
+    onToggle: (id: Int, done: Boolean) -&gt; Unit,
+    onAddClick: () -&gt; Unit,
+    modifier: Modifier = Modifier,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+    onDelete: (Todo) -&gt; Unit = {},
+    onFabClick: () -&gt; Unit = {},
+    filter: TodoFilter = TodoFilter.All,
+    onFilterChange: (TodoFilter) -&gt; Unit = {},
+    showAddSheet: Boolean = false,
+    onAddSheetDismiss: () -&gt; Unit = {},
+    onDeleteDone: () -&gt; Unit = {},
+) {
+    // rememberLazyListState: スクロール位置を覚える。LazyColumn に渡すと、位置を読んだり動かしたりできる
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    // derivedStateOf: firstVisibleItemIndex はスクロールのたびに変わるが、知りたいのは「先頭から離れたか」だけ。
+    // 結果の Boolean が変わったときにだけ、これを読む側が再コンポーズされる
+    val showToTop by remember { derivedStateOf { listState.firstVisibleItemIndex &gt; 0 } }
+
+    // 確認ダイアログを出すかどうか。画面回転のあとも開いたままにするので rememberSaveable
+    var showDeleteDoneDialog by rememberSaveable { mutableStateOf(false) }
+
+    // Scaffold: TopAppBar・本文・FAB などの置き場所を用意する Material3 の土台。
+    // 本文には innerPadding を必ず適用し、TopAppBar の下に隠れないようにする
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                title = { Text(&quot;Todo&quot;) },
+                actions = {
+                    // 完了済みをまとめて削除する。取り消せない操作なので、確認ダイアログを挟む
+                    IconButton(
+                        onClick = { showDeleteDoneDialog = true },
+                        enabled = todos.any { it.done },
+                        modifier = Modifier.testTag(&quot;delete_done_button&quot;),
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = &quot;完了済みをすべて削除&quot;)
+                    }
+                    CountBadge(count = todos.count { !it.done })
+                },
+            )
+        },
+        // snackbarHost: Snackbar の表示場所。状態（SnackbarHostState）は呼び出し側が持ち、showSnackbar で表示を依頼する
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        // floatingActionButton: 右下に浮かぶボタンの置き場所。2 つ並べたいときは Column に入れる
+        floatingActionButton = {
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (showToTop) {
+                    SmallFloatingActionButton(
+                        onClick = { scope.launch { listState.animateScrollToItem(0) } },
+                        modifier = Modifier.testTag(&quot;scroll_to_top&quot;),
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = &quot;先頭へ&quot;)
+                    }
+                }
+                ExtendedFloatingActionButton(
+                    onClick = onFabClick,
+                    icon = { Icon(Icons.Default.Add, contentDescription = &quot;追加&quot;) },
+                    text = { Text(&quot;追加&quot;) },
+                    modifier = Modifier.testTag(&quot;fab_add&quot;),
+                )
+            }
+        },
+    ) { innerPadding -&gt;
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+        ) {
+            // derivedStateOf: todos から計算する完了件数を State として覚える。remember(todos) のキーは、todos の参照が変わったら計算式を作り直すため
+            val doneCount by remember(todos) { derivedStateOf { todos.count { it.done } } }
+            Text(
+                text = &quot;${todos.size} 件中 $doneCount 件完了&quot;,
+                modifier = Modifier.padding(16.dp),
+                style = MaterialTheme.typography.titleLarge,
+            )
+
+            // FilterChip: 選択中かどうかを持つ小さな絞り込みボタン。選択は呼び出し側の状態（filter）が決める
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TodoFilter.entries.forEach { option -&gt;
+                    FilterChip(
+                        selected = filter == option,
+                        onClick = { onFilterChange(option) },
+                        label = { Text(option.label) },
+                        modifier = Modifier.testTag(&quot;filter_${option.name}&quot;),
+                    )
+                }
+            }
+
+            val activeTodos = todos.activeTodos()
+            val doneTodos = todos.doneTodos()
+            val visibleCount =
+                (if (filter.showsActive()) activeTodos.size else 0) + (if (filter.showsDone()) doneTodos.size else 0)
+
+            if (visibleCount == 0) {
+                // 空状態: 何も無いことと、その理由を伝える
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .testTag(&quot;empty_state&quot;),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = filter.emptyMessage(),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                return@Column
+            }
+
+            // LazyColumn: 画面に見えている行だけを compose する遅延リスト。残りの高さを weight(1f) で使い切る。
+            // key に id を渡すと、並べ替えや削除のあとも、行と状態の対応が id で保たれる
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag(&quot;todo_list&quot;),
+                // 下の余白は、FAB が最後の行に重なって押せなくならないように広げる
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 88.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                // stickyHeader: スクロールしても、次のセクションが来るまで画面の上端に貼り付く見出し。
+                // 見出しにも、行と重ならない key を付ける（Int の id と区別するため文字列にする）
+                if (filter.showsActive() &amp;&amp; activeTodos.isNotEmpty()) {
+                    stickyHeader(key = &quot;header_active&quot;) { SectionHeader(&quot;未完了&quot;, Modifier.testTag(&quot;header_active&quot;)) }
+                    items(activeTodos, key = { it.id }) { todo -&gt;
+                        SwipeableTodoRow(todo, onToggle, onDelete, Modifier.animateItem())
+                    }
+                }
+                if (filter.showsDone() &amp;&amp; doneTodos.isNotEmpty()) {
+                    stickyHeader(key = &quot;header_done&quot;) { SectionHeader(&quot;完了&quot;, Modifier.testTag(&quot;header_done&quot;)) }
+                    items(doneTodos, key = { it.id }) { todo -&gt;
+                        SwipeableTodoRow(todo, onToggle, onDelete, Modifier.animateItem())
+                    }
+                }
+            }
+        }
+    }
+
+    if (showDeleteDoneDialog) {
+        val doneCount = todos.count { it.done }
+        AlertDialog(
+            onDismissRequest = { showDeleteDoneDialog = false },
+            title = { Text(&quot;完了済みをすべて削除&quot;) },
+            text = { Text(&quot;完了済みの Todo $doneCount 件を削除します。この操作は元に戻せません。&quot;) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteDone()
+                        showDeleteDoneDialog = false
+                    },
+                    modifier = Modifier.testTag(&quot;confirm_delete_done&quot;),
+                ) { Text(&quot;削除&quot;) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDoneDialog = false }) { Text(&quot;キャンセル&quot;) }
+            },
+        )
+    }
+
+    // ModalBottomSheet: 画面の下から出る入力用のシート。出す・出さないは showAddSheet（呼び出し側の状態）で決める。
+    // skipPartiallyExpanded = true: 「半分だけ開いた」状態を飛ばして、開くときは最初から全部開く
+    if (showAddSheet) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        // 閉じるときは、先に sheetState.hide() でシートを下げ終えてから表示フラグを落とす（先に落とすと、下がるアニメーションを待たずにシートがコンポジションから外れる）
+        val closeSheet: () -&gt; Unit = {
+            scope.launch { sheetState.hide() }.invokeOnCompletion {
+                if (!sheetState.isVisible) onAddSheetDismiss()
+            }
+        }
+        ModalBottomSheet(
+            // 背景のタップ・下へのドラッグ・戻るボタンで呼ばれる（hide のアニメーションは済んでいる）
+            onDismissRequest = onAddSheetDismiss,
+            sheetState = sheetState,
+            modifier = Modifier.testTag(&quot;add_sheet&quot;),
+        ) {
+            Text(
+                text = &quot;新しい Todo&quot;,
+                modifier = Modifier.padding(horizontal = 16.dp),
+                style = MaterialTheme.typography.titleLarge,
+            )
+            // 入力欄と追加ボタン（04 では画面の中に置いていた部品）。入力の文字列は状態の持ち主（TodoListPage）が持つ
+            TodoInput(
+                state = inputState,
+                onAddClick = {
+                    onAddClick()
+                    closeSheet()
+                },
+                modifier = Modifier.padding(vertical = 16.dp),
+            )
+        }
+    }
+}
+
+// 貼り付く見出し。背景を塗らないと、後ろを通る行が透けて見える
+@Composable
+private fun SectionHeader(title: String, modifier: Modifier = Modifier) {
+    Text(
+        text = title,
+        modifier = modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(vertical = 8.dp),
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+    )
+}
+
+// 左へスワイプして削除できる行。LazyItemScope の animateItem は、呼び出し側から modifier で受け取る
+@Composable
+private fun SwipeableTodoRow(
+    todo: Todo,
+    onToggle: (id: Int, done: Boolean) -&gt; Unit,
+    onDelete: (Todo) -&gt; Unit,
+    modifier: Modifier = Modifier,
+) {
+    // 行ごとに、スワイプの状態を持つ。key があるので、行を消しても他の行の状態とは混ざらない
+    val dismissState = rememberSwipeToDismissBoxState()
+    val rowScope = rememberCoroutineScope()
+    SwipeToDismissBox(
+        state = dismissState,
+        modifier = modifier,
+        // 右へのスワイプは使わず、左へのスワイプ（EndToStart）だけで削除する
+        enableDismissFromStartToEnd = false,
+        // 確定（しきい値を超えて動きが止まった）ときに呼ばれる。削除は状態の持ち主に任せる。
+        // rememberSwipeToDismissBoxState は rememberSaveable なので、「消えた」状態が同じ key で保存される。
+        // そのままだと「元に戻す」で戻した行が、再び消えた状態で復元され、すぐ削除し直される。
+        // 先に snapTo で状態を Settled に戻してから削除する
+        onDismiss = {
+            rowScope.launch {
+                dismissState.snapTo(SwipeToDismissBoxValue.Settled)
+                onDelete(todo)
+            }
+        },
+        backgroundContent = {
+            // 動かしている間だけ、赤い背景とゴミ箱を出す
+            if (dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CardDefaults.shape)
+                        .background(MaterialTheme.colorScheme.errorContainer)
+                        .padding(end = 24.dp),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+        },
+    ) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            TodoRow(
+                todo = todo,
+                onToggle = { done -&gt; onToggle(todo.id, done) },
+                onDelete = { onDelete(todo) },
+            )
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun TodoListScreenPreview() {
+    HandsonAndroid01Theme {
+        TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+
+          <ul>
+            <li><code>if (showAddSheet) { ModalBottomSheet(...) }</code>: シートを出すかどうかは、呼び出し側が持つ表示フラグで決めます。<code>skipPartiallyExpanded = true</code> で「半分だけ開いた」状態を飛ばし、開くときは最初から全部開きます。</li>
+            <li>追加ボタンで閉じるときは、先に <code>sheetState.hide()</code> でシートを下げ、<code>invokeOnCompletion</code> で終わったのを確かめてから表示フラグを落とします（<code>onAddSheetDismiss()</code>）。背景のタップ・下へのドラッグ・戻るボタンで閉じたときは、Material3 が <code>onDismissRequest</code> を呼びます。</li>
+            <li><code>TodoInput</code> は 04 で作った部品をそのまま使い、置き場所だけをシートの中に移しています。</li>
+            <li><code>AlertDialog</code>: <code>confirmButton</code> に「削除」、<code>dismissButton</code> に「キャンセル」を渡します。完了済みをまとめて消す操作は取り消せないので、Snackbar の「元に戻す」ではなく、実行前に確認を挟みます。表示フラグは、回転の後も開いたままになるよう <code>rememberSaveable</code> にしています。</li>
+          </ul>
+          <p>表示フラグは閉じる処理の最後に変えます。</p>
+
+          <h4>05 までのテストを直す</h4>
+          <p>入力欄が画面から無くなり、シートの中に移ったので、入力欄を使うテスト 8 件が失敗します。</p>
+          <ul>
+            <li><code>TodoListPageTest</code> の 4 件と <code>TodoListPageRestorationTest.inputText_survivesRecreation</code>: 画面全体（<code>TodoListPage</code>）のテストなので、入力する前に <code>onNodeWithTag(&quot;fab_add&quot;).performClick()</code> でシートを開きます。</li>
+            <li><code>TodoListScreenTest</code> の <code>addButton_callsOnAddClick</code> と <code>addButton_isDisabledWhenInputIsEmpty</code>: <code>TodoListScreen</code> に <code>showAddSheet = true</code> を渡して、シートを開いた状態で表示します。</li>
+            <li><code>TodoSnackbarTest.fab_addsTodo</code>: 05 のステップ 3 の仮の処理を確かめていたテストです。シートが開くことを確かめる <code>fab_opensAddSheet</code> に変えます。</li>
+          </ul>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListPageTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      @Test</span><span class="diff-line">      fun addingTodo_appendsRowAndUpdatesSummary() {</span><span class="diff-line">          setPage()</span><span class="diff-line diff-line--add">+         // 入力欄は、追加用のボトムシートの中にある。FAB で開いてから操作する</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;fab_add&quot;).performClick()</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;追加&quot;).performClick()</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line diff-line--remove">-     fun addingTodo_clearsInputAndDisablesAddButton() {</span><span class="diff-line diff-line--add">+     fun addingTodo_closesSheetAndClearsInput() {</span><span class="diff-line">          setPage()</span><span class="diff-line diff-line--add">+         // 入力欄は、追加用のボトムシートの中にある。FAB で開いてから操作する</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;fab_add&quot;).performClick()</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsEnabled()</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;追加&quot;).performClick()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         // 追加後は入力欄が空に戻り、空なので追加ボタンは再び無効になる</span><span class="diff-line diff-line--add">+         // 追加するとシートが閉じる（入力欄が画面から消える）</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;add_sheet&quot;).assertDoesNotExist()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         // 開き直すと入力欄は空に戻っていて、空なので追加ボタンは無効</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;fab_add&quot;).performClick()</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsNotEnabled()</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun addButton_staysDisabledForBlankInput() {</span><span class="diff-line">          setPage()</span><span class="diff-line diff-line--add">+         // 入力欄は、追加用のボトムシートの中にある。FAB で開いてから操作する</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;fab_add&quot;).performClick()</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;   &quot;)</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">      @Test</span><span class="diff-line">      fun newTodo_canBeCheckedAndCountIsUpdated() {</span><span class="diff-line">          setPage()</span><span class="diff-line diff-line--add">+         // 入力欄は、追加用のボトムシートの中にある。FAB で開いてから操作する</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;fab_add&quot;).performClick()</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;追加&quot;).performClick()</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListPageRestorationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">                  TodoListPage(initialTodos = demoTodoList)</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line diff-line--add">+         // 入力欄は追加用のボトムシートの中にある。FAB で開いてから入力する</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;fab_add&quot;).performClick()</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)</span><span class="diff-line">  </span><span class="diff-line">          tester.emulateSavedInstanceStateRestore()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         // 入力中の文字は画面回転の後も残り、追加ボタンは有効のまま</span><span class="diff-line diff-line--add">+         // シートは開いたまま（表示フラグが rememberSaveable）で、入力中の文字も残り、追加ボタンは有効のまま</span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsEnabled()</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListScreenTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      fun addButton_callsOnAddClick() {</span><span class="diff-line">          // 状態を持たない画面なので、クリックの回数はテスト側の変数で受け取る</span><span class="diff-line">          var clickCount = 0</span><span class="diff-line">          composeTestRule.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = { clickCount++ })</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = { clickCount++ }, showAddSheet = true)</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  </span><span class="diff-line">          // 空のままでは追加ボタンは無効（後述のテスト）。文字を入れてから押す</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun addButton_isDisabledWhenInputIsEmpty() {</span><span class="diff-line">          composeTestRule.setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line diff-line--add">+                 TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {}, showAddSheet = true)</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsNotEnabled()</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoSnackbarTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line diff-line--remove">-     fun fab_addsTodo() {</span><span class="diff-line diff-line--add">+     fun fab_opensAddSheet() {</span><span class="diff-line">          setPage()</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;add_sheet&quot;).assertDoesNotExist()</span><span class="diff-line">  </span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;fab_add&quot;).performClick()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(4)</span><span class="diff-line diff-line--add">+         composeTestRule.onNodeWithTag(&quot;add_sheet&quot;).assertIsDisplayed()</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p><code>addingTodo_clearsInputAndDisablesAddButton</code> は <code>addingTodo_closesSheetAndClearsInput</code> に改名しました。追加するとシートが閉じるようになったので、開き直して入力欄が空になっていることを確かめます。</p>
+          <p>新しいテストを足します。<code>androidTest/.../ui/screens/TodoSheetAndDialogTest.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoSheetAndDialogTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+// 追加用のボトムシート（ModalBottomSheet）と、完了済みを削除する確認ダイアログ（AlertDialog）
+@RunWith(AndroidJUnit4::class)
+class TodoSheetAndDialogTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    private fun setPage(initial: List&lt;Todo&gt; = demoTodoList) {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListPage(initialTodos = initial)
+            }
+        }
+    }
+
+    @Test
+    fun addSheet_isClosedAtFirst() {
+        setPage()
+
+        composeTestRule.onNodeWithTag(&quot;add_sheet&quot;).assertDoesNotExist()
+        composeTestRule.onNodeWithTag(&quot;todo_input&quot;).assertDoesNotExist()
+    }
+
+    @Test
+    fun addSheet_addsTodoAndCloses() {
+        setPage()
+        composeTestRule.onNodeWithTag(&quot;fab_add&quot;).performClick()
+        composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)
+
+        composeTestRule.onNodeWithTag(&quot;add_button&quot;).performClick()
+
+        // hide() のアニメーションが終わったあとに、表示フラグが落ちてシートが消える
+        composeTestRule.onNodeWithTag(&quot;add_sheet&quot;).assertDoesNotExist()
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(4)
+        composeTestRule.onNodeWithText(&quot;Buy Milk&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun addSheet_closesWhenSwipedDown() {
+        setPage()
+        composeTestRule.onNodeWithTag(&quot;fab_add&quot;).performClick()
+        composeTestRule.onNodeWithTag(&quot;add_sheet&quot;).assertIsDisplayed()
+
+        // 下へドラッグして閉じる（onDismissRequest が呼ばれる）
+        composeTestRule.onNodeWithTag(&quot;add_sheet&quot;).performTouchInput { swipeDown() }
+
+        composeTestRule.onNodeWithTag(&quot;add_sheet&quot;).assertDoesNotExist()
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(3)
+    }
+
+    @Test
+    fun deleteDoneButton_isDisabledWithoutDoneTodos() {
+        setPage(listOf(Todo(1, &quot;only active&quot;)))
+
+        composeTestRule.onNodeWithTag(&quot;delete_done_button&quot;).assertIsNotEnabled()
+    }
+
+    @Test
+    fun deleteDoneDialog_cancelKeepsTodos() {
+        setPage()
+        composeTestRule.onNodeWithTag(&quot;delete_done_button&quot;).performClick()
+        composeTestRule.onNodeWithText(&quot;完了済みの Todo 2 件を削除します。この操作は元に戻せません。&quot;).assertIsDisplayed()
+
+        composeTestRule.onNodeWithText(&quot;キャンセル&quot;).performClick()
+
+        composeTestRule.onNodeWithText(&quot;キャンセル&quot;).assertDoesNotExist()
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(3)
+    }
+
+    @Test
+    fun deleteDoneDialog_confirmDeletesDoneTodos() {
+        setPage()
+        composeTestRule.onNodeWithTag(&quot;delete_done_button&quot;).performClick()
+
+        composeTestRule.onNodeWithTag(&quot;confirm_delete_done&quot;).performClick()
+
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(1)
+        composeTestRule.onNodeWithText(&quot;1 件中 0 件完了&quot;).assertIsDisplayed()
+        composeTestRule.onNodeWithText(&quot;完了済み 2 件を削除しました&quot;).assertIsDisplayed()
+    }
+}</code></pre>
+</div>
+
+          <p><code>addSheet_closesWhenSwipedDown</code> では、シートを <code>swipeDown()</code> で下へドラッグして閉じます。シートが閉じるアニメーションもテストの時計が進めるので、<code>assertDoesNotExist()</code> の前に待つ処理は要りません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 56s</span></pre>
+</div>
+
+          <p>UI テストは 53 件、ユニットテストは 42 件で、すべて成功します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>テストが <code>BUILD SUCCESSFUL</code> で終われば OK です。アプリで「追加」の FAB を押すと下から「新しい Todo」のシートが開き、入力して追加するとシートが閉じて行が増えます。トップバーのゴミ箱で確認ダイアログが出て、「キャンセル」では一覧が変わらないことも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、完成状態でビルド・lint・ユニットテスト・UI テストをまとめて実行します。エミュレータを起動した状態で実行してください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest</span><span class="terminal__line">Running tests on devices: Handson_Android36(AVD) - 16</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 37s</span><span class="terminal__line">86 actionable tasks: 11 executed, 75 up-to-date</span><span class="terminal__line">Configuration cache entry reused.</span></pre>
+</div>
+
+          <p>結果をまとめます。</p>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>ユニットテスト（<code>test</code>）</td><td>42 件すべて成功（この項目では増減なし）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>53 件すべて成功（05 の 37 件から 16 件増えた）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 9 件（<code>app/build/reports/lint-results-debug.txt</code>）。警告の内訳は <code>UnusedResources</code> × 7、<code>RedundantLabel</code>、<code>AndroidGradlePluginVersion</code> です。ほかに、<code>CounterScreen.kt</code> の <code>mutableStateOf(0)</code> に <code>mutableIntStateOf</code> を勧めるヒント（<code>AutoboxingStateCreation</code>）が 1 件出ます。ヒントは警告の数に入りません。05 と同じ件数で、この項目で増えたものはありません</td></tr>
+            <tr><td>debug APK</td><td><code>app/build/outputs/apk/debug/app-debug.apk</code> は約 12MB</td></tr>
+            </tbody>
+          </table>
+
+          <table>
+            <thead>
+            <tr><th>テストクラス</th><th>件数</th><th>この項目での変更</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>ExampleInstrumentedTest</code></td><td>1</td><td></td></tr>
+            <tr><td><code>MainActivityTest</code></td><td>1</td><td></td></tr>
+            <tr><td><code>CounterDisplayTest</code></td><td>2</td><td></td></tr>
+            <tr><td><code>GreetingTest</code></td><td>2</td><td></td></tr>
+            <tr><td><code>TodoRowTest</code></td><td>3</td><td></td></tr>
+            <tr><td><code>CounterScreenRestorationTest</code></td><td>1</td><td></td></tr>
+            <tr><td><code>CounterScreenTest</code></td><td>2</td><td></td></tr>
+            <tr><td><code>TodoListPageRestorationTest</code></td><td>2</td><td>ステップ 2・3 で直した</td></tr>
+            <tr><td><code>TodoListPageTest</code></td><td>6</td><td>ステップ 2・3 で直した</td></tr>
+            <tr><td><code>TodoListScreenTest</code></td><td>7</td><td>ステップ 2・3 で直した</td></tr>
+            <tr><td><code>TodoLazyListTest</code></td><td>4</td><td>ステップ 2 で直した</td></tr>
+            <tr><td><code>TodoScrollToTopTest</code></td><td>3</td><td>ステップ 2 で直した</td></tr>
+            <tr><td><code>TodoSnackbarTest</code></td><td>3</td><td>ステップ 2・3 で直した</td></tr>
+            <tr><td><code>TodoSwipeTest</code></td><td>3</td><td>ステップ 1 で追加、ステップ 2 で直した</td></tr>
+            <tr><td><code>TodoFilterTest</code></td><td>7</td><td>ステップ 2 で追加</td></tr>
+            <tr><td><code>TodoSheetAndDialogTest</code></td><td>6</td><td>ステップ 3 で追加</td></tr>
+            </tbody>
+          </table>
+
+          <p>エミュレータでも操作します。アプリをインストールして起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">Installed on 1 device.</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 1s</span><span class="terminal__line">39 actionable tasks: 1 executed, 38 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+
+          <p>起動した画面の文字を <code>uiautomator</code> で取り出します。起動の直後は失敗することがあるので、数秒待ってから実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell uiautomator dump /sdcard/ui.xml</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cat /sdcard/ui.xml | grep -oE &#x27;text=&quot;[^&quot;]+&quot;&#x27;</span><span class="terminal__line">text=&quot;20 件中 7 件完了&quot;</span><span class="terminal__line">text=&quot;すべて&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;完了&quot;</span><span class="terminal__line">text=&quot;Task 2&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 3&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 5&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 6&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 8&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 9&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 11&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 12&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Task 14&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Todo&quot;</span><span class="terminal__line">text=&quot;13&quot;</span></pre>
+</div>
+
+          <p>上から順に、サマリ <code>20 件中 7 件完了</code>、チップの「すべて」「未完了」「完了」が並びます。その下が未完了の行で、<code>Task 2</code>・<code>Task 3</code>…と状態の「未完了」が交互に出ます。最後から 3 番目の「未完了」は、行の状態ではなく、画面の上端に貼り付いたセクション見出し「未完了」です。最後は TopAppBar のタイトル <code>Todo</code> と、未完了の件数のバッジ <code>13</code> です。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">起動直後の <code>uiautomator dump</code> は失敗することがある</p>
+              <p>アプリを起動した直後に <code>uiautomator dump</code> を実行すると、<code>ERROR: null root node returned by UiTestAutomationBridge.</code> で失敗することがあります。数秒待ってから実行し直すと成功します。</p>
+            </div>
+          </div>
+
+          <p>一覧のスクロールと行のスワイプは、<code>adb shell input swipe</code> でも操作できます（座標は 1080×2400 の画面の場合）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell input swipe 1000 838 100 838 300</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell input swipe 540 1800 540 600 300</span></pre>
+</div>
+
+          <p>1 行目は先頭の行を左へスワイプする操作、2 行目は一覧を上へスクロールする操作です。どちらも出力はありません。1 行目は、アプリを起動した直後（一覧が先頭にある状態）で実行します。一覧をスクロールしたあとだと、座標の行が別の行になります。手で操作してもかまいません。</p>
+
+          <table>
+            <thead>
+            <tr><th>操作</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>起動直後</td><td><code>20 件中 7 件完了</code>、チップ「すべて」「未完了」「完了」、見出し「未完了」の下に <code>Task 2</code>・<code>Task 3</code>・<code>Task 5</code>…。各行に削除ボタン、右下に「追加」の FAB</td></tr>
+            <tr><td>先頭の <code>Task 2</code> を左へスワイプ</td><td>行が消え、Snackbar <code>「task 2」を削除しました</code> と「元に戻す」が出る</td></tr>
+            <tr><td>「元に戻す」をタップ</td><td><code>Task 2</code> が元の位置（先頭、<code>Task 3</code> の上）に戻る</td></tr>
+            <tr><td>一覧を上へスクロール</td><td>「先頭へ」の FAB が現れる。見出し「未完了」は上端に残り、その下を行が通る。続けて見出し「完了」が下から来て、<code>Task 1</code>・<code>Task 4</code>…が並ぶ</td></tr>
+            <tr><td>「追加」の FAB をタップ</td><td>下からシート「新しい Todo」（入力欄と追加ボタン）が開く。入力欄をタップするとキーボードが出て、シートはキーボードの上に載る</td></tr>
+            <tr><td>シートで入力して「追加」</td><td>シートが閉じ、行が 1 件増える</td></tr>
+            <tr><td>トップバーのゴミ箱をタップ</td><td>ダイアログ「完了済みをすべて削除」「完了済みの Todo 7 件を削除します。この操作は元に戻せません。」と「キャンセル」「削除」</td></tr>
+            </tbody>
+          </table>
+
+          <p>Snackbar の題名が小文字（<code>task 2</code>）なのは、行の表示だけが <code>toTitleCase()</code> を通っていて、データの題名は <code>demoTodos</code> が作ったままだからです。シートやダイアログが開いている間は、後ろの一覧へのスワイプやタップは効きません（モーダルなので）。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>adb shell input text</code> で空白を入れない</p>
+              <p>シートの入力欄に <code>adb shell input text</code> で空白（<code>%s</code>）を含む文字を入れたところ、ダイアログが開きました。キーボードのフォーカス移動で、意図しないボタン（トップバーのゴミ箱）が押されたためです。<code>adb</code> で入力するときは <code>milk</code> のように空白なしにするか、手で入力します。</p>
+            </div>
+          </div>
+
+          <p>確認が終わったら、エミュレータと Gradle デーモンを止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>上のテストの実行が <code>BUILD SUCCESSFUL</code> で終わり、UI テスト 53 件とユニットテスト 42 件が成功していれば OK です。エミュレータで、スワイプ削除と取り消し・見出しの貼り付きと絞り込み・シートからの追加・確認ダイアログを操作できることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid06</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>SwipeToDismissBox</code> の <code>onDismiss</code> で <code>snapTo(Settled)</code> する理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>items</code> に <code>key</code> を渡す理由を、スワイプの状態の例で説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>stickyHeader</code> と <code>FilterChip</code> で、セクション分けと絞り込みを作った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>ModalBottomSheet</code> を、<code>hide()</code> の完了を待ってから表示フラグを落とす形で閉じた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">取り消せる操作には Snackbar の「元に戻す」、取り消せない操作には <code>AlertDialog</code> の確認、と使い分ける理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>@OptIn(ExperimentalMaterial3Api::class)</code> が必要なのは <code>TopAppBar</code> と <code>ModalBottomSheet</code> 系だけであることを、ビルドで確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>./gradlew assembleDebug lint test connectedDebugAndroidTest</code> で UI テスト 53 件を通した</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>items</code> に <code>key</code> を渡し忘れる</p>
+              <p><code>items(todos) { ... }</code> だけだと、行の中で覚えている状態（<code>rememberSaveable</code> を含む）は位置に結び付きます。行を削除すると、次の行が前の行の状態を引き継ぎます。ステップ 1 では、スワイプで「消えた」状態が次々に引き継がれ、全部の行が消えました。<code>items(todos, key = { it.id })</code> のように、要素ごとに変わらない値を <code>key</code> に渡します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">「元に戻す」で戻した行が、すぐまた消える</p>
+              <p><code>rememberSwipeToDismissBoxState</code> は「消えた」状態を <code>rememberSaveable</code> で保存します。<code>onDismiss</code> で削除するだけだと、同じ <code>key</code> の行を戻したときに「消えた」状態が戻り、もう一度削除されます。<code>onDismiss</code> の中で先に <code>snapTo(SwipeToDismissBoxValue.Settled)</code> を呼んでから削除します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">UI テストで、一覧の番号がずれる</p>
+              <p><code>performScrollToIndex</code> の番号には、<code>stickyHeader</code> や <code>item</code> も 1 つと数えられます。ステップ 2 でセクション見出しが入ったので、05 で書いたテストの番号を直しました。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">見出しやチップと同じ文字を数えてしまう</p>
+              <p>「完了」という文字は、見出し・チップ・行の状態の 3 か所に出ます。<code>onAllNodesWithText(&quot;完了&quot;)</code> で数えると、行以外も数えます。行の中だけで数えたいときは、<code>hasAnyAncestor(hasTestTag(&quot;todo_row&quot;))</code> で絞り込みます（ステップ 2）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">シートやダイアログが開いている間は、後ろを操作できない</p>
+              <p><code>ModalBottomSheet</code> と <code>AlertDialog</code> はモーダルなので、開いている間は後ろの一覧へのスワイプやタップが効きません。エミュレータでスワイプが効かないときは、シートが開いたままになっていないか確かめます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">opt-in の要否はビルドで確かめる</p>
+              <p>Material3 では、版によって実験的 API が安定版になります。この項目の版（Material3 1.4.0 / Foundation 1.12.1）で opt-in が必要だったのは、<code>TopAppBar</code> と <code>ModalBottomSheet</code> 系だけです。<code>@OptIn</code> を外してビルドすると、必要な箇所が <code>This material API is experimental</code> のエラーとして行番号付きで出ます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">一覧の状態と ViewModel（07）</p>
+              <p>この項目では、Todo の一覧・絞り込み・シートの表示フラグを <code>TodoListPage</code> の <code>rememberSaveable</code> などで持ちました。次の項目（07）では、これらの状態を <code>ViewModel</code> と <code>StateFlow</code> に移す予定です。</p>
+            </div>
+          </div>
+
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        05 の一覧に、Material3 と Foundation の部品で操作を足しました。
+        <code>SwipeToDismissBox</code> では、スワイプの状態が <code>key</code> ごとに保存されることと、<code>onDismiss</code> で <code>snapTo(Settled)</code> してから削除する理由を見ました。
+        <code>stickyHeader</code> と <code>FilterChip</code> でセクション分けと絞り込みを作り、入力欄を <code>ModalBottomSheet</code> へ移しました。取り消せない「完了済みをすべて削除」には、<code>AlertDialog</code> で確認を挟みました。
+        opt-in が必要な API は、<code>@OptIn</code> を外したビルドのエラーで確かめ、この版では <code>TopAppBar</code> と <code>ModalBottomSheet</code> 系だけでした。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>android/06-material3-components</code> の <code>android/06-material3-components/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../05-material3-lazycolumn/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">05: Material3 と LazyColumn</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">07: ViewModel と StateFlow</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
