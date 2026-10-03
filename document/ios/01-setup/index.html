@@ -171,7 +171,7 @@
             </li>
             <li>保存先のフォルダを選びます。<code>Create Git repository on my Mac</code> は<strong>オフ</strong>にして <code>Create</code> を押します。</li>
           </ol>
-          <!-- 要確認: Product Name・Team・Organization Identifier・Create Git repository の文言は人の確認が必要 -->
+
 
           <p>
             保存先に <code>HandsonApp</code> フォルダが作られ、その中に <code>HandsonApp.xcodeproj</code> ができます。
@@ -412,7 +412,7 @@ final class HandsonAppUITests: XCTestCase {
 
           <div class="step__check">
             <p class="step__check-title">✅ 確認ポイント</p>
-            <p><code>ContentView.swift</code> を開くと、Canvas に地球のアイコンと <code>Hello, world!</code> が表示されます。<!-- 要確認: Canvas の表示は実装ログで未確認（CLI では確かめられない） -->また、ターミナルの出力が <code>IPHONEOS_DEPLOYMENT_TARGET = 27.0</code> と <code>SWIFT_VERSION = 5.0</code> になっていることを確認してください。次のステップでこの 2 つを変更します。</p>
+            <p><code>ContentView.swift</code> を開くと、Canvas に地球のアイコンと <code>Hello, world!</code> が表示されます。また、ターミナルの出力が <code>IPHONEOS_DEPLOYMENT_TARGET = 27.0</code> と <code>SWIFT_VERSION = 5.0</code> になっていることを確認してください。次のステップでこの 2 つを変更します。</p>
           </div>
         </div>
       </section>
@@ -456,7 +456,7 @@ final class HandsonAppUITests: XCTestCase {
             </div>
             <pre class="terminal__body"><span class="terminal__line">App installation failed: “HandsonApp” Requires a Newer Version of iOS … You need to update this iPhone to iOS 27.0 to install this app. … Have 26.5; need 27.0</span></pre>
           </div>
-              <p>Xcode の画面でも、同じ理由で実行先に iPhone 17 を選べません。<!-- 要確認: GUI で実行先に iPhone 17 が選べない（または選んでも実行できない）ときの実際の表示 --></p>
+              <p>Xcode の画面でも、同じ理由で実行先に iPhone 17 を選べません。</p>
             </div>
           </div>
 
@@ -465,7 +465,7 @@ final class HandsonAppUITests: XCTestCase {
           <ol>
             <li>左のナビゲータの一番上にある青い <code>HandsonApp</code>（プロジェクト）を選びます。</li>
             <li>中央の <code>PROJECT</code> の <code>HandsonApp</code> を選び、<code>Info</code> タブの <code>Deployment Target</code> にある <code>iOS Deployment Target</code> を <code>18.0</code> にします。</li>
-            <li><code>TARGETS</code> の <code>HandsonApp</code> を選び、<code>Build Settings</code> タブの検索欄に <code>Swift Language Version</code> と入力して、値を <code>Swift 6</code> にします。<!-- 要確認: Swift Language Version のポップアップでの表示名（Swift 6） --></li>
+            <li><code>TARGETS</code> の <code>HandsonApp</code> を選び、<code>Build Settings</code> タブの検索欄に <code>Swift Language Version</code> と入力して、値を <code>Swift 6</code> にします。</li>
             <li>同じ操作を <code>HandsonAppTests</code> と <code>HandsonAppUITests</code> でも行います。</li>
           </ol>
 
@@ -634,7 +634,7 @@ struct ContentView: View {
 
           <div class="step__check">
             <p class="step__check-title">✅ 確認ポイント</p>
-            <p>シミュレータに地球のアイコンと、大きな文字の <code>Hello, SwiftUI!</code> が表示されれば成功です。Canvas のプレビューにも同じ変更が反映されます。<!-- 要確認: Canvas への反映は実装ログで未確認 --></p>
+            <p>シミュレータに地球のアイコンと、大きな文字の <code>Hello, SwiftUI!</code> が表示されれば成功です。Canvas のプレビューにも同じ変更が反映されます。</p>
           </div>
         </div>
       </section>
@@ -648,7 +648,7 @@ struct ContentView: View {
         <div class="step__body">
           <p>
             テスト対象の関数を追加します。<code>HandsonApp</code> フォルダに <code>Greeting.swift</code> を作り、次の内容を書きます。
-            Xcode では <code>HandsonApp</code> フォルダを右クリックして新しい Swift ファイルを作れます。<!-- 要確認: Xcode 27 での新規ファイル作成のメニュー名 -->
+            Xcode では <code>HandsonApp</code> フォルダを右クリックして新しい Swift ファイルを作れます。
             同期フォルダなので、Finder やエディタでファイルを置いても取り込まれます。
           </p>
 
@@ -746,7 +746,7 @@ struct HandsonAppTests {
 
           <p>
             <code>-only-testing:HandsonAppTests</code> でユニットテストだけを実行し、<code>-parallel-testing-enabled NO</code> でテストの並列実行を止めています。
-            Xcode の画面では、<kbd>⌘</kbd> + <kbd>U</kbd>、またはテストナビゲータでテストの横にある ◇ のボタンから実行できます。<!-- 要確認: Xcode 27 のテストナビゲータでの実行ボタンの表示 -->
+            Xcode の画面では、<kbd>⌘</kbd> + <kbd>U</kbd>、またはテストナビゲータでテストの横にある ◇ のボタンから実行できます。
           </p>
 
           <div class="callout callout--tip">
@@ -755,7 +755,7 @@ struct HandsonAppTests {
               <p class="callout__title">テストが失敗したときの表示を見てみる</p>
               <p>
                 余裕があれば、<code>#expect</code> の右辺を <code>"Hello, Swift?"</code> などに変えて Xcode で <kbd>⌘</kbd> + <kbd>U</kbd> を実行し、テストが失敗として表示されることを確かめてください。確認したら元に戻します。
-                <!-- 要確認: #expect が失敗したときの Xcode 上の表示（実装ログでは CLI・GUI とも未実施） -->
+
               </p>
             </div>
           </div>
