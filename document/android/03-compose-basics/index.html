@@ -1,0 +1,1645 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03: Compose 入門 | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">03</li>
+        </ol>
+        <h1 class="lesson-title">Compose 入門</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 02 で Kotlin の基本文法を学んだ人。Jetpack Compose は未経験でも構いません</li>
+          <li class="lesson-meta__item">📋 前提: 02 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../02-kotlin-basics/index.html">02: Kotlin 基礎</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>Composable 関数の 3 つの慣習（<code>@Composable</code>、値を返さない、<code>modifier</code> を最初の省略可能引数にする）に従って UI の部品を書ける</li>
+          <li><code>@Preview</code> を付けた関数で、部品の見た目をアプリを起動せずに確かめられる</li>
+          <li><code>Column</code> / <code>Row</code> / <code>Box</code> と <code>Modifier</code> で要素を配置し、<code>Modifier</code> の順序で結果が変わることを説明できる</li>
+          <li>Material3 の <code>Scaffold</code>・<code>TopAppBar</code>・<code>Card</code>・<code>Button</code>・<code>Icon</code>・<code>HorizontalDivider</code> で画面を組み立てられる</li>
+          <li><code>MaterialTheme</code> の色とタイポグラフィを使い、ダークテーマの Preview を作れる</li>
+          <li>Compose UI テストで、画面に表示された内容を検証できる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        02 では、テンプレートの <code>Greeting</code> の中で <code>Text</code> を並べて Todo を表示しました。
+        この項目では、Jetpack Compose の基本である Composable 関数を 1 つずつ部品として切り出します。部品を組み合わせて、TopAppBar・カード・ボタンのある Todo 一覧画面を作ります。
+        部品ごとに <code>@Preview</code> を用意し、最後に Compose UI テストで表示内容を確かめます。
+      </p>
+
+      <h3 id="declarative-ui">宣言的 UI とは</h3>
+      <p>
+        従来の View システムでは、XML でレイアウトを定義し、<code>findViewById</code> などで取り出した View に対して <code>setText</code> のように「どう変えるか」を命令して画面を更新していました。
+        Compose では、「データがこの値なら UI はこうなる」を Kotlin の関数で宣言します。データが変わると、Compose がその関数を呼び直して UI を作り直します。これを<strong>再コンポーズ</strong>（recomposition）と呼びます。
+        画面の更新手順を自分で書く代わりに、「入力から UI を作る関数」を書くのが宣言的 UI の考え方です。
+      </p>
+
+      <h3 id="composable-rules">Composable 関数の 3 つの慣習</h3>
+      <p>この項目で作る部品は、すべて次の 3 つに従います。ステップ 1 で実際に書いて確かめます。</p>
+
+          <table>
+            <thead>
+            <tr><th>慣習</th><th>内容</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>@Composable</code> を付ける</td><td>Compose コンパイラが UI を宣言する関数として扱います。関数名は名詞の PascalCase（<code>Greeting</code>、<code>TodoRow</code>）にします</td></tr>
+            <tr><td>値を返さない</td><td>View オブジェクトなどを返さず、戻り値は <code>Unit</code> です。関数の中で <code>Text</code> などを呼ぶこと自体が UI の宣言になります</td></tr>
+            <tr><td><code>modifier</code> を最初の省略可能引数にする</td><td><code>modifier: Modifier = Modifier</code> を、必須の引数の後・ほかの省略可能引数の前に置きます。呼び出し側が外から余白や大きさを足せるようにするためです</td></tr>
+            </tbody>
+          </table>
+
+      <p>
+        この項目の画面は<strong>状態を持ちません</strong>。同じデータを渡せば、いつも同じ UI が描かれます。チェックボックスを押して完了を切り替えるといった、状態を変える操作は 04 の <code>remember</code> / <code>mutableStateOf</code> で扱います。
+      </p>
+
+      <h3 id="how-to-proceed">この項目の進め方</h3>
+
+          <table>
+            <thead>
+            <tr><th>やること</th><th>置き場所・方法</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>再利用する部品（Composable）を書く</td><td><code>app/src/main/java/com/handson/android01/ui/components/</code></td></tr>
+            <tr><td>画面と、画面用のデータ・Preview を書く</td><td><code>app/src/main/java/com/handson/android01/ui/screens/</code></td></tr>
+            <tr><td>Android Studio で見た目を確かめる</td><td><code>@Preview</code> を付けた関数を持つファイルを開き、エディタの Preview パネル（表示は未確認）で確認する</td></tr>
+            <tr><td>ターミナルで表示を確かめる</td><td>Compose UI テスト（<code>app/src/androidTest/</code>）を書き、エミュレータを起動して <code>./gradlew connectedDebugAndroidTest</code> を実行する</td></tr>
+            </tbody>
+          </table>
+
+      <p>Preview は Android Studio の中だけで動く機能です。この教材ではターミナルでも結果を確かめられるように、各ステップで作った部品を Compose UI テストでも検証します。UI テストはエミュレータ（または実機）の上で実行されます。</p>
+
+      <h3 id="versions">使用バージョン</h3>
+      <p>01・02 と同じく、Kotlin 2.4.20 / AGP 9.4.1 / Gradle 9.6.0 / Compose BOM 2026.09.00 で作成しています。Compose の各ライブラリのバージョンは BOM（Bill of Materials）が決めます。<code>./gradlew :app:dependencies --configuration debugRuntimeClasspath</code> で確かめた、この項目で使う主なライブラリの解決結果は次のとおりです。</p>
+
+          <table>
+            <thead>
+            <tr><th>ライブラリ</th><th>解決されたバージョン</th><th>この項目での用途</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>androidx.compose:compose-bom</code></td><td>2026.09.00</td><td>Compose のライブラリのバージョンをまとめて決める</td></tr>
+            <tr><td><code>androidx.compose.runtime:runtime</code></td><td>1.12.1</td><td><code>@Composable</code> と再コンポーズの仕組み</td></tr>
+            <tr><td><code>androidx.compose.ui:ui</code></td><td>1.12.1</td><td><code>Modifier</code>・<code>testTag</code> など UI の基礎</td></tr>
+            <tr><td><code>androidx.compose.foundation:foundation</code>（<code>foundation-layout</code>）</td><td>1.12.1</td><td><code>Column</code> / <code>Row</code> / <code>Box</code>・<code>background</code></td></tr>
+            <tr><td><code>androidx.compose.ui:ui-tooling-preview</code></td><td>1.12.1</td><td><code>@Preview</code>・マルチプレビュー</td></tr>
+            <tr><td><code>androidx.compose.material3:material3</code></td><td>1.4.0</td><td><code>Scaffold</code>・<code>TopAppBar</code>・<code>Card</code>・<code>Button</code> など</td></tr>
+            <tr><td><code>androidx.compose.material:material-icons-core</code></td><td>1.7.8</td><td><code>Icons.Default.Check</code> / <code>Add</code>（ステップ 2 で追加）</td></tr>
+            <tr><td><code>androidx.activity:activity-compose</code></td><td>1.13.0</td><td><code>setContent</code> で Activity に Compose の画面を載せる</td></tr>
+            </tbody>
+          </table>
+
+      <p><code>material-icons-core</code> だけは 1.7.8 です。BOM が管理するライブラリでも、バージョンは Compose UI と揃っているとは限りません。バージョンは執筆時点（2026年10月）の最新安定版です。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Android Studio の画面について</p>
+              <p>Android Studio の画面の名称や配置はバージョンで変わります。本教材は Rabbit 1（2026.2.1）を前提に画面の操作を書いています。本文のコードとコマンドの出力は、ターミナル（Gradle・<code>adb</code>）で実際に動かして確認したものです。Preview パネルの表示は確認していません。Preview パネルの切り替えボタンや表示が本文と違う場合は、同じ意味の項目を選んでください。</p>
+            </div>
+          </div>
+
+      <h2 id="prepare">準備</h2>
+      <p>02 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 03 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid02&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid03&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid02&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid03&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span></pre>
+</div>
+
+      <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。02 のままだと <code>BasicsTest</code> は成功しますが、プロジェクト名と食い違うので揃えておきます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid02&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid03&quot;</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid02&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid03&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+      <p>パッケージ名（<code>com.handson.android01</code>）は 02 と同じく変えません。この項目で作るファイルのパッケージは <code>com.handson.android01.ui.components</code> と <code>com.handson.android01.ui.screens</code> です。<code>main</code> と <code>androidTest</code> の下に、それぞれディレクトリを作っておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p app/src/main/java/com/handson/android01/ui/components app/src/main/java/com/handson/android01/ui/screens</span><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p app/src/androidTest/java/com/handson/android01/ui/components app/src/androidTest/java/com/handson/android01/ui/screens</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">&gt; Task :app:compileDebugKotlin</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 15s</span></pre>
+</div>
+
+      <p><code>BUILD SUCCESSFUL</code> と表示されれば準備は完了です。</p>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">Composable 関数の基本と <code>@Preview</code></h3>
+        </div>
+        <div class="step__body">
+
+          <p>最初の Composable 関数として、名前を受け取って挨拶を表示する <code>Greeting</code> を部品に切り出します。<code>ui/components/Greeting.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/Greeting.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+
+// Composable 関数: UI を「宣言」する関数。値（View オブジェクトなど）を返さず、Unit を返す。
+// 命名は PascalCase（先頭大文字）にする。Compose コンパイラがこの関数を Composable として扱う
+@Composable
+fun Greeting(name: String, modifier: Modifier = Modifier) {
+    // modifier は最初の省略可能な引数にする（Compose の慣習）。呼び出し側が外から見た目を足せるようにする
+    Text(
+        text = &quot;Hello, $name!&quot;,
+        modifier = modifier,
+    )
+}
+
+// Preview は引数を取らない Composable にする（@PreviewParameter を除く。ステップ 5 で扱う）
+@Preview(showBackground = true)
+@Composable
+private fun GreetingPreview() {
+    HandsonAndroid01Theme {
+        Greeting(name = &quot;Android&quot;)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>@Composable</code>: この関数が UI を宣言する Composable 関数であることを示します。Composable 関数は、ほかの Composable 関数（または <code>setContent</code> などの Composable を受け取る場所）からしか呼べません。</li>
+            <li><code>fun Greeting(...)</code> に戻り値の型はありません（<code>Unit</code>）。<code>Text(...)</code> を呼ぶことが「ここに文字を表示する」という宣言になります。</li>
+            <li><code>modifier: Modifier = Modifier</code>: 必須の <code>name</code> の後、最初の省略可能な引数です。受け取った <code>modifier</code> は、関数の一番外側の要素（ここでは <code>Text</code>）に渡します。</li>
+            <li><code>@Preview(showBackground = true)</code>: Android Studio の Preview パネルに描く関数に付けます。<code>showBackground = true</code> で白い背景が付きます。Preview の中でも本番と同じ見た目になるよう、テーマ（<code>HandsonAndroid01Theme</code>）で囲みます。</li>
+            <li><code>private fun GreetingPreview()</code>: Preview 用の関数は引数を取らず、<code>private</code> にします。理由はステップ 5 で説明します。</li>
+          </ul>
+          <p>02 で <code>MainActivity.kt</code> に書いた <code>Greeting</code> と <code>demoTodos</code> は、この部品と画面に置き換えるので削除します。<code>MainActivity.kt</code> 全体を次の内容に置き換えてください。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01
+
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Scaffold
+import androidx.compose.ui.Modifier
+import com.handson.android01.ui.components.Greeting
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContent {
+            HandsonAndroid01Theme {
+                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding -&gt;
+                    Greeting(name = &quot;Android&quot;, modifier = Modifier.padding(innerPadding))
+                }
+            }
+        }
+    }
+}</code></pre>
+</div>
+
+          <p><code>Greeting</code> は別のパッケージ（<code>ui.components</code>）に移ったので、<code>import com.handson.android01.ui.components.Greeting</code> で読み込みます。02 の Todo 一覧はいったん画面から消えますが、ステップ 3 で部品を組み合わせた画面として戻します。</p>
+          <p>Android Studio で <code>Greeting.kt</code> を開くと、<code>GreetingPreview</code> の描画結果が Preview パネルに表示されるはずです（この教材では Studio の Preview 表示は確認していません。判定はターミナルの UI テストで行います）。</p>
+          <p>続いて、同じ表示をターミナルからも確かめられるように、Compose UI テストを書きます。<code>androidTest/.../ui/components/GreetingTest.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/components/GreetingTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class GreetingTest {
+
+    // createComposeRule(): Activity を起動せず、テスト対象の Composable だけを setContent で描画する
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun greeting_showsName() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                Greeting(name = &quot;Compose&quot;)
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;Hello, Compose!&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun greeting_showsDifferentNameWhenCalledWithAnotherArgument() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                Greeting(name = &quot;Kotlin&quot;)
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;Hello, Kotlin!&quot;).assertIsDisplayed()
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>createComposeRule()</code>: Activity を起動せずに、テスト対象の Composable だけを描画するためのルールです。<code>import</code> は <code>androidx.compose.ui.test.junit4.v2</code> のものを使います（下のコールアウトを参照）。</li>
+            <li><code>composeTestRule.setContent { ... }</code>: テストの中で描画する UI を指定します。</li>
+            <li><code>onNodeWithText("Hello, Compose!")</code>: 表示されている文字が完全一致するノード（UI の要素）を探します。<code>assertIsDisplayed()</code> で画面に表示されていることを確かめます。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>createComposeRule</code> は <code>v2</code> パッケージのものを使う</p>
+              <p><code>androidx.compose.ui.test.junit4.createComposeRule</code>（<code>v2</code> の付かない方）を import すると、ビルド時に次の警告が出ます。</p>
+              <p><code>w: .../GreetingTest.kt:17:27 'fun createComposeRule(effectContext: CoroutineContext = ...): ComposeContentTestRule' is deprecated. Use `androidx.compose.ui.test.junit4.v2.createComposeRule` instead. ...</code></p>
+              <p>この項目のテストはすべて <code>androidx.compose.ui.test.junit4.v2.createComposeRule</code> に統一しています。<code>v2</code> ではテストのコルーチンが <code>StandardTestDispatcher</code> で動くため、処理がすぐに実行されることを前提にしたテストは見直しが必要になる場合があります。</p>
+            </div>
+          </div>
+
+          <p>02 のステップ 7 と同じ手順でエミュレータを起動し、UI テストを実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb wait-for-device</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell getprop sys.boot_completed</span><span class="terminal__line">1</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 13s</span></pre>
+</div>
+
+          <p><code>connectedDebugAndroidTest</code> は、テスト用の APK をエミュレータにインストールして <code>androidTest</code> のテストを実行します。結果は <code>app/build/reports/androidTests/connected/debug/index.html</code> をブラウザで開いて確認できます。エミュレータはこの後のステップでも使うので、起動したままにしておきます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>./gradlew connectedDebugAndroidTest</code> が <code>BUILD SUCCESSFUL</code> で終わり、<code>GreetingTest</code> の 2 件が成功すれば OK です。Android Studio の Preview パネルには「Hello, Android!」が表示されるはずです（Preview 表示は未確認。判定はこのテストで行います）。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>Column</code> / <code>Row</code> / <code>Box</code> と <code>Modifier</code></h3>
+        </div>
+        <div class="step__body">
+
+          <p>Compose では、要素の並べ方をレイアウト用の Composable で指定します。この項目では次の 3 つを使います。</p>
+
+          <table>
+            <thead>
+            <tr><th>Composable</th><th>並べ方</th><th>この項目で使う場所</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>Column</code></td><td>子要素を上から下に並べる（02 の <code>Greeting</code> で使用）</td><td>ステップ 3 の画面全体・カードの中</td></tr>
+            <tr><td><code>Row</code></td><td>子要素を左から右に並べる</td><td><code>TodoRow</code>（チェックボックス・タイトル・状態）</td></tr>
+            <tr><td><code>Box</code></td><td>子要素を重ねて置く</td><td><code>CountBadge</code>（アイコンの上に件数のバッジ）</td></tr>
+            </tbody>
+          </table>
+
+          <p>まず、Todo 1 件を 1 行で表示する <code>TodoRow</code> を作ります。02 で作った <code>Todo</code> と拡張関数 <code>toTitleCase()</code> を使います。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/TodoRow.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.kotlin.toTitleCase
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+
+@Composable
+fun TodoRow(todo: Todo, modifier: Modifier = Modifier) {
+    // Row: 子要素を左から右に並べる。verticalAlignment で高さ方向の揃え位置を決める
+    Row(
+        // testTag は padding より前に書く。後ろに書くと、タグの付いたノードが余白の内側だけになる
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag(&quot;todo_row&quot;)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // onCheckedChange = null にすると表示専用になる（タップしても状態が変わらない）
+        Checkbox(checked = todo.done, onCheckedChange = null)
+        // weight(1f): 残りの横幅をすべて使う。weight を持つ子が複数あれば比率で分ける
+        Text(
+            text = todo.title.toTitleCase(),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        Text(
+            text = if (todo.done) &quot;完了&quot; else &quot;未完了&quot;,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun TodoRowPreview() {
+    HandsonAndroid01Theme {
+        TodoRow(todo = Todo(1, &quot;learn kotlin basics&quot;, done = true))
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically)</code>: 子要素の間を 8dp ずつ空け、高さ方向は中央に揃えます。</li>
+            <li><code>modifier.fillMaxWidth().testTag("todo_row").padding(...)</code>: <code>Modifier</code> はメソッドチェーンで重ねます。<code>fillMaxWidth()</code> で親の幅いっぱいに広げ、<code>padding</code> で内側に余白を付けます。<code>testTag</code> は UI テストからこの行を探すための目印です。</li>
+            <li><code>Checkbox(checked = todo.done, onCheckedChange = null)</code>: <code>onCheckedChange</code> に <code>null</code> を渡すと、表示専用のチェックボックスになります。</li>
+            <li><code>Modifier.weight(1f)</code>: <code>Row</code> の中だけで使える指定で、ほかの子が使った残りの横幅をすべて使います。タイトルが伸び、状態の文字は右端に寄ります。</li>
+          </ul>
+          <p><code>Modifier</code> は<strong>書いた順に左から適用</strong>されます。順序を入れ替えると結果が変わることを、2 つの Preview を並べて確かめます。<code>ModifierOrderPreviews.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/ModifierOrderPreviews.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+
+// Modifier は左から順に外側から包んでいく。順序を変えると見た目が変わる
+// 1 つ目: padding が先 → 余白の外側に背景色が付かない（背景は文字のまわりだけ）
+@Preview(name = &quot;padding → background&quot;, showBackground = true)
+@Composable
+private fun PaddingThenBackgroundPreview() {
+    Box(
+        modifier = Modifier
+            .padding(24.dp)
+            .background(Color(0xFFFFE082)),
+    ) {
+        Text(&quot;A&quot;)
+    }
+}
+
+// 2 つ目: background が先 → 余白の部分まで背景色が付く
+@Preview(name = &quot;background → padding&quot;, showBackground = true)
+@Composable
+private fun BackgroundThenPaddingPreview() {
+    Box(
+        modifier = Modifier
+            .background(Color(0xFFFFE082))
+            .padding(24.dp),
+    ) {
+        Text(&quot;A&quot;)
+    }
+}</code></pre>
+</div>
+
+          <p>どちらも <code>padding(24.dp)</code> と <code>background(...)</code> を 1 つずつ使っていて、違うのは順序だけです。<code>padding</code> が先だと、余白を空けた内側にだけ背景色が付きます。<code>background</code> が先だと、余白を含めた全体に背景色が付きます。<code>@Preview</code> の <code>name</code> は、1 つのファイルにある複数の Preview を見分けるための名前です。</p>
+          <p>次に、<code>Box</code> で要素を重ねる例として、アイコンの右上に件数のバッジを載せる <code>CountBadge</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/CountBadge.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+
+// Box: 子要素を重ねて置く。後に書いた子ほど手前に描かれる
+// contentAlignment と Modifier.align で、重ねた子の位置を指定する
+@Composable
+fun CountBadge(count: Int, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.size(48.dp)) {
+        Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = null,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(32.dp),
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .size(20.dp)
+                .background(MaterialTheme.colorScheme.error, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = count.toString(),
+                color = MaterialTheme.colorScheme.onError,
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun CountBadgePreview() {
+    HandsonAndroid01Theme {
+        CountBadge(count = 2)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>Box</code> の中では、後に書いた子ほど手前に描かれます。ここではチェックのアイコンの上に、赤い丸のバッジが重なります。</li>
+            <li><code>Modifier.align(Alignment.TopEnd)</code>: <code>Box</code> の中だけで使える指定で、子を右上に置きます。<code>contentAlignment = Alignment.Center</code> は、その <code>Box</code> の子（件数の文字）を中央に置く指定です。</li>
+            <li><code>background(MaterialTheme.colorScheme.error, CircleShape)</code>: テーマのエラー色で丸い背景を描きます。テーマの色はステップ 4 で扱います。</li>
+          </ul>
+          <p>この時点でコンパイルすると、<code>Icons</code> が見つからないというエラーになります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew compileDebugKotlin</span><span class="terminal__line">e: .../CountBadge.kt:7:34 Unresolved reference &#x27;icons&#x27;.</span><span class="terminal__line">e: .../CountBadge.kt:8:34 Unresolved reference &#x27;icons&#x27;.</span><span class="terminal__line">e: .../CountBadge.kt:25:27 Unresolved reference &#x27;Icons&#x27;.</span><span class="terminal__line">BUILD FAILED in 1s</span></pre>
+</div>
+
+          <p><code>Icons.Default.Check</code> などのアイコンは <code>material-icons-core</code> というライブラリにあり、<code>material3</code> を追加しただけでは使えません。Version Catalog に追加し、<code>app/build.gradle.kts</code> から参照します。バージョンは BOM が決めるので書きません。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  androidx-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }</span><span class="diff-line diff-line--add">+ androidx-material-icons-core = { group = &quot;androidx.compose.material&quot;, name = &quot;material-icons-core&quot; }</span><span class="diff-line">  kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.material3)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.material.icons.core)</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>Version Catalog の <code>androidx-material-icons-core</code> は、Gradle からは <code>libs.androidx.material.icons.core</code>（<code>-</code> が <code>.</code> になる）で参照します。アイコンを大量に収録した <code>material-icons-extended</code> もありますが、この項目では使いません。</p>
+          <p>最後に、<code>TodoRow</code> の UI テストを書きます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/components/TodoRowTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.components
+
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.unit.dp
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class TodoRowTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun todoRow_showsTitleAndStatus() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoRow(todo = Todo(1, &quot;learn kotlin basics&quot;, done = true))
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;Learn Kotlin Basics&quot;).assertIsDisplayed()
+        composeTestRule.onNodeWithText(&quot;完了&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun todoRow_fillsParentWidth() {
+        // 親の幅を 300dp に固定すると、fillMaxWidth の結果が 300dp になる
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                Box(modifier = Modifier.width(300.dp)) {
+                    TodoRow(todo = Todo(2, &quot;build compose screen&quot;))
+                }
+            }
+        }
+
+        composeTestRule.onNodeWithTag(&quot;todo_row&quot;).assertWidthIsEqualTo(300.dp)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>todoRow_showsTitleAndStatus</code>: タイトルが <code>toTitleCase()</code> で「Learn Kotlin Basics」になり、状態が「完了」と表示されることを確かめます。</li>
+            <li><code>todoRow_fillsParentWidth</code>: 親の幅を 300dp に固定し、<code>testTag("todo_row")</code> の付いたノードの幅が 300dp になることを <code>assertWidthIsEqualTo</code> で確かめます。</li>
+          </ul>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>testTag</code> を <code>padding</code> の後に書くと幅のテストが失敗する</p>
+              <p><code>TodoRow</code> の <code>Modifier</code> を <code>.fillMaxWidth().padding(...).testTag("todo_row")</code> の順に書くと、<code>todoRow_fillsParentWidth</code> が次のように失敗します。</p>
+              <p><code>java.lang.AssertionError: Actual width is 268.1905.dp, expected 300.0.dp (tolerance: 0.5.dp)</code></p>
+              <p><code>padding</code> の後に付けた <code>testTag</code> は、余白の内側（300 − 16 × 2 = 268dp）だけを指すからです。<code>testTag</code> も <code>Modifier</code> の 1 つで、書いた位置より後ろの範囲にしか効きません。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>compileDebugKotlin</code> の <code>Icons</code> のエラーが消え、<code>connectedDebugAndroidTest</code> で <code>GreetingTest</code> 2 件と <code>TodoRowTest</code> 2 件が成功すれば OK です。Android Studio の Preview パネルでは、<code>ModifierOrderPreviews.kt</code> の 2 つの Preview で背景色の範囲が違って表示されるはずです（未確認）。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">Material3 コンポーネントで画面を組み立てる</h3>
+        </div>
+        <div class="step__body">
+
+          <p>ここまでの部品を、Material3 のコンポーネントと組み合わせて 1 つの画面にします。まず、画面に表示する固定データを <code>ui/screens/DemoData.kt</code> に置きます。中身は 02 の <code>demoTodos</code> と同じです。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/DemoData.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import com.handson.android01.kotlin.Todo
+
+// 画面に出すための固定データ（02 の demoTodos と同じ内容）。ステップ 5 以降の Preview とテストでも使う
+val demoTodoList: List&lt;Todo&gt; = listOf(
+    Todo(1, &quot;learn kotlin basics&quot;, done = true),
+    Todo(2, &quot;build compose screen&quot;),
+    Todo(3, &quot;write unit tests&quot;, done = true),
+)</code></pre>
+</div>
+
+          <p>02 では <code>private</code> にしていましたが、ステップ 5 の Preview とステップ 6 のテストからも使うので公開にします。続いて、画面本体の <code>TodoListScreen.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.kotlin.summaryLine
+import com.handson.android01.ui.components.CountBadge
+import com.handson.android01.ui.components.TodoRow
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+
+// TopAppBar は Material3 1.4 時点で実験的 API。使うには @OptIn が必要（未指定だとコンパイルエラー）
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TodoListScreen(
+    todos: List&lt;Todo&gt;,
+    onAddClick: () -&gt; Unit,
+    modifier: Modifier = Modifier,
+) {
+    // Scaffold: TopAppBar・本文・FAB などの置き場所を用意する Material3 の土台。
+    // 本文には innerPadding を必ず適用し、TopAppBar の下に隠れないようにする
+    Scaffold(
+        modifier = modifier,
+        topBar = {
+            TopAppBar(
+                title = { Text(&quot;Todo&quot;) },
+                actions = { CountBadge(count = todos.count { !it.done }) },
+            )
+        },
+    ) { innerPadding -&gt;
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+        ) {
+            Text(
+                text = todos.summaryLine(),
+                modifier = Modifier.padding(16.dp),
+                style = MaterialTheme.typography.titleLarge,
+            )
+
+            // Card の中に行を並べ、行の間だけ区切り線を入れる
+            Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                Column {
+                    todos.forEachIndexed { index, todo -&gt;
+                        TodoRow(todo = todo)
+                        if (index &lt; todos.lastIndex) {
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(onClick = onAddClick) {
+                    Icon(imageVector = Icons.Default.Add, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(&quot;追加&quot;)
+                }
+                // 以下 2 つはボタンの見た目の違いを示すための置き場。処理は後の項目で実装する
+                OutlinedButton(onClick = {}) {
+                    Text(&quot;フィルタ&quot;)
+                }
+                TextButton(onClick = {}) {
+                    Text(&quot;閉じる&quot;)
+                }
+            }
+        }
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun TodoListScreenPreview() {
+    HandsonAndroid01Theme {
+        TodoListScreen(todos = demoTodoList, onAddClick = {})
+    }
+}</code></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>コンポーネント</th><th>役割</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>Scaffold</code></td><td>TopAppBar・本文・FAB などの置き場所を用意する Material3 の土台です。本文のラムダに渡される <code>innerPadding</code> を本文に適用しないと、本文が TopAppBar の下に隠れます</td></tr>
+            <tr><td><code>TopAppBar</code></td><td>画面上部のバーです。<code>title</code> に画面名、<code>actions</code> に右端に置く要素（ここでは未完了件数の <code>CountBadge</code>）を渡します</td></tr>
+            <tr><td><code>Card</code></td><td>角の丸い面で内容をまとめます。中の <code>Column</code> に <code>TodoRow</code> を並べます</td></tr>
+            <tr><td><code>HorizontalDivider</code></td><td>水平の区切り線です。<code>index &lt; todos.lastIndex</code> のときだけ描き、行と行の間にだけ線を入れます</td></tr>
+            <tr><td><code>Button</code> / <code>OutlinedButton</code> / <code>TextButton</code></td><td>強調の度合いが違う 3 種類のボタンです。塗りつぶし・枠線のみ・文字のみの順に目立たなくなります</td></tr>
+            <tr><td><code>Icon</code></td><td>アイコンを描きます。<code>contentDescription = null</code> は、隣の「追加」の文字で意味が伝わるので読み上げ用の説明を付けない、という指定です</td></tr>
+            </tbody>
+          </table>
+
+          <ul>
+            <li><code>onAddClick: () -&gt; Unit</code>: 「追加」ボタンが押されたときの処理を、呼び出し側から関数として受け取ります。画面自身は状態を持たず、何をするかは呼び出し側に任せます。</li>
+            <li>「フィルタ」「閉じる」はボタンの見た目の違いを示すためのもので、<code>onClick = {}</code>（何もしない）にしています。</li>
+            <li><code>todos.count { !it.done }</code>: 未完了の件数です。02 で学んだラムダの <code>it</code> を使っています。</li>
+          </ul>
+          <p>この時点で <code>@OptIn(ExperimentalMaterial3Api::class)</code> の行が無いと、ビルドは次のエラーで失敗します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">e: .../ui/screens/TodoListScreen.kt:47:13 This material API is experimental and is likely to change or to be removed in the future.</span><span class="terminal__line">BUILD FAILED in 1s</span></pre>
+</div>
+
+          <p>このエラーは <code>TopAppBar</code> の呼び出しで出ます。Material3 1.4.0 の <code>TopAppBar</code> は実験的 API（<code>ExperimentalMaterial3Api</code>）です。使う関数に <code>@OptIn(ExperimentalMaterial3Api::class)</code> を付け、「変更される可能性を承知で使う」と明示する必要があります。上のコードには付けてあります。</p>
+          <p>最後に、<code>MainActivity</code> で表示する画面を <code>Greeting</code> から <code>TodoListScreen</code> に差し替えます。<code>Scaffold</code> は <code>TodoListScreen</code> の中に移ったので、<code>MainActivity</code> からは外します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.activity.enableEdgeToEdge</span><span class="diff-line">  import androidx.compose.foundation.layout.fillMaxSize</span><span class="diff-line diff-line--remove">- import androidx.compose.foundation.layout.padding</span><span class="diff-line diff-line--remove">- import androidx.compose.material3.Scaffold</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line diff-line--remove">- import com.handson.android01.ui.components.Greeting</span><span class="diff-line diff-line--add">+ import com.handson.android01.ui.screens.TodoListScreen</span><span class="diff-line diff-line--add">+ import com.handson.android01.ui.screens.demoTodoList</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">          setContent {</span><span class="diff-line">              HandsonAndroid01Theme {</span><span class="diff-line diff-line--remove">-                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding -&gt;</span><span class="diff-line diff-line--remove">-                     Greeting(name = &quot;Android&quot;, modifier = Modifier.padding(innerPadding))</span><span class="diff-line diff-line--remove">-                 }</span><span class="diff-line diff-line--add">+                 TodoListScreen(</span><span class="diff-line diff-line--add">+                     todos = demoTodoList,</span><span class="diff-line diff-line--add">+                     onAddClick = {},</span><span class="diff-line diff-line--add">+                     modifier = Modifier.fillMaxSize(),</span><span class="diff-line diff-line--add">+                 )</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>@OptIn</code> を付けた状態で <code>./gradlew assembleDebug</code> が <code>BUILD SUCCESSFUL</code> で終われば OK です。Android Studio の Preview パネルでは、<code>TodoListScreenPreview</code> に TopAppBar・カード・3 つのボタンが表示されるはずです（未確認）。エミュレータでの表示はステップ 7 でまとめて確かめます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">テーマとタイポグラフィ</h3>
+        </div>
+        <div class="step__body">
+
+          <p>ここまでの部品は、色や文字の大きさを <code>MaterialTheme.colorScheme</code> と <code>MaterialTheme.typography</code> から取っていました。その値を決めているのが、01 のテンプレートで生成された <code>ui/theme/</code> の 3 ファイルです。まず <code>Theme.kt</code> を読みます（変更はしません）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/theme/Theme.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.theme
+
+import android.os.Build
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
+
+private val DarkColorScheme = darkColorScheme(
+    primary = Purple80,
+    secondary = PurpleGrey80,
+    tertiary = Pink80
+)
+
+private val LightColorScheme = lightColorScheme(
+    primary = Purple40,
+    secondary = PurpleGrey40,
+    tertiary = Pink40
+)
+
+@Composable
+fun HandsonAndroid01Theme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    // Dynamic color is available on Android 12+
+    dynamicColor: Boolean = true,
+    content: @Composable () -&gt; Unit
+) {
+    val colorScheme = when {
+        dynamicColor &amp;&amp; Build.VERSION.SDK_INT &gt;= Build.VERSION_CODES.S -&gt; {
+            val context = LocalContext.current
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+
+        darkTheme -&gt; DarkColorScheme
+        else -&gt; LightColorScheme
+    }
+
+    MaterialTheme(
+        colorScheme = colorScheme,
+        typography = Typography,
+        content = content
+    )
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>HandsonAndroid01Theme</code> 自体も Composable 関数です。最後の引数 <code>content</code> に Composable のラムダを受け取り、<code>MaterialTheme</code> で囲んで描きます。<code>HandsonAndroid01Theme { ... }</code> と書けるのは、02 で学んだ末尾ラムダの書き方です。</li>
+            <li><code>darkTheme: Boolean = isSystemInDarkTheme()</code>: 端末がダークテーマかどうかを既定値にしています。</li>
+            <li><code>dynamicColor: Boolean = true</code>: Android 12（API 31、<code>Build.VERSION_CODES.S</code>）以上では、壁紙から作られる色（<code>dynamicLightColorScheme</code> / <code>dynamicDarkColorScheme</code>）を使います。このプロジェクトの <code>minSdk</code> は 26 なので、API 26〜30 の端末では固定の <code>LightColorScheme</code> / <code>DarkColorScheme</code> になります。</li>
+            <li><code>typography = Typography</code>: <code>Type.kt</code> で定義した文字のスタイルです。テンプレートの <code>Type.kt</code> は <code>bodyLarge</code> だけを上書きしていて、<code>titleLarge</code> や <code>labelMedium</code> などは Material3 の既定値のままです。</li>
+          </ul>
+          <p><code>TodoListScreen</code> の件数の見出しは <code>MaterialTheme.typography.titleLarge</code>、<code>TodoRow</code> のタイトルは <code>bodyLarge</code>、状態の文字は <code>labelMedium</code> で表示しています。<code>fontSize</code> を直接書かずにテーマのスタイル名で指定しておくと、<code>Type.kt</code> を変えるだけでアプリ全体の文字を揃えて変えられます。</p>
+          <p>次に、アプリ独自の色を追加します。Material3 の <code>ColorScheme</code> には「完了」を表す色が無いので、<code>Color.kt</code> に緑を 2 段階定義します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/theme/Color.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  val Pink40 = Color(0xFF7D5260)</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ // アプリ独自の色。Material の ColorScheme には「完了」を表す色が無いので、ここで 2 段階用意する</span><span class="diff-line diff-line--add">+ // 明るい背景用（濃い緑）と暗い背景用（明るい緑）</span><span class="diff-line diff-line--add">+ val DoneGreen40 = Color(0xFF2E7D32)</span><span class="diff-line diff-line--add">+ val DoneGreen80 = Color(0xFF8BD68E)</span></pre>
+</div>
+
+          <p>テンプレートの色と同じく、末尾の <code>40</code> は明るい背景用（濃い色）、<code>80</code> は暗い背景用（明るい色）です。<code>TodoRow</code> で、テーマの明暗に応じてどちらかを使います。ダークテーマの Preview も追加します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/components/TodoRow.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.components</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ import android.content.res.Configuration</span><span class="diff-line">  import androidx.compose.foundation.layout.Arrangement</span><span class="diff-line">  import androidx.compose.foundation.layout.Row</span><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.Alignment</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line diff-line--add">+ import androidx.compose.ui.graphics.luminance</span><span class="diff-line">  import androidx.compose.ui.platform.testTag</span><span class="diff-line">  import androidx.compose.ui.tooling.preview.Preview</span><span class="diff-line">  ...</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import com.handson.android01.kotlin.toTitleCase</span><span class="diff-line diff-line--add">+ import com.handson.android01.ui.theme.DoneGreen40</span><span class="diff-line diff-line--add">+ import com.handson.android01.ui.theme.DoneGreen80</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  </span><span class="diff-line">  @Composable</span><span class="diff-line">  fun TodoRow(todo: Todo, modifier: Modifier = Modifier) {</span><span class="diff-line diff-line--add">+     // テーマの背景色の明るさから、ダークかどうかを判定する（端末設定ではなく実際に使われている色で判断する）</span><span class="diff-line diff-line--add">+     val isDark = MaterialTheme.colorScheme.surface.luminance() &lt; 0.5f</span><span class="diff-line diff-line--add">+     val doneColor = if (isDark) DoneGreen80 else DoneGreen40</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      // Row: 子要素を左から右に並べる。verticalAlignment で高さ方向の揃え位置を決める</span><span class="diff-line">      Row(</span><span class="diff-line">  ...</span><span class="diff-line">          Text(</span><span class="diff-line">              text = if (todo.done) &quot;完了&quot; else &quot;未完了&quot;,</span><span class="diff-line diff-line--add">+             color = if (todo.done) doneColor else MaterialTheme.colorScheme.onSurfaceVariant,</span><span class="diff-line">              style = MaterialTheme.typography.labelMedium,</span><span class="diff-line">          )</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ // ダークテーマの確認用。uiMode を指定すると、Preview の中で isSystemInDarkTheme() 相当の判定が暗くなる</span><span class="diff-line diff-line--add">+ @Preview(name = &quot;dark&quot;, showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)</span><span class="diff-line diff-line--add">+ @Composable</span><span class="diff-line diff-line--add">+ private fun TodoRowDarkPreview() {</span><span class="diff-line diff-line--add">+     HandsonAndroid01Theme {</span><span class="diff-line diff-line--add">+         TodoRow(todo = Todo(1, &quot;learn kotlin basics&quot;, done = true))</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+          <ul>
+            <li><code>MaterialTheme.colorScheme.surface.luminance() &lt; 0.5f</code>: テーマの背景色（<code>surface</code>）の明るさで、ダークかどうかを判定します。端末の設定（<code>isSystemInDarkTheme()</code>）ではなく、実際に使われている色で判断するので、<code>HandsonAndroid01Theme(darkTheme = ...)</code> に明示的に渡した値とも食い違いません。</li>
+            <li>未完了の文字は、テーマの <code>onSurfaceVariant</code>（背景の上に置く控えめな文字色）にします。</li>
+            <li><code>@Preview(uiMode = Configuration.UI_MODE_NIGHT_YES)</code>: Preview をダークテーマの条件で描きます。Preview の中の <code>isSystemInDarkTheme()</code> が <code>true</code> になるので、<code>HandsonAndroid01Theme</code> がダーク用の色を選びます。</li>
+          </ul>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>./gradlew assembleDebug</code> が <code>BUILD SUCCESSFUL</code> で終われば OK です。Android Studio の Preview パネルでは、<code>TodoRow.kt</code> の 2 つの Preview（通常と <code>dark</code>）で、「完了」の緑の濃さが背景に合わせて変わって表示されるはずです（未確認）。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">Preview を活用する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Preview は、条件を変えた描画を何通りも並べられるのが強みです。データ・文字サイズ・画面サイズ・ダークテーマを変えた Preview を、画面用の別ファイル <code>ui/screens/TodoListScreenPreviews.kt</code> にまとめます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreenPreviews.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import android.content.res.Configuration
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.tooling.preview.Devices
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.tooling.preview.PreviewLightDark
+import androidx.compose.ui.tooling.preview.PreviewFontScale
+import androidx.compose.ui.tooling.preview.PreviewParameter
+import androidx.compose.ui.tooling.preview.PreviewParameterProvider
+import androidx.compose.ui.tooling.preview.PreviewScreenSizes
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+
+// 複数のデータで同じ画面を確認するための提供元。values の要素ごとに Preview が 1 つずつ描かれる
+class TodoListPreviewProvider : PreviewParameterProvider&lt;List&lt;Todo&gt;&gt; {
+    override val values: Sequence&lt;List&lt;Todo&gt;&gt; = sequenceOf(
+        demoTodoList,
+        emptyList(),
+        List(12) { index -&gt; Todo(index + 1, &quot;task ${index + 1}&quot;, done = index % 3 == 0) },
+    )
+}
+
+// @PreviewParameter: 引数に値を受け取る。引数付きの Preview はこの指定のときだけ使える
+@Preview(name = &quot;parameter&quot;, showBackground = true)
+@Composable
+private fun TodoListScreenParameterPreview(
+    @PreviewParameter(TodoListPreviewProvider::class) todos: List&lt;Todo&gt;,
+) {
+    HandsonAndroid01Theme {
+        TodoListScreen(todos = todos, onAddClick = {})
+    }
+}
+
+// fontScale: 文字サイズを拡大した状態で崩れないか確認する
+@Preview(name = &quot;fontScale 1.5&quot;, showBackground = true, fontScale = 1.5f)
+@Composable
+private fun TodoListScreenFontScalePreview() {
+    HandsonAndroid01Theme {
+        TodoListScreen(todos = demoTodoList, onAddClick = {})
+    }
+}
+
+// device: 端末の画面サイズを指定する（Devices には定義済みの機種名がある）
+@Preview(name = &quot;tablet&quot;, device = Devices.TABLET, showBackground = true)
+@Composable
+private fun TodoListScreenTabletPreview() {
+    HandsonAndroid01Theme {
+        TodoListScreen(todos = demoTodoList, onAddClick = {})
+    }
+}
+
+// uiMode: ダークテーマの確認。マルチプレビュー @PreviewLightDark は明/暗の 2 つを一度に作る
+@Preview(name = &quot;dark&quot;, uiMode = Configuration.UI_MODE_NIGHT_YES, showBackground = true)
+@Composable
+private fun TodoListScreenDarkPreview() {
+    HandsonAndroid01Theme {
+        TodoListScreen(todos = demoTodoList, onAddClick = {})
+    }
+}
+
+// マルチプレビュー: 1 つのアノテーションで複数の条件の Preview を作る
+@PreviewLightDark
+@Composable
+private fun TodoListScreenLightDarkMultiPreview() {
+    HandsonAndroid01Theme {
+        TodoListScreen(todos = demoTodoList, onAddClick = {})
+    }
+}
+
+@PreviewFontScale
+@Composable
+private fun TodoListScreenFontScaleMultiPreview() {
+    HandsonAndroid01Theme {
+        TodoListScreen(todos = demoTodoList, onAddClick = {})
+    }
+}
+
+@PreviewScreenSizes
+@Composable
+private fun TodoListScreenScreenSizesMultiPreview() {
+    HandsonAndroid01Theme {
+        TodoListScreen(todos = demoTodoList, onAddClick = {})
+    }
+}</code></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>指定</th><th>内容</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>@PreviewParameter</code> + <code>PreviewParameterProvider</code></td><td><code>values</code> の要素ごとに Preview を 1 つずつ描きます。ここではデモデータ・空のリスト・12 件のリストの 3 通りです。引数を取る Preview 関数は、この指定のときだけ使えます</td></tr>
+            <tr><td><code>fontScale = 1.5f</code></td><td>端末の文字サイズを 1.5 倍にした状態で描きます。大きな文字で崩れないかを確かめます</td></tr>
+            <tr><td><code>device = Devices.TABLET</code></td><td>定義済みの端末（ここではタブレット）の画面サイズで描きます</td></tr>
+            <tr><td><code>uiMode = Configuration.UI_MODE_NIGHT_YES</code></td><td>ステップ 4 と同じく、ダークテーマで描きます</td></tr>
+            <tr><td><code>@PreviewLightDark</code></td><td>マルチプレビューアノテーションの 1 つで、ライトとダークの 2 つを一度に作ります</td></tr>
+            <tr><td><code>@PreviewFontScale</code></td><td>複数の文字サイズの Preview をまとめて作ります</td></tr>
+            <tr><td><code>@PreviewScreenSizes</code></td><td>複数の画面サイズの Preview をまとめて作ります</td></tr>
+            </tbody>
+          </table>
+
+          <p>マルチプレビューアノテーションは、<code>@Preview</code> を複数組み合わせたアノテーションです。1 つ付けるだけで、決まった条件の Preview が複数できます。<code>@PreviewLightDark</code> / <code>@PreviewFontScale</code> / <code>@PreviewScreenSizes</code> は、この項目で使う <code>ui-tooling-preview</code> 1.12.1 に含まれています。</p>
+          <p>Preview 関数をすべて <code>private</code> にしているのは、Preview は Android Studio で描くためだけの関数で、アプリのコードから呼ばれては困るからです。これは慣習で、公開のままでもビルドは通ります。ただし <code>private</code> にしてもコードからは消えません。このプロジェクトの release ビルドは <code>isMinifyEnabled = false</code>（テンプレートの設定）なので、R8 による縮小が行われず、Preview 関数も APK に含まれます。</p>
+          <p>このファイルは Preview 用の関数だけなので、ターミナルではコンパイルが通ることを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>./gradlew assembleDebug</code> が <code>BUILD SUCCESSFUL</code> で終われば OK です。Android Studio の Preview パネルでは、<code>TodoListScreenPreviews.kt</code> を開くと、データ・文字サイズ・画面サイズ・明暗を変えた複数の Preview が並ぶはずです（未確認）。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">Compose UI テストで表示を検証する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>Preview は見た目を目で確かめる道具でした。表示内容を自動で検証するために、画面全体の UI テストを書きます。<code>androidTest/.../ui/screens/TodoListScreenTest.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListScreenTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.printToLog
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Assert.assertEquals
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class TodoListScreenTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun titleAndSummary_areDisplayed() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, onAddClick = {})
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;Todo&quot;).assertIsDisplayed()
+        composeTestRule.onNodeWithText(&quot;3 件中 2 件完了&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun todoRows_countMatchesData() {
+        // testTag(&quot;todo_row&quot;) を持つ行の数で、一覧に全件が並んでいるかを確かめる
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, onAddClick = {})
+            }
+        }
+
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(3)
+    }
+
+    @Test
+    fun doneStatus_appearsOncePerDoneTodo() {
+        // テキストの完全一致で数える。「未完了」は「完了」と一致しないので数えられない
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, onAddClick = {})
+            }
+        }
+
+        composeTestRule.onAllNodesWithText(&quot;完了&quot;).assertCountEquals(2)
+        composeTestRule.onAllNodesWithText(&quot;未完了&quot;).assertCountEquals(1)
+    }
+
+    @Test
+    fun emptyList_showsZeroRows() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = emptyList(), onAddClick = {})
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;0 件中 0 件完了&quot;).assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(0)
+    }
+
+    @Test
+    fun addButton_callsOnAddClick() {
+        // 状態を持たない画面なので、クリックの回数はテスト側の変数で受け取る
+        var clickCount = 0
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, onAddClick = { clickCount++ })
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;追加&quot;).performClick()
+
+        assertEquals(1, clickCount)
+    }
+
+    @Test
+    fun semanticsTree_canBePrintedToLog() {
+        // printToLog: セマンティクスツリーを Logcat に出す。どのノードにどのテキストがあるかを確かめる時に使う
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, onAddClick = {})
+            }
+        }
+
+        composeTestRule.onRoot().printToLog(&quot;TodoListScreenTree&quot;)
+    }
+}</code></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>テスト</th><th>確かめること</th><th>使う API</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>titleAndSummary_areDisplayed</code></td><td>TopAppBar の「Todo」と、件数の見出しが表示される</td><td><code>onNodeWithText</code> / <code>assertIsDisplayed</code></td></tr>
+            <tr><td><code>todoRows_countMatchesData</code></td><td><code>testTag("todo_row")</code> の付いた行が 3 つある</td><td><code>onAllNodesWithTag</code> / <code>assertCountEquals</code></td></tr>
+            <tr><td><code>doneStatus_appearsOncePerDoneTodo</code></td><td>「完了」が 2 つ、「未完了」が 1 つ</td><td><code>onAllNodesWithText</code>（完全一致なので「未完了」は「完了」に数えられない）</td></tr>
+            <tr><td><code>emptyList_showsZeroRows</code></td><td>空のリストでは「0 件中 0 件完了」で、行が 0</td><td><code>assertCountEquals(0)</code></td></tr>
+            <tr><td><code>addButton_callsOnAddClick</code></td><td>「追加」を押すと <code>onAddClick</code> が 1 回呼ばれる</td><td><code>performClick</code></td></tr>
+            <tr><td><code>semanticsTree_canBePrintedToLog</code></td><td>セマンティクスツリーを Logcat に出す</td><td><code>onRoot().printToLog</code></td></tr>
+            </tbody>
+          </table>
+
+          <p><code>addButton_callsOnAddClick</code> では、画面が状態を持たないので、クリックの回数をテスト側の変数 <code>clickCount</code> で受け取ります。<code>onAddClick</code> を関数で受け取る作りにしたおかげで、画面の外から動作を確かめられます。</p>
+          <p>もう 1 つ、実際の <code>MainActivity</code> を起動して画面を確かめるテストを書きます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/MainActivityTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+@RunWith(AndroidJUnit4::class)
+class MainActivityTest {
+
+    // createAndroidComposeRule&lt;MainActivity&gt;(): 実際の Activity を起動してテストする。
+    // createComposeRule() と違い、setContent は使わず、アプリ本来の画面をそのまま確かめる
+    @get:Rule
+    val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()
+
+    @Test
+    fun launchedActivity_showsTodoListScreen() {
+        composeTestRule.onNodeWithText(&quot;Todo&quot;).assertIsDisplayed()
+    }
+}</code></pre>
+</div>
+
+          <p><code>createAndroidComposeRule&lt;MainActivity&gt;()</code> は Activity を起動するルールで、<code>setContent</code> は使いません。<code>MainActivity</code> の <code>onCreate</code> で組み立てた、アプリ本来の画面をそのまま検証します。部品や画面を単体で確かめるときは <code>createComposeRule()</code>、アプリとしての起動を確かめるときは <code>createAndroidComposeRule</code> と使い分けます。</p>
+          <p>テストを実行します。<code>--rerun</code> は、前回の結果が最新でもテストを実行し直す Gradle のオプションです。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest --rerun</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 46s</span></pre>
+</div>
+
+          <p>テスト結果の XML（<code>testsuite</code> 要素）を見ると、クラスごとの件数と失敗数が分かります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">&lt;testsuite name=&quot;com.handson.android01.ExampleInstrumentedTest&quot; tests=&quot;1&quot; failures=&quot;0&quot; errors=&quot;0&quot; skipped=&quot;0&quot;&gt;</span><span class="terminal__line">&lt;testsuite name=&quot;com.handson.android01.MainActivityTest&quot; tests=&quot;1&quot; failures=&quot;0&quot; errors=&quot;0&quot; skipped=&quot;0&quot;&gt;</span><span class="terminal__line">&lt;testsuite name=&quot;com.handson.android01.ui.components.GreetingTest&quot; tests=&quot;2&quot; failures=&quot;0&quot; errors=&quot;0&quot; skipped=&quot;0&quot;&gt;</span><span class="terminal__line">&lt;testsuite name=&quot;com.handson.android01.ui.components.TodoRowTest&quot; tests=&quot;2&quot; failures=&quot;0&quot; errors=&quot;0&quot; skipped=&quot;0&quot;&gt;</span><span class="terminal__line">&lt;testsuite name=&quot;com.handson.android01.ui.screens.TodoListScreenTest&quot; tests=&quot;6&quot; failures=&quot;0&quot; errors=&quot;0&quot; skipped=&quot;0&quot;&gt;</span></pre>
+</div>
+
+          <p>この項目で書いた Compose UI テストは 11 件です。01 からある <code>ExampleInstrumentedTest</code> の 1 件を加えた 12 件が、すべて成功しています。<code>app/build/reports/androidTests/connected/debug/index.html</code> のレポートでも Tests 12 / Failures 0 と表示されます。</p>
+          <p>次に、<code>printToLog("TodoListScreenTree")</code> が出力したセマンティクスツリーを Logcat から取り出します。セマンティクスツリーは、テストやユーザー補助機能（TalkBack など）から見た UI の構造です。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s TodoListScreenTree:D</span><span class="terminal__line">printToLog:</span><span class="terminal__line">Printing with useUnmergedTree = &#x27;false&#x27;</span><span class="terminal__line">Node #226 at (l=0.0, t=0.0, r=1080.0, b=2400.0)px</span><span class="terminal__line"> |-Node #227 at (l=0.0, t=0.0, r=1080.0, b=2400.0)px</span><span class="terminal__line">    |-Node #251 at (l=42.0, t=346.0, r=433.0, b=428.0)px</span><span class="terminal__line">    | Text = &#x27;[3 件中 2 件完了]&#x27;</span><span class="terminal__line">    |-Node #252 at (l=42.0, t=470.0, r=1038.0, b=791.0)px</span><span class="terminal__line">    |  |-Node #255 at (l=42.0, t=470.0, r=1038.0, b=575.0)px, Tag: &#x27;todo_row&#x27;</span><span class="terminal__line">    |  |  |-Node #257 at (l=168.0, t=498.0, r=910.0, b=547.0)px</span><span class="terminal__line">    |  |  | Text = &#x27;[Learn Kotlin Basics]&#x27;</span><span class="terminal__line">    |  |  |-Node #258 at (l=931.0, t=500.0, r=996.0, b=546.0)px</span><span class="terminal__line">    |  |    Text = &#x27;[完了]&#x27;</span><span class="terminal__line">    |  |-Node #260 at (l=42.0, t=578.0, r=1038.0, b=683.0)px, Tag: &#x27;todo_row&#x27;</span><span class="terminal__line">    |  |  |-Node #262 at (l=168.0, t=606.0, r=878.0, b=655.0)px</span><span class="terminal__line">    |  |  | Text = &#x27;[Build Compose Screen]&#x27;</span><span class="terminal__line">    |  |  |-Node #263 at (l=899.0, t=608.0, r=996.0, b=654.0)px</span><span class="terminal__line">    |  |    Text = &#x27;[未完了]&#x27;</span><span class="terminal__line">    |  |-Node #265 at (l=42.0, t=686.0, r=1038.0, b=791.0)px, Tag: &#x27;todo_row&#x27;</span><span class="terminal__line">    |     |-Node #267 at (l=168.0, t=714.0, r=910.0, b=763.0)px</span><span class="terminal__line">    |     | Text = &#x27;[Write Unit Tests]&#x27;</span><span class="terminal__line">    |     |-Node #268 at (l=931.0, t=716.0, r=996.0, b=762.0)px</span><span class="terminal__line">    |       Text = &#x27;[完了]&#x27;</span><span class="terminal__line">    |-Node #271 at (l=42.0, t=844.0, r=316.0, b=949.0)px</span><span class="terminal__line">    | Text = &#x27;[追加]&#x27;</span><span class="terminal__line">    |-Node #276 at (l=337.0, t=844.0, r=609.0, b=949.0)px</span><span class="terminal__line">    | Text = &#x27;[フィルタ]&#x27;</span><span class="terminal__line">    |-Node #279 at (l=630.0, t=844.0, r=804.0, b=949.0)px</span><span class="terminal__line">    | Text = &#x27;[閉じる]&#x27;</span><span class="terminal__line">    |-Node #231 at (l=0.0, t=0.0, r=1080.0, b=304.0)px</span><span class="terminal__line">       |-Node #232 at (l=0.0, t=136.0, r=1080.0, b=304.0)px</span><span class="terminal__line">          |-Node #234 at (l=43.0, t=183.0, r=173.0, b=257.0)px</span><span class="terminal__line">          |  |-Node #235 at (l=43.0, t=183.0, r=173.0, b=257.0)px</span><span class="terminal__line">          |    Text = &#x27;[Todo]&#x27;</span><span class="terminal__line">          |-Node #240 at (l=1016.0, t=157.0, r=1069.0, b=210.0)px</span><span class="terminal__line">             |-Node #241 at (l=1034.0, t=163.0, r=1051.0, b=205.0)px</span><span class="terminal__line">               Text = &#x27;[1]&#x27;</span></pre>
+</div>
+
+          <p>出力は長いので、行頭のタイムスタンプなどは省略し、<code>Shape</code> や <code>Actions</code> などの属性行も削っています。ノードの番号と階層は実際の出力のままです。<code>Tag: 'todo_row'</code> のノードの下に、タイトルと状態の <code>Text</code> がぶら下がっています。ボタンは <code>Role = 'Button'</code> と <code>OnClick</code> を持つノードです。<code>onNodeWithText</code> や <code>onAllNodesWithTag</code> は、このツリーからノードを探しています。テストが思ったノードを見つけられないときは、<code>printToLog</code> でツリーを確かめると原因を探しやすくなります。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>./gradlew connectedDebugAndroidTest --rerun</code> が <code>BUILD SUCCESSFUL</code> で終わり、Compose UI テスト 11 件（<code>ExampleInstrumentedTest</code> を含めて 12 件）がすべて成功すれば OK です。Logcat にセマンティクスツリーが出力されることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+
+          <p>最後に、ビルド・lint・ユニットテスト・UI テストをまとめて実行します。エミュレータは起動したままにしておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest --rerun</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 19s</span></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>ユニットテスト（<code>test</code>）</td><td>42 件すべて成功（02 で書いた 41 件 + <code>ExampleUnitTest</code> 1 件。この項目では増減なし）</td></tr>
+            <tr><td>Compose UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>11 件すべて成功（<code>ExampleInstrumentedTest</code> を含めて 12 件）</td></tr>
+            <tr><td>lint</td><td><code>0 errors, 6 warnings</code>。6 件はいずれも 01 の設定から引き継いだもの（<code>OldTargetApi</code>、<code>RedundantLabel</code>、<code>AndroidGradlePluginVersion</code>、<code>ObsoleteSdkInt</code>、<code>MonochromeLauncherIcon</code> × 2）</td></tr>
+            </tbody>
+          </table>
+
+          <p>ビルド中に、02 のステップ 6 で書いた <code>CoroutinesTest.kt</code> について <code>ExperimentalCoroutinesApi</code> の opt-in を求める警告が出ます。この項目の変更とは関係が無いので、そのままにしています。</p>
+          <p>UI テストの実行後は、テスト用にインストールされたアプリがエミュレータから消えています。もう一度インストールして起動し、画面に表示されている文字を <code>uiautomator</code> で取り出します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（出力は省略。最後に BUILD SUCCESSFUL と表示されます）</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell uiautomator dump /sdcard/ui.xml</span><span class="terminal__line">UI hierchary dumped to: /sdcard/ui.xml</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cat /sdcard/ui.xml | grep -oE &#x27;text=&quot;[^&quot;]+&quot;&#x27;</span><span class="terminal__line">text=&quot;3 件中 2 件完了&quot;</span><span class="terminal__line">text=&quot;Learn Kotlin Basics&quot;</span><span class="terminal__line">text=&quot;完了&quot;</span><span class="terminal__line">text=&quot;Build Compose Screen&quot;</span><span class="terminal__line">text=&quot;未完了&quot;</span><span class="terminal__line">text=&quot;Write Unit Tests&quot;</span><span class="terminal__line">text=&quot;完了&quot;</span><span class="terminal__line">text=&quot;追加&quot;</span><span class="terminal__line">text=&quot;フィルタ&quot;</span><span class="terminal__line">text=&quot;閉じる&quot;</span><span class="terminal__line">text=&quot;Todo&quot;</span><span class="terminal__line">text=&quot;1&quot;</span></pre>
+</div>
+
+          <p>エミュレータの画面は次のようになっています。</p>
+          <ul>
+            <li>上部の TopAppBar の左に「Todo」、右端にチェックのアイコンと、未完了の件数「1」を表示した赤い丸のバッジがあります。</li>
+            <li>その下に、<code>titleLarge</code> の大きさで「3 件中 2 件完了」と表示されます。</li>
+            <li>角の丸いカードの中に 3 行が並び、行の間に区切り線があります。各行はチェックボックス・タイトル・状態の順で、「完了」は緑、「未完了」は灰色の文字です。</li>
+            <li>下部に 3 つのボタンが並びます。「追加」は塗りつぶしで <code>+</code> のアイコン付き、「フィルタ」は枠線のみ、「閉じる」は文字のみです。</li>
+          </ul>
+          <p>「追加」を押しても、画面は変わりません。<code>MainActivity</code> では <code>onAddClick = {}</code>（何もしない）を渡しているからです。押したときに Todo を増やすには、画面が状態を持つ必要があります。これは 04 で扱います。</p>
+          <p>確認が終わったら、エミュレータと Gradle デーモンを止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>./gradlew assembleDebug lint test connectedDebugAndroidTest --rerun</code> が <code>BUILD SUCCESSFUL</code> で終わり、エミュレータに TopAppBar・3 行のカード・3 つのボタンのある Todo 一覧が表示されれば OK です。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid03</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">Composable 関数の 3 つの慣習に従って <code>Greeting</code> を書き、<code>GreetingTest</code> を通した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>ModifierOrderPreviews.kt</code> の 2 つの Preview を比べ、<code>Modifier</code> の順序で結果が変わる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>material-icons-core</code> を追加して <code>CountBadge</code> の <code>Icons</code> のエラーを解消した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>@OptIn(ExperimentalMaterial3Api::class)</code> を外したときのコンパイルエラーを確認した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>Theme.kt</code> の <code>darkTheme</code> と <code>dynamicColor</code> の役割を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>@PreviewParameter</code> と、マルチプレビューアノテーションを使った Preview を書いた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>createComposeRule</code> と <code>createAndroidComposeRule</code> の違いを説明し、UI テスト 11 件を通した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>testTag</code> を <code>padding</code> の後ろに移して <code>todoRow_fillsParentWidth</code> が失敗することを確かめ、元に戻した</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Modifier</code> は順序で結果が変わる</p>
+              <p><code>Modifier</code> は書いた順に適用されます。<code>padding</code> と <code>background</code> の順序で背景色の範囲が変わります（ステップ 2 の <code>ModifierOrderPreviews.kt</code>）。また、<code>testTag</code> を <code>padding</code> の後ろに書くとタグの範囲が余白の内側だけになります（幅のテストが 268dp で失敗）。どの範囲に効かせたいかを考えて並べます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>TopAppBar</code> には <code>@OptIn(ExperimentalMaterial3Api::class)</code> が必要</p>
+              <p>Material3 1.4.0 の <code>TopAppBar</code> は実験的 API です。<code>@OptIn</code> を付けないと <code>This material API is experimental and is likely to change or to be removed in the future.</code> でビルドが失敗します。<code>@OptIn</code> は、<code>TopAppBar</code> を呼んでいる関数（ここでは <code>TodoListScreen</code>）に付けます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Icons.Default.*</code> には <code>material-icons-core</code> が必要</p>
+              <p><code>material3</code> を追加しただけでは <code>Icons</code> を参照できず、<code>Unresolved reference 'Icons'</code> になります。<code>androidx.compose.material:material-icons-core</code> を依存に追加します。バージョンは BOM が決めるので、Version Catalog には <code>version</code> を書きません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@Preview</code> は引数を取る関数に付けられない</p>
+              <p><code>@Preview</code> を付ける関数は、引数を取らないようにします（<code>@PreviewParameter</code> を付けた引数を除く）。データを変えて描きたいときは、ステップ 5 のように <code>PreviewParameterProvider</code> を用意し、引数に <code>@PreviewParameter</code> を付けます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">UI テストはエミュレータが起動していないと実行されない</p>
+              <p>エミュレータが起動していない状態で <code>connectedDebugAndroidTest</code> を実行すると、テストは <code>No connected devices!</code> で失敗します。テストが本当にエミュレータで実行されたか分からないときは、<code>adb devices</code> でエミュレータが接続されていることを確かめてから、<code>--rerun</code> を付けて実行し直します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">Preview 関数は <code>private</code> にする</p>
+              <p>Preview 関数はアプリのコードから呼ぶものではないので <code>private</code> にします。慣習として <code>private</code> にします（本番コードに Preview が含まれないようにする意図）。<code>private</code> にしても関数はコードに残り、R8 で縮小しない設定（このプロジェクトの <code>isMinifyEnabled = false</code>）では release の APK にも含まれます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Checkbox</code> の <code>onCheckedChange = null</code> は表示専用</p>
+              <p><code>onCheckedChange</code> に <code>null</code> を渡すと、タップしてもチェックの状態は変わりません。この項目の画面は状態を持たないため、表示専用にしています。タップで切り替えられるようにするのは 04 です。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>createComposeRule</code> と <code>createAndroidComposeRule</code> の使い分け</p>
+              <p><code>createComposeRule()</code> は Activity を起動せず、<code>setContent</code> で渡した部品や画面だけを描きます。データを差し替えて部品を単体で確かめるのに向いています。<code>createAndroidComposeRule&lt;MainActivity&gt;()</code> は実際の Activity を起動し、アプリ本来の画面を確かめます。どちらも、<code>v2</code> の付かない旧パッケージ（<code>androidx.compose.ui.test.junit4</code>）のものは非推奨です。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">再コンポーズと、状態を持たない画面</p>
+              <p>Composable 関数は、受け取る値や読んでいる状態が変わると呼び直されます（再コンポーズ）。この項目の画面は状態を持たないので、同じ <code>todos</code> を渡せばいつも同じ UI が描かれます。「追加」を押したときの処理も <code>onAddClick</code> として親から受け取り、状態の変更は親に任せています。状態を持たせて再コンポーズを実際に起こすのは 04 で扱います。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        Composable 関数の 3 つの慣習に従って <code>Greeting</code> を書き、<code>@Preview</code> と Compose UI テストで確かめました。
+        <code>Row</code> / <code>Box</code> と <code>Modifier</code> を使って <code>TodoRow</code>・<code>CountBadge</code> を作り、<code>Modifier</code> の順序で結果が変わることを確かめました。
+        Material3 の <code>Scaffold</code>・<code>TopAppBar</code>・<code>Card</code>・ボタンで画面を組み立て、テーマの色とタイポグラフィ、ダークテーマの Preview も扱いました。
+        最後に、Preview をデータや画面サイズを変えて並べ、UI テストで画面の表示内容を検証しました。
+        次の項目では、<code>remember</code> / <code>mutableStateOf</code> で画面に状態を持たせ、State hoisting のパターンを学びます。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>android/03-compose-basics</code> の <code>android/03-compose-basics/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../02-kotlin-basics/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">02: Kotlin 基礎</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">04: 状態と State hoisting</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
