@@ -142,7 +142,7 @@
             <div class="callout__body">
               <p class="callout__title">Android Studio の画面について</p>
               <p>
-                Android Studio の画面の名称や配置はバージョンで変わります。本教材は Rabbit 1（2026.2.1）の公式ドキュメントに基づいて画面の操作を書いています。
+                Android Studio の画面の名称や配置はバージョンで変わります。画面の名称は Rabbit 1（2026.2.1.8）同梱のリソースで確認して書いています。
                 本文のコードとコマンドの出力は、ターミナル（Gradle・<code>sdkmanager</code>・<code>adb</code> など）で実際に動かして確認したものです。
                 画面の表記が本文と違う場合は、同じ意味の項目を選んでください。
               </p>
@@ -260,7 +260,7 @@
             <tr><td>Name</td><td><code>HandsonAndroid01</code></td><td><code>settings.gradle.kts</code> の <code>rootProject.name</code>、<code>strings.xml</code> の <code>app_name</code>、テーマ名 <code>HandsonAndroid01Theme</code></td></tr>
             <tr><td>Package name</td><td><code>com.handson.android01</code></td><td><code>app/build.gradle.kts</code> の <code>namespace</code> と <code>applicationId</code>、Kotlin のパッケージ</td></tr>
             <tr><td>Save location</td><td>任意の作業ディレクトリ</td><td>—</td></tr>
-            <tr><td>Minimum API level</td><td>API 26</td><td><code>app/build.gradle.kts</code> の <code>minSdk = 26</code></td></tr>
+            <tr><td>Minimum SDK</td><td>API 26</td><td><code>app/build.gradle.kts</code> の <code>minSdk = 26</code></td></tr>
             <tr><td>Language</td><td>Kotlin</td><td>アプリのソースコードを Kotlin で書く（<code>*.kt</code>）</td></tr>
             <tr><td>Build configuration language</td><td>Kotlin DSL（<code>build.gradle.kts</code>）</td><td>ビルドスクリプトが <code>*.gradle.kts</code> になる</td></tr>
             </tbody>
@@ -271,7 +271,7 @@
             <span class="callout__icon" aria-hidden="true">⚠️</span>
             <div class="callout__body">
               <p class="callout__title">ウィザードの生成内容は、Studio のバージョンで変わりうる</p>
-              <p>本教材の全文は現行テンプレート（Rabbit 1）のソースに合わせて作成しました。ただし、Studio のバージョンでウィザードの出力は変わりうるため、ウィザードの出力と一致するかは未確認です。全文を載せたファイルは、自分の生成物と差分があれば教材側の内容に置き換えてください。</p>
+              <p>本教材のファイル内容は、Rabbit 1（2026.2.1.8）同梱のテンプレート定義と照合して一致を確認しました。ただし、ウィザードの実画面での生成は未確認です。Studio のバージョンでウィザードの出力は変わりうるため、自分の生成物と差分があれば教材側の内容に置き換えてください。版だけはこの後の手順で上げます。</p>
             </div>
           </div>
 
@@ -356,7 +356,7 @@ plugins {
 }</code></pre>
 </div>
 
-          <p>Version Catalog の <code>gradle/libs.versions.toml</code> です（作成直後の状態。ステップ 4 で 1 行ずつ追加します）。Compose のライブラリ（<code>androidx-ui</code> や <code>androidx-material3</code>）には <code>version.ref</code> がありません。バージョンは Compose BOM（<code>androidx-compose-bom</code>）が決めます。</p>
+          <p>Version Catalog の <code>gradle/libs.versions.toml</code> です（ウィザードが生成した直後の状態。ステップ 4 で 1 行ずつ追加します）。Compose のライブラリ（<code>androidx-ui</code> や <code>androidx-material3</code>）には <code>version.ref</code> がありません。バージョンは Compose BOM（<code>androidx-compose-bom</code>）が決めます。</p>
 
 <div class="code-block">
   <div class="code-block__header">
@@ -366,15 +366,15 @@ plugins {
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
   <pre><code class="language-toml">[versions]
-agp = &quot;9.4.1&quot;
-kotlin = &quot;2.4.20&quot;
+agp = &quot;9.4.0&quot;
+kotlin = &quot;2.2.10&quot;
 coreKtx = &quot;1.19.1&quot;
 junit = &quot;4.13.2&quot;
 junitVersion = &quot;1.3.0&quot;
 espressoCore = &quot;3.7.0&quot;
 lifecycleRuntimeKtx = &quot;2.11.0&quot;
 activityCompose = &quot;1.13.0&quot;
-composeBom = &quot;2026.09.00&quot;
+composeBom = &quot;2026.02.01&quot;
 
 [libraries]
 androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }
@@ -397,6 +397,20 @@ android-application = { id = &quot;com.android.application&quot;, version.ref = 
 kotlin-compose = { id = &quot;org.jetbrains.kotlin.plugin.compose&quot;, version.ref = &quot;kotlin&quot; }</code></pre>
 </div>
 
+          <p>このままでも動きますが、本教材はこの後の項目と同じ版にそろえるため、3 つのバージョンを上げます。<code>agp</code>（AGP）、<code>kotlin</code>（Kotlin）、<code>composeBom</code>（Compose BOM）の 3 行を書き換えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  [versions]</span><span class="diff-line diff-line--remove">- agp = &quot;9.4.0&quot;</span><span class="diff-line diff-line--remove">- kotlin = &quot;2.2.10&quot;</span><span class="diff-line diff-line--add">+ agp = &quot;9.4.1&quot;</span><span class="diff-line diff-line--add">+ kotlin = &quot;2.4.20&quot;</span><span class="diff-line">  coreKtx = &quot;1.19.1&quot;</span><span class="diff-line">  junit = &quot;4.13.2&quot;</span><span class="diff-line">  junitVersion = &quot;1.3.0&quot;</span><span class="diff-line">  espressoCore = &quot;3.7.0&quot;</span><span class="diff-line">  lifecycleRuntimeKtx = &quot;2.11.0&quot;</span><span class="diff-line">  activityCompose = &quot;1.13.0&quot;</span><span class="diff-line diff-line--remove">- composeBom = &quot;2026.02.01&quot;</span><span class="diff-line diff-line--add">+ composeBom = &quot;2026.09.00&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <p>書き換えたら、Android Studio の上部に同期を促す表示が出るので <strong>Sync Now</strong> を押します。ターミナルで試す場合は、次のステップの <code>./gradlew</code> が実行のたびにカタログを読み込みます。</p>
+          <p>上げる版は、Google の Maven リポジトリに公開されている最新安定版です。AGP の最新版は <code>https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/maven-metadata.xml</code> で確認できます。版を上げた理由は、教材の前提版（AGP 9.4.1 / Kotlin 2.4.20 / Compose BOM 2026.09.00）に合わせるためです。</p>
           <p>アプリモジュールの <code>app/build.gradle.kts</code> です（作成直後の状態）。</p>
 
 <div class="code-block">
@@ -557,6 +571,7 @@ fun GreetingPreview() {
   </div>
   <pre><code class="language-kotlin">package com.handson.android01.ui.theme
 
+import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -577,6 +592,16 @@ private val LightColorScheme = lightColorScheme(
     primary = Purple40,
     secondary = PurpleGrey40,
     tertiary = Pink40
+
+    /* Other default colors to override
+    background = Color(0xFFFFFBFE),
+    surface = Color(0xFFFFFBFE),
+    onPrimary = Color.White,
+    onSecondary = Color.White,
+    onTertiary = Color.White,
+    onBackground = Color(0xFF1C1B1F),
+    onSurface = Color(0xFF1C1B1F),
+    */
 )
 
 @Composable
@@ -618,20 +643,28 @@ fun HandsonAndroid01Theme(
     <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
   </div>
   <pre><code class="language-properties"># Project-wide Gradle settings.
+
 # IDE (e.g. Android Studio) users:
 # Gradle settings configured through the IDE *will override*
 # any settings specified in this file.
+
 # For more details on how to configure your build environment visit
 # http://www.gradle.org/docs/current/userguide/build_environment.html
+
 # Specifies the JVM arguments used for the daemon process.
 # The setting is particularly useful for tweaking memory settings.
 org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+
 # When configured, Gradle will run in incubating parallel mode.
 # This option should only be used with decoupled projects. For more details, visit
-# https://developer.android.com/r/tools/gradle-multi-project-decoupling
+# https://developer.android.com/r/tools/gradle-multi-project-decoupled-projects
 # org.gradle.parallel=true
-# Reuses the task graph across builds to speed up repeated builds
+
+# When enabled, the Configuration Cache allows Gradle to skip the configuration
+# phase entirely if nothing that affects the build configuration (such as build scripts)
+# has changed. Additionally, Gradle applies performance optimizations to task execution.
 org.gradle.configuration-cache=true
+
 # Kotlin code style for this project: &quot;official&quot; or &quot;obsolete&quot;:
 kotlin.code.style=official</code></pre>
 </div>
@@ -1176,7 +1209,7 @@ class ExampleInstrumentedTest {
             <span class="callout__icon" aria-hidden="true">⚠️</span>
             <div class="callout__body">
               <p class="callout__title">Gradle の実行に使う JDK のバージョン</p>
-              <p>AGP 9.4 の実行には JDK 17 以上が必要です。Android Studio からビルドする場合は、同梱の JDK（JBR）が使われます。ターミナルから <code>./gradlew</code> を実行する場合は、<code>java -version</code>（または <code>JAVA_HOME</code>）が指す JDK で動きます。この JDK が 17 以上であることを確認してください。</p>
+              <p>AGP 9.4 の実行には JDK 17 以上が必要です。Android Studio からビルドする場合は、同梱の JDK（JBR）が使われます。Rabbit 1 同梱の JBR は JDK 25（25.0.3）です。ターミナルから <code>./gradlew</code> を実行する場合は、<code>java -version</code>（または <code>JAVA_HOME</code>）が指す JDK で動きます。この JDK が 17 以上であることを確認してください。</p>
             </div>
           </div>
 
