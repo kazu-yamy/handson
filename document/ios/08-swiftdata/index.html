@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08: SwiftData | iOS ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>iOS</li>
+          <li aria-current="page">08</li>
+        </ol>
+        <h1 class="lesson-title">SwiftData</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: Web API から読み込むアプリを作れ、次にデータを端末に保存してアプリを閉じても残るようにしたい人</li>
+          <li class="lesson-meta__item">📋 前提: 07 で API と通信する <code>HandsonApp</code> プロジェクトが手元にあること。<code>@Observable</code>・<code>@Bindable</code>・<code>@Environment</code>・Swift Testing の <code>@Test</code> / <code>#expect</code> を使ったことがあること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../07-networking/index.html">07 URLSession と Codable</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>@Model</code> で保存するクラスを定義し、<code>.modelContainer</code> でアプリに保存先を用意する</li>
+          <li><code>@Query</code> で保存したデータを一覧に表示する</li>
+          <li><code>modelContext</code> で追加・更新・削除し、<code>save()</code> を明示的に呼んで確実に保存する</li>
+          <li><code>#Predicate</code> と <code>@Query(filter:sort:)</code> で絞り込みと並び替えをする</li>
+          <li>メモリ上だけのコンテナで、ファイルを作らないテストを書く</li>
+          <li>（発展）API から取り込み、<code>@Attribute(.unique)</code> で重複を防ぐ</li>
+          <li><code>.modelContainer</code> の付け忘れと、保存できない型のプロパティで何が起きるかを確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        07 の ToDo アプリは、一覧をメモリ上の <code>TodoStore</code> に持っていました。そのため、アプリを終了すると追加したタスクは消えます。この項目では、一覧を SwiftData で端末に保存し、アプリを終了しても残るようにします。
+        完成すると、追加・完了の切り替え・削除がそのまま保存され、再起動しても同じ一覧が表示されます。「完了も表示」をオフにすると、保存されたデータを未完了だけに絞って表示します。
+      </p>
+      <p>
+        <code>@Model</code> でモデルを作る → <code>@Query</code> で表示 → <code>modelContext</code> で追加・更新・削除 → <code>#Predicate</code> で絞り込み → メモリ上のコンテナでテスト、の順に進めます。1 ステップで扱う概念は 1 つです。
+        ステップ 7 は 07 の API と組み合わせる発展の内容なので、時間が足りなければ飛ばしても、ステップ 8 はそのまま進められます。07 と同じく、Xcode の画面での操作と、同じ結果をターミナルで確かめるコマンドの両方を載せています。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョンと並行処理の設定</p>
+          <p>
+            macOS 26.6.2 / Xcode 27.0 / Swift 6.4 / iPhone 17（iOS 27.0）のシミュレータは 07 と同じです。バージョンは執筆時点（2026年10月）のものです。
+          </p>
+          <p>
+            アプリターゲットの <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> と <code>SWIFT_APPROACHABLE_CONCURRENCY = YES</code> も 07 のままです。この項目で作る <code>@Model</code> のクラスも、既定でメインアクターに分離されます。画面と同じメインアクターで読み書きするので、並行処理のエラーは出ません。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">07 のプロジェクトをコピーする</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            07 の完成コードをそのまま出発点にします。<code>07-networking</code> がある場所で次のコマンドを実行し、ディレクトリごと <code>08-swiftdata</code> にコピーします。
+            プロジェクト名・ターゲット名・Bundle Identifier（<code>com.example.HandsonApp</code>）は変えません。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 07-networking 08-swiftdata</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 08-swiftdata/HandsonApp</span></pre>
+</div>
+
+          <p>以降のコマンドは全て、<code>HandsonApp.xcodeproj</code> があるこのフォルダで実行します。コピーしたプロジェクトがそのままビルドでき、07 までの 53 テストが通ることを確かめます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export DD=/tmp/handson-ios-dd</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 53 tests in 14 suites passed after 6.039 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <p>Xcode の場合は、<code>08-swiftdata/HandsonApp/HandsonApp.xcodeproj</code> を開き、<kbd>⌘</kbd> + <kbd>U</kbd>（<code>Product</code> &gt; <code>Test</code>）でテストを実行します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> と <code>Test run with 53 tests in 14 suites passed</code> が表示されれば準備完了です。この項目では、テストを 6 個追加して 59 テストにします。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">@Model で保存するクラスを作り、.modelContainer を付ける</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            SwiftData で保存する ToDo の型を作ります。<code>Models</code> フォルダに Swift ファイル <code>TodoRecord.swift</code> を追加します（Xcode では <code>Models</code> を右クリックし、<code>New File from Template…</code> で <code>iOS</code> &gt; <code>Swift File</code>、<code>Targets</code> は <code>HandsonApp</code>）。
+            中身を次の内容にします。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRecord.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import SwiftData
+
+@Model
+final class TodoRecord {
+    var title: String
+    var priority: Priority
+    var isDone: Bool
+    var completedAt: Date?
+    var createdAt: Date
+
+    init(title: String, priority: Priority = .medium, createdAt: Date = .now) {
+        self.title = title
+        self.priority = priority
+        self.isDone = false
+        self.completedAt = nil
+        self.createdAt = createdAt
+    }
+
+    // 完了と未完了を切り替える。完了にした時刻も一緒に記録する
+    func toggle() {
+        isDone.toggle()
+        completedAt = isDone ? .now : nil
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>import SwiftData</code>: SwiftData のフレームワークを読み込みます。忘れると <code>error: unknown attribute 'Model'</code> になります。</li>
+            <li><code>@Model</code>: このクラスを SwiftData で保存できるモデルにするマクロです。付けるだけで <code>PersistentModel</code> と <code>Observable</code> に準拠します。<code>@Observable</code> を別に書かなくても、プロパティを変えると SwiftUI の画面が更新されます。</li>
+            <li><code>@Model</code> は <strong>クラス</strong>にしか付けられません。<code>struct</code> に付けると <code>error: '@Model' cannot be applied to struct type 'TodoRecord' (from macro 'Model')</code> になります。継承しないので <code>final</code> にします。</li>
+            <li>保存するプロパティは、<code>String</code>・<code>Bool</code>・<code>Date</code>・<code>Date?</code> のような <code>Codable</code> な型にします。<code>Priority</code> は 02 で作った enum です（このあと <code>Codable</code> を付けます）。</li>
+            <li><code>id</code> は書きません。保存した 1 件は SwiftData が識別子（<code>persistentModelID</code>）を持つからです。</li>
+            <li><code>toggle()</code>: 完了と未完了を切り替え、完了にした時刻を <code>completedAt</code> に記録します。</li>
+          </ul>
+
+          <p><code>Priority</code> を保存できるように、<code>Models/TodoItem.swift</code> の 1 行を次のように変更します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoItem.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- nonisolated enum Priority: Int, CaseIterable {</span><span class="diff-line diff-line--add">+ nonisolated enum Priority: Int, CaseIterable, Codable {</span><span class="diff-line">      case low = 1</span><span class="diff-line">      case medium</span><span class="diff-line">  …</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Codable</code> でない型は保存できない</p>
+              <p><code>Codable</code> を付けずにビルドすると、次のエラーになります。</p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">macro expansion @_PersistedProperty:4:23: error: no exact matches in call to instance method 'setValue'</span><span class="terminal__line">macro expansion @_PersistedProperty:9:21: error: no exact matches in call to instance method 'getValue'</span><span class="terminal__line">macro expansion @_PersistedProperty:13:18: error: no exact matches in call to instance method 'setValue'</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+              <p>
+                <code>@Model</code> は、各プロパティに <code>@_PersistedProperty</code> というマクロを展開します。保存できない型のプロパティがあると、その展開されたコードの中で <code>getValue</code> / <code>setValue</code> の不一致としてエラーが出ます。エラーの位置がマクロの中なので、どのプロパティが原因かは分かりにくくなります。
+              </p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">完了状態を <code>Status</code> ではなく <code>isDone</code> と <code>completedAt</code> で持つ理由</p>
+              <p>
+                02 で作った <code>Status</code>（<code>.todo</code> / <code>.done(Date)</code> の関連値付き enum）も、<code>Codable</code> を付ければ保存して読み戻せました。
+                ただし、ステップ 5 で使う <code>#Predicate</code> の中では enum の case と比べられません。<code>#Predicate { $0.status == Status.todo }</code> と書くと <code>error: key path cannot refer to enum case 'todo'</code> になります。
+                そこで、絞り込みに使う完了状態は <code>Bool</code> の <code>isDone</code> と <code>Date?</code> の <code>completedAt</code> で持ちます。
+              </p>
+            </div>
+          </div>
+
+          <p>アプリに保存先を用意します。<code>HandsonAppApp.swift</code> を次のように変更します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/HandsonAppApp.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  HandsonAppApp.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @main</span><span class="diff-line">  struct HandsonAppApp: App {</span><span class="diff-line">      @State private var store = TodoStore(repository: TodoRepository(client: TodoAPIClient()))</span><span class="diff-line"> </span><span class="diff-line">      var body: some Scene {</span><span class="diff-line">          WindowGroup {</span><span class="diff-line">              ContentView()</span><span class="diff-line">                  .environment(store)</span><span class="diff-line">          }</span><span class="diff-line diff-line--add">+         .modelContainer(for: TodoRecord.self)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>.modelContainer(for: TodoRecord.self)</code>: <code>TodoRecord</code> を保存する <code>ModelContainer</code>（保存先のデータベース）を作ります。あわせて、そのコンテナの <code>modelContext</code> を環境に入れます。画面からは <code>@Environment(\.modelContext)</code> で受け取ります。</li>
+            <li><code>WindowGroup</code>（<code>Scene</code>）に付けたので、アプリの全ての画面が同じコンテナを使います。</li>
+            <li>この時点では、画面はまだ 07 の <code>TodoStore</code> を使っています。次のステップで切り替えます。</li>
+          </ul>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>** BUILD SUCCEEDED **</code> が表示され、並行処理のエラーや警告が出ないことを確かめます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">@Query で一覧を表示する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            画面の一覧を、<code>TodoStore</code>（メモリ）から SwiftData に切り替えます。まず、行と詳細の View を <code>TodoItem</code> ではなく <code>TodoRecord</code> を受け取る形にします。<code>Views/TodoRow.swift</code> を次の内容に置き換えます。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoRow.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import SwiftData
+import SwiftUI
+
+struct TodoRow: View {
+    // @Model のオブジェクトはクラスなので、@Binding ではなく @Bindable で受け取る
+    @Bindable var record: TodoRecord
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // 完了の切り替えはアイコンのボタンだけに任せる（行のタップは NavigationLink に譲る）
+            Button {
+                record.toggle()
+            } label: {
+                if record.isDone {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                } else {
+                    Image(systemName: "circle")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(record.isDone ? "未完了に戻す" : "完了にする")
+
+            Text(record.title)
+                .strikethrough(record.isDone)
+
+            Spacer()
+
+            Text(record.priority.label)
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(.quaternary, in: Capsule())
+        }
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>@Bindable var record: TodoRecord</code>: 07 までは <code>struct</code> の <code>TodoItem</code> を <code>@Binding</code> で受け取っていました。<code>@Model</code> のオブジェクトはクラスで <code>Observable</code> なので、04 の <code>TodoStore</code> と同じく <code>@Bindable</code> で受け取ります。</li>
+            <li><code>record.toggle()</code> はオブジェクトのプロパティを直接変えます。<code>@Model</code> のオブジェクトは変更を SwiftData が追跡します。</li>
+            <li>Preview は <code>TodoItem</code> を使っていたので削除しました。</li>
+          </ul>
+
+          <p><code>Views/TodoDetailView.swift</code> を次のように変更します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoDetailView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct TodoDetailView: View {</span><span class="diff-line diff-line--remove">-     let item: TodoItem</span><span class="diff-line diff-line--add">+     let record: TodoRecord</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          List {</span><span class="diff-line diff-line--remove">-             LabeledContent("タイトル", value: item.title)</span><span class="diff-line diff-line--remove">-             LabeledContent("優先度", value: item.priority.label)</span><span class="diff-line diff-line--remove">-             LabeledContent("状態", value: item.isDone ? "完了" : "未完了")</span><span class="diff-line diff-line--remove">-             if case .done(let date) = item.status {</span><span class="diff-line diff-line--add">+             LabeledContent("タイトル", value: record.title)</span><span class="diff-line diff-line--add">+             LabeledContent("優先度", value: record.priority.label)</span><span class="diff-line diff-line--add">+             LabeledContent("状態", value: record.isDone ? "完了" : "未完了")</span><span class="diff-line diff-line--add">+             if let date = record.completedAt {</span><span class="diff-line">                  LabeledContent("完了日時") {</span><span class="diff-line">                      Text(date, format: .dateTime.year().month().day().hour().minute())</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line diff-line--remove">-         .navigationTitle(item.title)</span><span class="diff-line diff-line--add">+         .navigationTitle(record.title)</span><span class="diff-line">          .navigationBarTitleDisplayMode(.inline)</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">- #Preview {</span><span class="diff-line diff-line--remove">-     NavigationStack {</span><span class="diff-line diff-line--remove">-         TodoDetailView(item: TodoItem(title: "メールを返す", priority: .low, status: .done(Date())))</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--remove">- }</span></pre>
+</div>
+
+          <p>画面が <code>TodoStore</code> を使わなくなるので、<code>HandsonAppApp.swift</code> から <code>store</code> を外します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/HandsonAppApp.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  HandsonAppApp.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @main</span><span class="diff-line">  struct HandsonAppApp: App {</span><span class="diff-line diff-line--remove">-     @State private var store = TodoStore(repository: TodoRepository(client: TodoAPIClient()))</span><span class="diff-line diff-line--remove">-</span><span class="diff-line">      var body: some Scene {</span><span class="diff-line">          WindowGroup {</span><span class="diff-line">              ContentView()</span><span class="diff-line diff-line--remove">-                 .environment(store)</span><span class="diff-line">          }</span><span class="diff-line">          .modelContainer(for: TodoRecord.self)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p><code>ContentView.swift</code> を次の内容に置き換えます。この時点では、保存されたデータを表示するだけです。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">//
+//  ContentView.swift
+//  HandsonApp
+//
+
+import SwiftData
+import SwiftUI
+
+struct ContentView: View {
+    // SwiftData から createdAt の古い順に読む。データが変わると画面が自動で更新される
+    @Query(sort: \TodoRecord.createdAt) private var items: [TodoRecord]
+
+    @State private var tapCount = 0
+    @State private var showsDone = true
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button("タップ回数: \(tapCount)") {
+                        tapCount += 1
+                    }
+                    .buttonStyle(.borderless)
+
+                    Toggle("完了も表示", isOn: $showsDone)
+                }
+
+                Section("Todo") {
+                    if items.isEmpty {
+                        ContentUnavailableView("ToDo はまだありません", systemImage: "checklist")
+                    }
+                    ForEach(items) { item in
+                        if showsDone || !item.isDone {
+                            NavigationLink(value: item) {
+                                TodoRow(record: item)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationDestination(for: TodoRecord.self) { item in
+                TodoDetailView(record: item)
+            }
+            .navigationTitle("ToDo")
+        }
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>@Query</code>: SwiftData から <code>@Model</code> のオブジェクトの配列を読むプロパティラッパーです。データが追加・変更・削除されると、View が自動で再描画されます。<code>sort:</code> に KeyPath を渡すと、その値の昇順に並びます。</li>
+            <li><code>@Query</code> は、環境の <code>modelContext</code>（ステップ 2 の <code>.modelContainer</code> が入れたもの）から読みます。</li>
+            <li><code>NavigationLink(value: item)</code> と <code>.navigationDestination(for: TodoRecord.self)</code>: <code>@Model</code> のクラスは <code>Hashable</code> を満たすので、追加の準拠なしにそのまま値として渡せます。</li>
+            <li><code>ContentUnavailableView</code>: データが無いときの表示です。アイコンと文言を中央に並べます。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>TodoStore</code>・<code>TodoRepository</code>・<code>TodoItem</code> は消さずに残す</p>
+              <p>
+                画面からは使わなくなりますが、<code>TodoItem</code>・<code>TodoStore</code>・<code>TodoRepository</code>・<code>TodoAPIClient</code>・<code>TodoCache</code> のファイルは変更せずに残します。07 までの 53 テストが、これらをテストしているからです。テストを変えずに通し、07 までの内容（<code>async</code> / <code>await</code>・キャッシュ・通信）の完成コードとしても参照できるようにしています。
+                <code>ProfileHeader.swift</code> も残しますが、プロフィールのカードは表示しなくなります。
+              </p>
+            </div>
+          </div>
+
+          <p>ビルドして、シミュレータで起動します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl boot 'iPhone 17'</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <p>シミュレータがすでに起動している場合は <code>boot</code> を飛ばしてください。Xcode の場合は <kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示できます。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              タイトル「ToDo」の下に「タップ回数」と「完了も表示」のトグルがあり、「Todo」のブロックにチェックリストのアイコンと「ToDo はまだありません」が表示されます。
+              まだ 1 件も保存していないので、一覧は空です。07 のように API から読み込むこともしません。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">modelContext で追加・更新・削除し、save() で保存する</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            一覧に追加・削除の操作を付けます。<code>ContentView.swift</code> を次のように変更します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line">      // SwiftData から createdAt の古い順に読む。データが変わると画面が自動で更新される</span><span class="diff-line">      @Query(sort: \TodoRecord.createdAt) private var items: [TodoRecord]</span><span class="diff-line diff-line--add">+     // 保存・削除を行うための窓口。.modelContainer が環境に入れてくれる</span><span class="diff-line diff-line--add">+     @Environment(\.modelContext) private var modelContext</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line diff-line--add">+     @State private var newTitle = ""</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     private var canAdd: Bool {</span><span class="diff-line diff-line--add">+         (try? validate(name: newTitle)) != nil</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  Section("Todo") {</span><span class="diff-line">                      if items.isEmpty {</span><span class="diff-line">                          ContentUnavailableView("ToDo はまだありません", systemImage: "checklist")</span><span class="diff-line">                      }</span><span class="diff-line">                      ForEach(items) { item in</span><span class="diff-line">                          if showsDone || !item.isDone {</span><span class="diff-line">                              NavigationLink(value: item) {</span><span class="diff-line">                                  TodoRow(record: item)</span><span class="diff-line">                              }</span><span class="diff-line">                          }</span><span class="diff-line">                      }</span><span class="diff-line diff-line--add">+                     .onDelete { offsets in</span><span class="diff-line diff-line--add">+                         for index in offsets {</span><span class="diff-line diff-line--add">+                             modelContext.delete(items[index])</span><span class="diff-line diff-line--add">+                         }</span><span class="diff-line diff-line--add">+                         // 自動保存を待たず、削除の直後に保存する</span><span class="diff-line diff-line--add">+                         try? modelContext.save()</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+                 Section("追加") {</span><span class="diff-line diff-line--add">+                     HStack {</span><span class="diff-line diff-line--add">+                         TextField("新しいタスク", text: $newTitle)</span><span class="diff-line diff-line--add">+                         Button("追加") {</span><span class="diff-line diff-line--add">+                             modelContext.insert(TodoRecord(title: newTitle))</span><span class="diff-line diff-line--add">+                             // 自動保存を待たず、追加の直後に保存する</span><span class="diff-line diff-line--add">+                             try? modelContext.save()</span><span class="diff-line diff-line--add">+                             newTitle = ""</span><span class="diff-line diff-line--add">+                         }</span><span class="diff-line diff-line--add">+                         .buttonStyle(.borderless)</span><span class="diff-line diff-line--add">+                         .disabled(!canAdd)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .navigationDestination(for: TodoRecord.self) { item in</span><span class="diff-line">                  TodoDetailView(record: item)</span><span class="diff-line">              }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line diff-line--add">+             .toolbar {</span><span class="diff-line diff-line--add">+                 EditButton()</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>@Environment(\.modelContext)</code>: ステップ 2 の <code>.modelContainer</code> が環境に入れた <code>ModelContext</code> を受け取ります。データの追加・削除・保存はこれを通して行います。</li>
+            <li><code>modelContext.insert(TodoRecord(title: newTitle))</code>: 新しいオブジェクトを追加します。<code>@Query</code> の一覧にすぐ反映されます。</li>
+            <li><code>modelContext.delete(items[index])</code>: 左にスワイプして「Delete」を押すと、その行を削除します。</li>
+            <li><code>try? modelContext.save()</code>: 変更をすぐにファイルへ書き込みます。理由は下の注意で確かめます。</li>
+          </ul>
+
+          <p>完了の切り替えも保存します。<code>Views/TodoRow.swift</code> を次のように変更します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoRow.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct TodoRow: View {</span><span class="diff-line">      // @Model のオブジェクトはクラスなので、@Binding ではなく @Bindable で受け取る</span><span class="diff-line">      @Bindable var record: TodoRecord</span><span class="diff-line diff-line--add">+     @Environment(\.modelContext) private var modelContext</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          HStack(spacing: 12) {</span><span class="diff-line">              // 完了の切り替えはアイコンのボタンだけに任せる（行のタップは NavigationLink に譲る）</span><span class="diff-line">              Button {</span><span class="diff-line">                  record.toggle()</span><span class="diff-line diff-line--add">+                 try? modelContext.save()</span><span class="diff-line">              } label: {</span><span class="diff-line">                  if record.isDone {</span><span class="diff-line">                      Image(systemName: "checkmark.circle.fill")</span><span class="diff-line">                          .foregroundStyle(.green)</span><span class="diff-line">                  } else {</span><span class="diff-line">                      Image(systemName: "circle")</span><span class="diff-line">                          .foregroundStyle(.secondary)</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .buttonStyle(.borderless)</span><span class="diff-line">              .accessibilityLabel(record.isDone ? "未完了に戻す" : "完了にする")</span><span class="diff-line"> </span><span class="diff-line">              Text(record.title)</span><span class="diff-line">                  .strikethrough(record.isDone)</span><span class="diff-line"> </span><span class="diff-line">              Spacer()</span><span class="diff-line"> </span><span class="diff-line">              Text(record.priority.label)</span><span class="diff-line">                  .font(.caption)</span><span class="diff-line">                  .padding(.horizontal, 8)</span><span class="diff-line">                  .padding(.vertical, 2)</span><span class="diff-line">                  .background(.quaternary, in: Capsule())</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>save()</code> を呼ばないと、直後の終了で消える（実測）</p>
+              <p>
+                <code>ModelContext</code> には自動保存（<code>autosaveEnabled</code>）があり、<code>.modelContainer</code> の引数 <code>isAutosaveEnabled</code> の既定値は <code>true</code> です。公式ドキュメントでは「特定のイベントが起きたときに、保存していない変更を自動で保存する」と説明されています。つまり、変更した瞬間に保存されるわけではありません。
+              </p>
+              <p>
+                執筆時に UI テストで確かめました。「牛乳を買う」「メールを返す」を追加し、1 件目を完了にしたら、待たずにアプリを終了して再起動します。
+                3 か所の <code>save()</code> をコメントアウトした状態では、再起動後に、追加した 2 件とも残りませんでした。<code>save()</code> を呼ぶ状態では、2 件とも残り、完了も 1 件のままでした。
+                そのため、完成コードでは追加・完了の切り替え・削除のたびに <code>try? modelContext.save()</code> を呼んでいます。
+              </p>
+            </div>
+          </div>
+
+          <p>ビルドして起動します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <p>
+            シミュレータで「新しいタスク」に「牛乳を買う」と入力して「追加」を押し、続けて「メールを返す」も追加します。「牛乳を買う」の左の丸をタップして完了にします。
+            次のコマンドでアプリを終了して、もう一度起動します。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl terminate booted com.example.HandsonApp</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <p>保存先のファイルも見てみます。<code>get_app_container</code> でシミュレータ内のアプリのデータフォルダを調べ、その中の <code>Library/Application Support/</code> を見ます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> C=$(xcrun simctl get_app_container booted com.example.HandsonApp data)</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo $C</span><span class="terminal__line">/Users/&lt;ユーザー名&gt;/Library/Developer/CoreSimulator/Devices/&lt;デバイス ID&gt;/data/Containers/Data/Application/&lt;アプリの ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -la "$C/Library/Application Support/"</span><span class="terminal__line">…</span><span class="terminal__line">-rw-r--r--  1 &lt;ユーザー名&gt;  staff   73728 10月  3 22:38 default.store</span><span class="terminal__line">-rw-r--r--  1 &lt;ユーザー名&gt;  staff   32768 10月  3 22:38 default.store-shm</span><span class="terminal__line">-rw-r--r--  1 &lt;ユーザー名&gt;  staff  160712 10月  3 22:38 default.store-wal</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 "$C/Library/Application Support/default.store" '.tables'</span><span class="terminal__line">ACHANGE             ATRANSACTIONSTRING  Z_METADATA          Z_PRIMARYKEY</span><span class="terminal__line">ATRANSACTION        ZTODORECORD         Z_MODELCACHE</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 -header "$C/Library/Application Support/default.store" 'SELECT ZTITLE, ZISDONE FROM ZTODORECORD;'</span><span class="terminal__line">ZTITLE|ZISDONE</span><span class="terminal__line">牛乳を買う|1</span><span class="terminal__line">メールを返す|0</span></pre>
+</div>
+
+          <ul>
+            <li>保存先は <code>default.store</code> で、中身は SQLite のデータベースです。<code>-shm</code> と <code>-wal</code> は SQLite の作業用ファイルです。ファイルの大きさは環境によって変わります。</li>
+            <li><code>TodoRecord</code> は <code>ZTODORECORD</code> テーブルに、プロパティは <code>ZTITLE</code> や <code>ZISDONE</code> の列になります。<code>Z</code> の接頭辞は SwiftData の内部の保存形式によるもので、アプリのコードからは意識しません。</li>
+            <li><code>ZISDONE</code> の <code>1</code> は <code>true</code>（完了）です。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              追加すると「Todo」のブロックに行が増え、「ToDo はまだありません」が消えます。完了にした「牛乳を買う」には緑のチェックと取り消し線が付きます。
+              再起動しても 2 件が残り、「牛乳を買う」が完了のままであれば保存できています。SQLite の <code>ZTODORECORD</code> にも同じ 2 件が入っています。
+            </p>
+            <p>最後に、行を左にスワイプして「Delete」を押し、削除できることも確かめます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">#Predicate と @Query(filter:sort:) で絞り込む</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            「完了も表示」をオフにしたときの絞り込みを、View の <code>if</code> ではなく SwiftData の読み込みの条件で行います。
+            <code>@Query</code> の条件はプロパティの初期値として書くので、同じ View の <code>@State</code>（<code>showsDone</code>）を参照できません。そこで、一覧のブロックを子 View に切り出し、<code>init</code> の引数で条件を受け取ります。
+            <code>Views</code> フォルダに <code>TodoSection.swift</code> を追加し、次の内容にします（<code>Targets</code> は <code>HandsonApp</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Views/TodoSection.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import SwiftData
+import SwiftUI
+
+// Todo の一覧セクション。@Query の条件は init で組み立てる
+// （@Query の filter は View の State を直接参照できないため、子 View に引数として渡す）
+struct TodoSection: View {
+    @Query private var items: [TodoRecord]
+    @Environment(\.modelContext) private var modelContext
+
+    init(showsDone: Bool) {
+        // 「完了も表示」がオフなら未完了だけに絞る。どちらも作成日時の古い順
+        let predicate = #Predicate&lt;TodoRecord&gt; { showsDone || !$0.isDone }
+        _items = Query(filter: predicate, sort: \.createdAt)
+    }
+
+    var body: some View {
+        Section("Todo") {
+            if items.isEmpty {
+                ContentUnavailableView("ToDo はまだありません", systemImage: "checklist")
+            }
+            ForEach(items) { item in
+                NavigationLink(value: item) {
+                    TodoRow(record: item)
+                }
+            }
+            .onDelete { offsets in
+                for index in offsets {
+                    modelContext.delete(items[index])
+                }
+                // 自動保存を待たず、削除の直後に保存する
+                try? modelContext.save()
+            }
+        }
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>#Predicate&lt;TodoRecord&gt; { showsDone || !$0.isDone }</code>: 読み込む条件を書くマクロです。<code>$0</code> が 1 件の <code>TodoRecord</code> で、<code>true</code> になるものだけを読みます。<code>showsDone</code> が <code>true</code> なら全件、<code>false</code> なら <code>isDone</code> が <code>false</code> のものだけです。</li>
+            <li><code>_items = Query(filter: predicate, sort: \.createdAt)</code>: <code>_items</code> は <code>@Query</code> のプロパティラッパーそのものです。<code>init</code> で条件付きの <code>Query</code> を作って入れ替えます。</li>
+            <li>親の <code>showsDone</code> が変わると <code>TodoSection</code> が新しい引数で作り直され、新しい条件で読み直します。</li>
+            <li>削除の <code>.onDelete</code> も、<code>items</code> を持つこの View に移します。</li>
+          </ul>
+
+          <p><code>ContentView.swift</code> の <code>@Query</code> と「Todo」のブロックを、<code>TodoSection</code> に置き換えます。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  ContentView.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  struct ContentView: View {</span><span class="diff-line diff-line--remove">-     // SwiftData から createdAt の古い順に読む。データが変わると画面が自動で更新される</span><span class="diff-line diff-line--remove">-     @Query(sort: \TodoRecord.createdAt) private var items: [TodoRecord]</span><span class="diff-line">      // 保存・削除を行うための窓口。.modelContainer が環境に入れてくれる</span><span class="diff-line">      @Environment(\.modelContext) private var modelContext</span><span class="diff-line"> </span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      var body: some View {</span><span class="diff-line">          NavigationStack {</span><span class="diff-line">              List {</span><span class="diff-line">                  Section {</span><span class="diff-line">                      Button("タップ回数: \(tapCount)") {</span><span class="diff-line">                          tapCount += 1</span><span class="diff-line">                      }</span><span class="diff-line">                      .buttonStyle(.borderless)</span><span class="diff-line"> </span><span class="diff-line">                      Toggle("完了も表示", isOn: $showsDone)</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-                 Section("Todo") {</span><span class="diff-line diff-line--remove">-                     if items.isEmpty {</span><span class="diff-line diff-line--remove">-                         ContentUnavailableView("ToDo はまだありません", systemImage: "checklist")</span><span class="diff-line diff-line--remove">-                     }</span><span class="diff-line diff-line--remove">-                     ForEach(items) { item in</span><span class="diff-line diff-line--remove">-                         if showsDone || !item.isDone {</span><span class="diff-line diff-line--remove">-                             NavigationLink(value: item) {</span><span class="diff-line diff-line--remove">-                                 TodoRow(record: item)</span><span class="diff-line diff-line--remove">-                             }</span><span class="diff-line diff-line--remove">-                         }</span><span class="diff-line diff-line--remove">-                     }</span><span class="diff-line diff-line--remove">-                     .onDelete { offsets in</span><span class="diff-line diff-line--remove">-                         for index in offsets {</span><span class="diff-line diff-line--remove">-                             modelContext.delete(items[index])</span><span class="diff-line diff-line--remove">-                         }</span><span class="diff-line diff-line--remove">-                         // 自動保存を待たず、削除の直後に保存する</span><span class="diff-line diff-line--remove">-                         try? modelContext.save()</span><span class="diff-line diff-line--remove">-                     }</span><span class="diff-line diff-line--remove">-                 }</span><span class="diff-line diff-line--add">+                 TodoSection(showsDone: showsDone)</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">                          TextField("新しいタスク", text: $newTitle)</span><span class="diff-line">                          Button("追加") {</span><span class="diff-line">                              modelContext.insert(TodoRecord(title: newTitle))</span><span class="diff-line">                              // 自動保存を待たず、追加の直後に保存する</span><span class="diff-line">                              try? modelContext.save()</span><span class="diff-line">                              newTitle = ""</span><span class="diff-line">                          }</span><span class="diff-line">                          .buttonStyle(.borderless)</span><span class="diff-line">                          .disabled(!canAdd)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">              .navigationDestination(for: TodoRecord.self) { item in</span><span class="diff-line">                  TodoDetailView(record: item)</span><span class="diff-line">              }</span><span class="diff-line">              .navigationTitle("ToDo")</span><span class="diff-line">              .toolbar {</span><span class="diff-line">                  EditButton()</span><span class="diff-line">              }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <p>View 側の <code>if showsDone || !item.isDone</code> は不要になりました。ビルドして起動します。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              「牛乳を買う」と「メールを返す」を追加し（ステップ 4 で残っていればそのまま使います）、「牛乳を買う」を完了にします。「完了も表示」がオンのときは 2 件とも表示されます。
+              トグルをオフにすると、未完了の「メールを返す」だけが表示されます。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">メモリ上だけのコンテナでテストする</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            SwiftData を使うコードもユニットテストで確かめます。テストでは、ファイルに保存しない「メモリ上だけ」のコンテナを使います。<code>HandsonAppTests</code> フォルダに <code>TodoRecordTests.swift</code> を追加し、次の内容にします（<code>Targets</code> は <code>HandsonAppTests</code>）。
+          </p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/TodoRecordTests.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import SwiftData
+import Testing
+@testable import HandsonApp
+
+@MainActor
+struct TodoRecordTests {
+    // テストごとにメモリ上だけのコンテナを作る。ファイルを作らないので互いに影響しない
+    // ModelContext はコンテナを強参照しない。コンテナも返して、テストの間は呼び出し側が保持する
+    private func makeContainer() throws -&gt; ModelContainer {
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        return try ModelContainer(for: TodoRecord.self, configurations: configuration)
+    }
+
+    @Test func insertして取得できる() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        context.insert(TodoRecord(title: "牛乳を買う"))
+        try context.save()
+
+        let records = try context.fetch(FetchDescriptor&lt;TodoRecord&gt;())
+        #expect(records.count == 1)
+        #expect(records.first?.title == "牛乳を買う")
+    }
+
+    @Test func deleteすると取得できなくなる() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let record = TodoRecord(title: "メールを返す")
+        context.insert(record)
+        try context.save()
+
+        context.delete(record)
+        try context.save()
+
+        #expect(try context.fetch(FetchDescriptor&lt;TodoRecord&gt;()).isEmpty)
+    }
+
+    @Test func Predicateで未完了だけに絞れる() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let done = TodoRecord(title: "完了済み")
+        done.toggle()
+        context.insert(done)
+        context.insert(TodoRecord(title: "未完了"))
+
+        let descriptor = FetchDescriptor&lt;TodoRecord&gt;(predicate: #Predicate { !$0.isDone })
+        let records = try context.fetch(descriptor)
+        #expect(records.map(\.title) == ["未完了"])
+    }
+
+    @Test func sortByで作成日時の古い順に並ぶ() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let now = Date.now
+        context.insert(TodoRecord(title: "新しい", createdAt: now))
+        context.insert(TodoRecord(title: "古い", createdAt: now.addingTimeInterval(-60)))
+
+        let descriptor = FetchDescriptor&lt;TodoRecord&gt;(sortBy: [SortDescriptor(\.createdAt)])
+        let records = try context.fetch(descriptor)
+        #expect(records.map(\.title) == ["古い", "新しい"])
+    }
+
+    @Test func toggleで完了日時が入る() {
+        let record = TodoRecord(title: "x")
+        record.toggle()
+        #expect(record.isDone)
+        #expect(record.completedAt != nil)
+        record.toggle()
+        #expect(record.completedAt == nil)
+    }
+}</code></pre>
+</div>
+
+          <ul>
+            <li><code>ModelConfiguration(isStoredInMemoryOnly: true)</code>: ファイルを作らず、メモリ上だけにデータを置く設定です。テストごとに新しいコンテナを作るので、テスト同士が影響しません。アプリの <code>default.store</code> にも触れません。</li>
+            <li><code>container.mainContext</code>: コンテナに付いているメインアクター用の <code>ModelContext</code> です。<code>TodoRecord</code> はメインアクターに分離されているので、テストの型にも <code>@MainActor</code> を付けます。</li>
+            <li><code>FetchDescriptor</code>: 画面の <code>@Query</code> の代わりに、コードから読むときの条件です。<code>predicate:</code> に <code>#Predicate</code>、<code>sortBy:</code> に <code>SortDescriptor</code> を渡します。<code>context.fetch(_:)</code> で配列を取得します。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">コンテナはテストの間ずっと持っておく</p>
+              <p>
+                最初は <code>makeContainer()</code> の代わりに、関数の中でコンテナを作って <code>container.mainContext</code> だけを返す <code>makeContext()</code> を書いていました。この形ではテストの実行中にプロセスが落ち、次の出力で失敗しました。
+              </p>
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line">Restarting after unexpected exit, crash, or test timeout; summary will include totals from previous launches.</span><span class="terminal__line">✔ Test run with 10 tests in 3 suites passed after 0.010 seconds.</span><span class="terminal__line">** TEST FAILED **</span></pre>
+</div>
+              <p>
+                <code>ModelContext</code> はコンテナを強参照しないので、関数を抜けるとコンテナが解放され、その後の <code>insert</code> や <code>fetch</code> で落ちたと見られます（クラッシュの文言は記録していません）。コンテナを返してテストの中の変数で持つ形に直すと通りました。
+              </p>
+            </div>
+          </div>
+
+          <p>Xcode の Preview でも同じ考え方で、メモリ上のコンテナを渡します。<code>ContentView.swift</code> の末尾に Preview を追加します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  …</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #Preview {</span><span class="diff-line diff-line--add">+     ContentView()</span><span class="diff-line diff-line--add">+         // 保存せずメモリ上だけに作る。Preview のたびにまっさらな状態で始まる</span><span class="diff-line diff-line--add">+         .modelContainer(for: TodoRecord.self, inMemory: true)</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+
+          <p><code>.modelContainer(for:inMemory: true)</code> は、ファイルに保存しないコンテナを作って環境に入れます。Preview のたびに空の状態から始まり、アプリの保存データにも影響しません。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 58 tests in 15 suites passed after 6.023 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Test run with 58 tests in 15 suites passed</code> と表示されることを確かめます（53 + <code>TodoRecordTests</code> の 5 テスト）。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">（発展）API から取り込み、@Attribute(.unique) で重複を防ぐ</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            07 の <code>TodoAPIClient</code> で取得した ToDo を、SwiftData に保存します。時間が足りなければ、このステップは飛ばしてステップ 8 に進んでかまいません。
+            まず、サーバー側の <code>id</code> を保存するプロパティを <code>TodoRecord</code> に追加します。<code>Models/TodoRecord.swift</code> を次のように変更します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRecord.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  import Foundation</span><span class="diff-line">  import SwiftData</span><span class="diff-line"> </span><span class="diff-line">  @Model</span><span class="diff-line">  final class TodoRecord {</span><span class="diff-line diff-line--add">+     // サーバー側の id。同じ値の行は 1 件だけにする（取り込みを繰り返しても重複しない）</span><span class="diff-line diff-line--add">+     @Attribute(.unique) var remoteID: Int?</span><span class="diff-line">      var title: String</span><span class="diff-line">      var priority: Priority</span><span class="diff-line">      var isDone: Bool</span><span class="diff-line">      var completedAt: Date?</span><span class="diff-line">      var createdAt: Date</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     init(title: String, priority: Priority = .medium, createdAt: Date = .now) {</span><span class="diff-line diff-line--add">+     init(title: String, priority: Priority = .medium, createdAt: Date = .now, remoteID: Int? = nil) {</span><span class="diff-line diff-line--add">+         self.remoteID = remoteID</span><span class="diff-line">          self.title = title</span><span class="diff-line">          self.priority = priority</span><span class="diff-line">          self.isDone = false</span><span class="diff-line">          self.completedAt = nil</span><span class="diff-line">          self.createdAt = createdAt</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line">      // 完了と未完了を切り替える。完了にした時刻も一緒に記録する</span><span class="diff-line">      func toggle() {</span><span class="diff-line">          isDone.toggle()</span><span class="diff-line">          completedAt = isDone ? .now : nil</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <ul>
+            <li><code>@Attribute(.unique)</code>: このプロパティの値が、同じ型の中で重複しないようにします。同じ <code>remoteID</code> の行を <code>insert</code> すると、新しい行は増えず、既存の行が新しい値で上書きされます。</li>
+            <li>アプリで追加したタスクには、サーバーの <code>id</code> が無いので <code>nil</code> です（既定値）。</li>
+          </ul>
+
+          <p><code>Models</code> フォルダに <code>TodoImporter.swift</code> を追加し、次の内容にします（<code>Targets</code> は <code>HandsonApp</code>）。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoImporter.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">import Foundation
+import SwiftData
+
+// API から取ってきた 1 件ずつを TodoRecord として保存する。
+// メインアクター上の modelContext で行う（件数が少なく、@ModelActor で別スレッドに逃がす必要がないため）
+func importTodos(_ dtos: [TodoDTO], into context: ModelContext) throws {
+    for dto in dtos {
+        let record = TodoRecord(title: dto.title, remoteID: dto.id)
+        if dto.completed {
+            record.toggle()
+        }
+        // remoteID が同じ行が既にあれば、insert は新規追加ではなく上書きになる（.unique の挙動）
+        context.insert(record)
+    }
+    try context.save()
+}</code></pre>
+</div>
+
+          <ul>
+            <li>07 の <code>TodoDTO</code> を 1 件ずつ <code>TodoRecord</code> にして <code>insert</code> し、最後に <code>save()</code> します。</li>
+            <li>通信ではなく <code>[TodoDTO]</code> を引数にしたので、ネットワークなしでテストできます。</li>
+            <li>別スレッドで書き込む <code>@ModelActor</code> は使いません。5 件程度なら保存は一瞬なので、画面と同じメインアクターの <code>modelContext</code> で済ませた方が簡単です。<code>@Model</code> のオブジェクトは <code>Sendable</code> ではないので、別のアクターとやり取りすると考えることが増えます。大量のデータを裏で書き込むときに検討します。</li>
+          </ul>
+
+          <p><code>ContentView.swift</code> に「サーバーから取り込む」ボタンを追加します。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/ContentView.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  …</span><span class="diff-line">      @State private var tapCount = 0</span><span class="diff-line">      @State private var showsDone = true</span><span class="diff-line">      @State private var newTitle = ""</span><span class="diff-line diff-line--add">+     @State private var importMessage: String?</span><span class="diff-line diff-line--add">+     private let client = TodoAPIClient()</span><span class="diff-line"> </span><span class="diff-line">      private var canAdd: Bool {</span><span class="diff-line">          (try? validate(name: newTitle)) != nil</span><span class="diff-line">  …</span><span class="diff-line">                  }</span><span class="diff-line"> </span><span class="diff-line">                  TodoSection(showsDone: showsDone)</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+                 Section {</span><span class="diff-line diff-line--add">+                     Button("サーバーから取り込む") {</span><span class="diff-line diff-line--add">+                         Task {</span><span class="diff-line diff-line--add">+                             do {</span><span class="diff-line diff-line--add">+                                 let dtos = try await client.fetchTodos(limit: 5)</span><span class="diff-line diff-line--add">+                                 try importTodos(dtos, into: modelContext)</span><span class="diff-line diff-line--add">+                                 importMessage = "\(dtos.count) 件を取り込みました"</span><span class="diff-line diff-line--add">+                             } catch {</span><span class="diff-line diff-line--add">+                                 importMessage = "取り込みに失敗しました"</span><span class="diff-line diff-line--add">+                             }</span><span class="diff-line diff-line--add">+                         }</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                 } footer: {</span><span class="diff-line diff-line--add">+                     if let importMessage {</span><span class="diff-line diff-line--add">+                         Text(importMessage)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                 }</span><span class="diff-line"> </span><span class="diff-line">                  Section("追加") {</span><span class="diff-line">                      HStack {</span><span class="diff-line">  …</span></pre>
+</div>
+
+          <ul>
+            <li><code>client.fetchTodos(limit: 5)</code> は 07 で <code>@concurrent</code> にしたので、通信とデコードはメインアクターの外で行われます。<code>await</code> の後の <code>importTodos</code> はメインアクターに戻って実行します。</li>
+            <li>結果はブロックの下（footer）に「5 件を取り込みました」のように表示します。</li>
+          </ul>
+
+          <p>重複しないことをテストで確かめます。<code>TodoRecordTests.swift</code> の末尾に追加します。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Swift</span>
+  <span class="code-block__filename">HandsonAppTests/TodoRecordTests.swift（末尾に追加）</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-swift">@MainActor
+struct TodoImporterTests {
+    @Test func 取り込みを2回繰り返しても重複しない() throws {
+        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: TodoRecord.self, configurations: configuration)
+        let context = container.mainContext
+        let dtos = [
+            TodoDTO(userId: 1, id: 1, title: "A", completed: false),
+            TodoDTO(userId: 1, id: 2, title: "B", completed: true),
+        ]
+
+        try importTodos(dtos, into: context)
+        try importTodos(dtos, into: context)
+
+        let records = try context.fetch(FetchDescriptor&lt;TodoRecord&gt;())
+        #expect(records.count == 2)
+        #expect(records.filter(\.isDone).count == 1)
+    }
+}</code></pre>
+</div>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 59 tests in 16 suites passed after 5.998 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">** TEST SUCCEEDED **</span></pre>
+</div>
+
+          <p>
+            モデルにプロパティを足したので、シミュレータのアプリを一度削除してからインストールします。削除すると、ステップ 4・5 で追加したデータも消えます。
+          </p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl uninstall booted com.example.HandsonApp</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span></pre>
+</div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">モデルの変更（マイグレーション）は扱わない</p>
+              <p>
+                保存済みのデータがあるアプリでモデルを変えるときは、<code>VersionedSchema</code> と <code>SchemaMigrationPlan</code> で移行の手順を書きます。この項目では扱いません。執筆時は、<code>remoteID</code> を足した後は毎回アプリを削除してから確かめました。削除せずに起動した場合の挙動は確かめていません。
+              </p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>Test run with 59 tests in 16 suites passed</code> と表示されることを確かめます（58 + <code>TodoImporterTests</code> の 1 テスト）。
+              シミュレータで「サーバーから取り込む」を押すと、「Todo」のブロックに 07 と同じ 5 行が並びます（「delectus aut autem」から「laboriosam mollitia et enim quasi adipisci quia provident illum」まで）。4 行目の「et porro tempora」だけが完了です。ボタンの下には「5 件を取り込みました」と表示されます。
+            </p>
+            <p>
+              もう一度押しても 5 行のままで、重複しません。ただし、取り込む前にローカルで別の行を完了にしておくと、2 回目の取り込みで完了は 1 件に戻ります。執筆時の実測では、1 回目は 5 行・完了 1 件、ローカルで完了を 2 件にした後の 2 回目は 5 行・完了 1 件でした。<code>remoteID</code> が同じ行は、サーバーの値で上書きされるからです。<code>createdAt</code> も上書きされるので、並び順も変わります。ローカルの変更を残したい場合は、取り込む前に <code>remoteID</code> で <code>fetch</code> して、差分だけを更新する必要があります。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">わざと失敗させてから、完成状態を確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>
+            SwiftData でつまずきやすい 2 つの失敗を、わざと起こしてみます。1 つ目は <code>.modelContainer</code> の付け忘れです。<code>HandsonAppApp.swift</code> から 1 行を削除します。
+          </p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/HandsonAppApp.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  //</span><span class="diff-line">  //  HandsonAppApp.swift</span><span class="diff-line">  //  HandsonApp</span><span class="diff-line">  //</span><span class="diff-line"> </span><span class="diff-line">  import SwiftData</span><span class="diff-line">  import SwiftUI</span><span class="diff-line"> </span><span class="diff-line">  @main</span><span class="diff-line">  struct HandsonAppApp: App {</span><span class="diff-line">      var body: some Scene {</span><span class="diff-line">          WindowGroup {</span><span class="diff-line">              ContentView()</span><span class="diff-line">          }</span><span class="diff-line diff-line--remove">-         .modelContainer(for: TodoRecord.self)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl spawn booted log show --last 2m --predicate 'process == "HandsonApp" AND messageType &gt;= 16'</span><span class="terminal__line">… Fault … HandsonApp: (_SwiftData_SwiftUI) [com.apple.runtime-issues:SwiftData] Set a .modelContext in view's environment to use Query</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>.modelContainer</code> を付け忘れても、クラッシュせずに空の一覧になる</p>
+              <p>
+                ビルドは通り、起動してもクラッシュしません。一覧は「ToDo はまだありません」と表示され、「追加」を押してもアプリは動き続けます。
+                SwiftData に関する行は <code>Set a .modelContext in view's environment to use Query</code> の 1 行だけです。ほかのフレームワークの無関係な行が一緒に出ることがあります。「<code>@Query</code> を使うには View の環境に <code>.modelContext</code> を設定せよ」という意味です。
+              </p>
+              <p>
+                04 で <code>.environment(store)</code> を付け忘れたときは、起動時に <code>Fatal error: No Observable object of type TodoStore found.</code> でクラッシュしました。SwiftData の付け忘れは静かに空の一覧になるので、気づきにくい失敗です。データが表示されないときは、まず <code>.modelContainer</code> を確かめてください。
+              </p>
+            </div>
+          </div>
+
+          <p>確かめたら、<code>.modelContainer(for: TodoRecord.self)</code> を戻します。2 つ目は、保存できない型のプロパティです。<code>TodoRecord</code> にクロージャのプロパティを足してビルドします。</p>
+
+<div class="code-block code-block--diff">
+<div class="code-block__header">
+  <span class="code-block__lang">Diff</span>
+  <span class="code-block__filename">HandsonApp/Models/TodoRecord.swift</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><span class="diff-line">  …</span><span class="diff-line">      var isDone: Bool</span><span class="diff-line">      var completedAt: Date?</span><span class="diff-line">      var createdAt: Date</span><span class="diff-line diff-line--add">+     var handler: () -&gt; Void = {}</span><span class="diff-line"> </span><span class="diff-line">      init(title: String, priority: Priority = .medium, createdAt: Date = .now, remoteID: Int? = nil) {</span><span class="diff-line">          self.remoteID = remoteID</span><span class="diff-line">  …</span></pre>
+</div>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build 2&gt;&amp;1 | grep -E "error:|\*\* "</span><span class="terminal__line">macro expansion @_PersistedProperty:4:23: error: type '() -&gt; ()' cannot conform to 'PersistentModel' [#ProtocolTypeNonConformance]</span><span class="terminal__line">…</span><span class="terminal__line">macro expansion @_PersistedProperty:9:21: error: type '() -&gt; ()' cannot conform to 'PersistentModel' [#ProtocolTypeNonConformance]</span><span class="terminal__line">…</span><span class="terminal__line">macro expansion @_PersistedProperty:13:18: error: type '() -&gt; ()' cannot conform to 'PersistentModel' [#ProtocolTypeNonConformance]</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD FAILED **</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">保存できない型はマクロの中でエラーになる</p>
+              <p>
+                <code>@Model</code> は、全ての保存するプロパティについて保存と読み出しのコードを作ります。クロージャは保存できないので、生成されたコードの中でエラーになります。
+                <code>Codable</code> でない自作のクラス（<code>final class NotCodable {}</code>）を <code>var tag: NotCodable?</code> として足した場合は、<code>error: instance method 'setValue(forKey:to:)' requires that 'NotCodable' conform to 'PersistentModel'</code> になりました。
+                保存したい型は <code>Codable</code> にするか、それ自体を <code>@Model</code> にして関連付けます。
+              </p>
+            </div>
+          </div>
+
+          <p>足したプロパティを削除して元に戻します。完成状態のファイル構成は次のとおりです。</p>
+
+<div class="code-block">
+<div class="code-block__header">
+  <span class="code-block__lang">Text</span>
+  <span class="code-block__filename">HandsonApp/</span>
+  <span class="code-block__spacer"></span>
+  <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+</div>
+<pre><code class="language-plaintext">HandsonApp/
+  HandsonApp/
+    HandsonAppApp.swift          # この項目で更新（.modelContainer、TodoStore を外す）
+    ContentView.swift            # この項目で更新（modelContext、TodoSection、取り込み）
+    Greeting.swift
+    Models/
+      TodoRecord.swift           # この項目で追加（@Model）
+      TodoImporter.swift         # この項目で追加（API からの取り込み）
+      TodoItem.swift             # この項目で更新（Priority に Codable）
+      TodoStore.swift            # 07 のまま（画面からは使わない）
+      TodoRepository.swift       # 07 のまま（画面からは使わない）
+      TodoDTO.swift
+      TodoAPIClient.swift
+      …                          # ほかは 07 のまま
+    Views/
+      TodoSection.swift          # この項目で追加（@Query(filter:sort:)）
+      TodoRow.swift              # この項目で更新（@Bindable で TodoRecord を受け取る）
+      TodoDetailView.swift       # この項目で更新（TodoRecord を表示）
+      ProfileHeader.swift        # 07 のまま（表示しない）
+  HandsonAppTests/
+    TodoRecordTests.swift        # この項目で追加（6 テスト）
+    …                            # ほかは 07 のまま（合計 59 テスト）</code></pre>
+</div>
+
+          <p>ビルドと全てのユニットテストを実行し、シミュレータで最終的な画面を確かめてから、シミュレータを止めます。</p>
+
+<div class="terminal">
+<div class="terminal__header">
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__dot"></span>
+<span class="terminal__title">Terminal</span>
+</div>
+<pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD build</span><span class="terminal__line">…</span><span class="terminal__line">** BUILD SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> perl -e 'alarm 600; exec @ARGV' xcodebuild -project HandsonApp.xcodeproj -scheme HandsonApp -destination 'platform=iOS Simulator,name=iPhone 17' -derivedDataPath $DD -parallel-testing-enabled NO -only-testing:HandsonAppTests test 2&gt;&amp;1 | grep -E "^Test |✔|✘|\*\* |error:"</span><span class="terminal__line">…</span><span class="terminal__line">✔ Test run with 59 tests in 16 suites passed after 6.051 seconds.</span><span class="terminal__line">…</span><span class="terminal__line">** TEST SUCCEEDED **</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl install booted $DD/Build/Products/Debug-iphonesimulator/HandsonApp.app</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl launch booted com.example.HandsonApp</span><span class="terminal__line">com.example.HandsonApp: &lt;プロセス ID&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> xcrun simctl shutdown all</span></pre>
+</div>
+
+          <p>Xcode では <kbd>⌘</kbd> + <kbd>U</kbd> で全てのテストを実行し、<kbd>⌘</kbd> + <kbd>R</kbd> でシミュレータに表示します。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>
+              <code>** BUILD SUCCEEDED **</code> と <code>Test run with 59 tests in 16 suites passed</code> が表示されることを確かめます。追加した 6 テストは全てメモリ上のコンテナを使うので、ファイルとネットワークのどちらも使いません。
+              シミュレータでは、それまでに保存した ToDo が表示され、追加・完了の切り替え・削除が再起動後も残れば完成です。
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">07 のプロジェクトをコピーしてビルドと 53 テストが通ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>@Model</code> のクラスを作り、<code>.modelContainer(for:)</code> で保存先を用意した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>@Query</code> で一覧を表示し、<code>@Model</code> のオブジェクトを <code>@Bindable</code> で受け取った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>modelContext</code> で追加・削除し、<code>save()</code> を明示的に呼ぶ理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">再起動後もデータが残ることと、<code>default.store</code> の <code>ZTODORECORD</code> に保存されていることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>#Predicate</code> と <code>@Query(filter:sort:)</code> を子 View の <code>init</code> で組み立て、未完了だけに絞り込んだ</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">メモリ上だけのコンテナでテストを書き、コンテナをテストの間保持する必要があることを理解した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">（発展）API から取り込み、<code>@Attribute(.unique)</code> で重複せず上書きされることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>.modelContainer</code> の付け忘れはクラッシュせず空の一覧になることを確かめ、59 テストが通った後に <code>xcrun simctl shutdown all</code> でシミュレータを止めた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>unknown attribute 'Model'</code> が出る</p>
+          <p><code>@Model</code> を使うファイルに <code>import SwiftData</code> があるかを確かめてください。<code>@Query</code> や <code>modelContext</code> を使う View のファイルにも必要です。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">再起動するとデータが消えている</p>
+          <p>追加・完了の切り替え・削除の後に <code>try? modelContext.save()</code> を呼んでいるかを確かめてください。自動保存だけでは、操作の直後に終了したときに保存されないことがあります（ステップ 4）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">一覧がいつも空で、エラーも出ない</p>
+          <p><code>HandsonAppApp.swift</code> の <code>WindowGroup</code> に <code>.modelContainer(for: TodoRecord.self)</code> が付いているかを確かめてください（ステップ 8）。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>@Model</code> で保存するクラスを作り、<code>.modelContainer</code> でアプリに保存先を用意しました。<code>@Query</code> で一覧を表示し、<code>modelContext</code> で追加・更新・削除しました。自動保存は変更の直後に行われるとは限らないので、操作のたびに <code>save()</code> を呼びます。
+        <code>#Predicate</code> と <code>@Query(filter:sort:)</code> を子 View の <code>init</code> で組み立てて絞り込み、メモリ上だけのコンテナでテストを書きました。発展として、API から取り込んだデータを <code>@Attribute(.unique)</code> で重複させずに保存しました。
+        次の項目では、Swift Testing を使ったユニットテストを詳しく学びます。
+      </p>
+
+      <h2 id="references">参考</h2>
+      <ul>
+        <li>SwiftData のドキュメント
+          <ul>
+            <li><a href="https://developer.apple.com/documentation/swiftdata">SwiftData</a> / <a href="https://developer.apple.com/documentation/swiftdata/preserving-your-apps-model-data-across-launches">Preserving your app’s model data across launches</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftdata/model()">Model()</a> / <a href="https://developer.apple.com/documentation/swiftdata/attribute(_:originalname:hashmodifier:)">Attribute(_:originalName:hashModifier:)</a> / <a href="https://developer.apple.com/documentation/swiftdata/schema/attribute/option/unique">unique</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftdata/modelcontainer">ModelContainer</a> / <a href="https://developer.apple.com/documentation/swiftdata/modelconfiguration">ModelConfiguration</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftdata/modelcontext">ModelContext</a> / <a href="https://developer.apple.com/documentation/swiftdata/modelcontext/save()">save()</a> / <a href="https://developer.apple.com/documentation/swiftdata/modelcontext/autosaveenabled">autosaveEnabled</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftdata/query">Query</a> / <a href="https://developer.apple.com/documentation/swiftdata/fetchdescriptor">FetchDescriptor</a></li>
+            <li><a href="https://developer.apple.com/documentation/swiftdata/modelactor()">ModelActor()</a></li>
+          </ul>
+        </li>
+        <li><a href="https://developer.apple.com/documentation/swiftui/scene/modelcontainer(for:inmemory:isautosaveenabled:isundoenabled:onsetup:)">modelContainer(for:inMemory:isAutosaveEnabled:isUndoEnabled:onSetup:)</a>（SwiftUI）</li>
+        <li><a href="https://developer.apple.com/documentation/foundation/predicate">Predicate</a>（Foundation）</li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>ios/08-swiftdata</code> の <code>ios/08-swiftdata/</code> ディレクトリにあります（Xcode のプロジェクトは <code>ios/08-swiftdata/HandsonApp/</code>）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../07-networking/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">07: URLSession と Codable</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">09: Swift Testing</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
