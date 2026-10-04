@@ -1,0 +1,13 @@
+# Terraform が作業用に作るディレクトリ（プロバイダーの実体が入る）
+.terraform/
+
+# state。リソースの実際の値が入るのでコミットしない
+*.tfstate
+*.tfstate.*
+
+# 機微な値を書く変数ファイル。terraform.tfvars は機微な値を入れない前提でコミットする
+*.auto.tfvars
+secret*.tfvars
+
+# このレッスンで Terraform が生成するファイル
+output/

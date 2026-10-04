@@ -1,0 +1,9 @@
+# Terraform が作業用に作るディレクトリ（プロバイダーの実体が入る）
+.terraform/
+
+# state。リソースの実際の値が入るのでコミットしない
+*.tfstate
+*.tfstate.*
+
+# このレッスンで Terraform が生成するファイル
+output/
