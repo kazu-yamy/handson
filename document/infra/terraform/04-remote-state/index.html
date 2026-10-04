@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04: リモートステート管理 | Infra（Terraform）ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../../index.html">ハンズオン</a></li>
+          <li>Infra</li>
+          <li>Terraform</li>
+          <li aria-current="page">04</li>
+        </ol>
+        <h1 class="lesson-title">リモートステート管理</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: モジュールを使った Terraform の設定を書けるようになり、state をチームで共有する方法を知りたい人</li>
+          <li class="lesson-meta__item">📋 前提: 03 で作った <code>03-modules</code> ディレクトリが手元にあること。Docker が使えること（Docker Desktop や Rancher Desktop など）。クラウドのアカウントは不要</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../03-modules/index.html">03: モジュール化</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>backend "s3"</code> を書き、<code>terraform init -migrate-state</code> でローカルの state をリモートへ移す</li>
+          <li>リモートの state で <code>plan</code> / <code>apply</code> し、<code>terraform state pull</code> で中身を確かめる</li>
+          <li><code>use_lockfile</code> によるロックで同時実行が止まることを確かめ、<code>-lock-timeout</code> と <code>force-unlock</code> の使いどころを知る</li>
+          <li>別の作業ディレクトリから同じ state を共有する</li>
+          <li><code>-backend-config</code> で環境ごとの設定を分け、鍵はファイルに書かず環境変数で渡す</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        01〜03 では、state を作業ディレクトリの <code>terraform.tfstate</code> に保存してきました。1 人で試すにはこれで十分ですが、チームで同じインフラを管理するには困ります。
+        state が各自の PC にあると、互いの変更が見えません。2 人が同時に <code>apply</code> すると、state が食い違ったり壊れたりします。
+      </p>
+      <p>
+        そこで実務では、state を Amazon S3 や Google Cloud Storage などの共有ストレージに置き、全員が同じ state を読み書きします。state の保存先を決める仕組みを<strong>バックエンド</strong>と呼び、ストレージに置く方式を<strong>リモートバックエンド</strong>（リモートステート）と呼びます。
+      </p>
+      <p>
+        この項目では、クラウドのアカウントを使わずに同じ流れを体験します。S3 互換のストレージ <strong>SeaweedFS</strong> を手元の Docker で動かし、Terraform の <code>s3</code> バックエンドで接続します。
+        <code>s3</code> バックエンドの設定のうち、<code>endpoints</code> や <code>skip_*</code> は、接続先を AWS から手元の S3 互換サーバーに向けるためのものです。本物の S3 を使うときは書きません。
+      </p>
+      <table>
+  <thead>
+    <tr><th>設定</th><th>役割</th><th>本物の S3 では</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>bucket</code> / <code>key</code></td><td>state を置くバケットと、バケット内のパス</td><td>書く（必須）</td></tr>
+    <tr><td><code>region</code></td><td>バケットのリージョン</td><td>書く</td></tr>
+    <tr><td><code>use_lockfile</code></td><td>バケットに <code>.tflock</code> を置いてロックする</td><td>書く</td></tr>
+    <tr><td><code>endpoints</code>（<code>s3</code>）</td><td>接続先を AWS ではなく <code>http://localhost:8333</code> に変える</td><td>不要</td></tr>
+    <tr><td><code>use_path_style</code></td><td>バケット名をホスト名（<code>tfstate.localhost</code>）ではなく URL のパスに入れる</td><td>不要</td></tr>
+    <tr><td><code>skip_credentials_validation</code></td><td>鍵が有効かを AWS の STS に問い合わせない</td><td>不要</td></tr>
+    <tr><td><code>skip_requesting_account_id</code></td><td>AWS のアカウント ID を STS や IAM に問い合わせない</td><td>不要</td></tr>
+    <tr><td><code>skip_metadata_api_check</code></td><td>EC2 のメタデータ API を確認しない</td><td>不要</td></tr>
+    <tr><td><code>skip_region_validation</code></td><td>リージョン名が AWS に実在するかを検証しない</td><td>不要</td></tr>
+  </tbody>
+</table>
+      <p>
+        つまり、上の 4 行（<code>bucket</code>・<code>key</code>・<code>region</code>・<code>use_lockfile</code>）が実務でもそのまま使う部分です。なお、HashiCorp は S3 互換のストレージへの対応を「best effort」（できる範囲での対応）としています。詳しくは <a href="https://developer.hashicorp.com/terraform/language/backend/s3#support-for-s3-compatible-storage-providers">s3 backend の Support for "S3 Compatible" Storage Providers</a> を参照してください。
+        SeaweedFS で動くことは執筆時の版で確かめていますが、学習用の置き場所と考えてください。
+      </p>
+      <p>管理するリソースは、これまでと同じく <code>hashicorp/local</code> と <code>hashicorp/random</code> だけです。</p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            動作を確認したのは Terraform v1.16.2（darwin_arm64）、hashicorp/local v2.9.1、hashicorp/random v3.9.1 です。S3 互換ストレージには SeaweedFS の <code>chrislusf/seaweedfs:4.48</code> を使いました。Docker は Rancher Desktop（Docker Engine 29.5.3）を使いました。バージョンは執筆時点（2026年10月）のものです。
+            確認した環境は macOS（zsh）です。コマンドは macOS のシェルで書いています。
+            掲載している出力は色なし（<code>-no-color</code> 相当）で取得したものです。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">03 の完成コードを出発点にする</h3>
+        </div>
+        <div class="step__body">
+
+
+<p>
+  03 で作った <code>03-modules</code> の隣に、新しい作業ディレクトリ <code>04-remote-state</code> を作ります。コピーするのは、ルートの <code>.gitignore</code>・<code>main.tf</code>・<code>variables.tf</code>・<code>outputs.tf</code>・<code>terraform.tfvars</code> の 5 つです。<code>modules/greeting/</code> もコピーします。
+  これまでと同じく、state（<code>terraform.tfstate</code>）や <code>.terraform/</code>・<code>output/</code> はコピーせず、新しいディレクトリで一から作ります。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p 04-remote-state/modules</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp 03-modules/{.gitignore,main.tf,variables.tf,outputs.tf,terraform.tfvars} 04-remote-state/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 03-modules/modules/greeting 04-remote-state/modules/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 04-remote-state</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -A</span><span class="terminal__line">.gitignore</span><span class="terminal__line">main.tf</span><span class="terminal__line">modules</span><span class="terminal__line">outputs.tf</span><span class="terminal__line">terraform.tfvars</span><span class="terminal__line">variables.tf</span></pre>
+</div>
+<p>
+  03 の <code>moved.tf</code> はコピーしません。03 で説明したとおり、<code>moved</code> は古いアドレスのままの state に備えて残すものです。04 は 03 の state を引き継がず、空の state から始める別のプロジェクトです。古いアドレスの state は存在しません。<code>moved</code> の働く場面がないため、ここでは外します。
+</p>
+<p>コピーした <code>.tf</code> の中身は 03 の完成形そのままです。この項目で書き換えるのは、ステップ 3 で触る <code>main.tf</code> の <code>terraform</code> ブロックだけです。</p>
+<details class="disclosure">
+  <summary class="disclosure__summary">コピーしたルートの <code>main.tf</code> を見る</summary>
+  <div class="disclosure__body">
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">terraform {
+  required_version = "&gt;= 1.9"
+
+  required_providers {
+    local = {
+      source  = "hashicorp/local"
+      version = "~&gt; 2.9"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~&gt; 3.9"
+    }
+  }
+}
+
+locals {
+  output_dir = "${path.module}/output"
+
+  # キーがファイル名（.txt を除く）、値があいさつ文
+  greetings = {
+    hello   = var.greeting
+    goodbye = "Goodbye"
+  }
+}
+
+module "greeting" {
+  source   = "./modules/greeting"
+  for_each = local.greetings
+
+  greeting   = each.value
+  owner      = var.owner
+  pet_length = var.pet_length
+  shout      = var.shout
+  output_dir = local.output_dir
+  file_name  = "${each.key}.txt"
+}
+
+resource "local_sensitive_file" "token" {
+  filename = "${local.output_dir}/token.txt"
+  content  = var.api_token
+}</code></pre>
+</div>
+  </div>
+</details>
+<p>新しいディレクトリなので、<code>init</code> から始めます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform init</span><span class="terminal__line">Initializing the backend...</span><span class="terminal__line"></span><span class="terminal__line">Initializing modules...</span><span class="terminal__line">- greeting in modules/greeting</span><span class="terminal__line"></span><span class="terminal__line">Initializing provider plugins...</span><span class="terminal__line">- Finding hashicorp/random versions matching "&gt;= 3.0.0, ~&gt; 3.9"...</span><span class="terminal__line">- Finding hashicorp/local versions matching "&gt;= 2.0.0, ~&gt; 2.9"...</span><span class="terminal__line">- Installing hashicorp/random v3.9.1...</span><span class="terminal__line">- Installed hashicorp/random v3.9.1 (signed by HashiCorp)</span><span class="terminal__line">- Installing hashicorp/local v2.9.1...</span><span class="terminal__line">- Installed hashicorp/local v2.9.1 (signed by HashiCorp)</span><span class="terminal__line"></span><span class="terminal__line">Terraform has created a lock file .terraform.lock.hcl to record the provider</span><span class="terminal__line">selections it made above. Include this file in your version control repository</span><span class="terminal__line">so that Terraform can guarantee to make the same selections by default when</span><span class="terminal__line">you run "terraform init" in the future.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has been successfully initialized!</span><span class="terminal__line"></span><span class="terminal__line">You may now begin working with Terraform. Try running "terraform plan" to see</span><span class="terminal__line">any changes that are required for your infrastructure. All Terraform commands</span><span class="terminal__line">should now work.</span><span class="terminal__line"></span><span class="terminal__line">If you ever set or change modules or backend configuration for Terraform,</span><span class="terminal__line">rerun this command to reinitialize your working directory. If you forget, other</span><span class="terminal__line">commands will detect it and remind you to do so if necessary.</span></pre>
+</div>
+<p>
+  先頭に <code>Initializing the backend...</code> と出ています。<strong>バックエンド</strong>は、Terraform が state をどこに保存するかを決める仕組みです。まだ何も設定していないので、既定の <code>local</code> バックエンド（作業ディレクトリの <code>terraform.tfstate</code> に保存する）が使われます。
+  続けて <code>apply</code> します（実行計画の部分は「…」で省略しています）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line">…</span><span class="terminal__line">Plan: 5 to add, 0 to change, 0 to destroy.</span><span class="terminal__line">…</span><span class="terminal__line">local_sensitive_file.token: Creating...</span><span class="terminal__line">module.greeting["hello"].random_pet.greeter: Creating...</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter: Creating...</span><span class="terminal__line">local_sensitive_file.token: Creation complete after 0s [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">module.greeting["hello"].random_pet.greeter: Creation complete after 0s [id=enough-phoenix]</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter: Creation complete after 0s [id=easy-stallion]</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello: Creating...</span><span class="terminal__line">module.greeting["hello"].local_file.hello: Creating...</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello: Creation complete after 0s [id=de62212ef66d2c8f68df308da8eff203f2fb1e3c]</span><span class="terminal__line">module.greeting["hello"].local_file.hello: Creation complete after 0s [id=f21752b823d729d8217fa1b57ae386e60e37c24a]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 5 added, 0 changed, 0 destroyed.</span><span class="terminal__line"></span><span class="terminal__line">Outputs:</span><span class="terminal__line"></span><span class="terminal__line">hello_path = {</span><span class="terminal__line">  "goodbye" = "./output/goodbye.txt"</span><span class="terminal__line">  "hello" = "./output/hello.txt"</span><span class="terminal__line">}</span><span class="terminal__line">pet_name = {</span><span class="terminal__line">  "goodbye" = "easy-stallion"</span><span class="terminal__line">  "hello" = "enough-phoenix"</span><span class="terminal__line">}</span><span class="terminal__line">token = &lt;sensitive&gt;</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -A</span><span class="terminal__line">.gitignore</span><span class="terminal__line">.terraform</span><span class="terminal__line">.terraform.lock.hcl</span><span class="terminal__line">main.tf</span><span class="terminal__line">modules</span><span class="terminal__line">output</span><span class="terminal__line">outputs.tf</span><span class="terminal__line">terraform.tfstate</span><span class="terminal__line">terraform.tfvars</span><span class="terminal__line">variables.tf</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform state list</span><span class="terminal__line">local_sensitive_file.token</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter</span><span class="terminal__line">module.greeting["hello"].local_file.hello</span><span class="terminal__line">module.greeting["hello"].random_pet.greeter</span></pre>
+</div>
+<div class="callout callout--note">
+  <span class="callout__icon" aria-hidden="true">ℹ️</span>
+  <div class="callout__body">
+    <p class="callout__title">実行ごとに変わる値</p>
+    <p><code>enough-phoenix</code> と <code>easy-stallion</code> は執筆時の出力例です。<code>random_pet</code> の名前は作成のたびにランダムで決まるので、みなさんの環境では別の名前になります。<code>id</code> のハッシュ値、この後に出てくるロック ID・<code>lineage</code>・ETag・バージョン ID・日時・ファイルサイズも、実行ごとに変わります。自分の環境の値に読み替えてください。</p>
+  </div>
+</div>
+<p>いまの state は、作業ディレクトリ直下の <code>terraform.tfstate</code> にあります。この項目では、これをリモートのバックエンドに移します。</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>Apply complete! Resources: 5 added, 0 changed, 0 destroyed.</code> が表示されることを確認してください。<code>ls -A</code> の結果に <code>terraform.tfstate</code> があり、<code>terraform state list</code> に 5 つのアドレスが並びます。</p>
+</div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">SeaweedFS を起動してバケットを用意する</h3>
+        </div>
+        <div class="step__body">
+
+
+<p>
+  state の置き場所になる S3 互換ストレージ <a href="https://github.com/seaweedfs/seaweedfs">SeaweedFS</a> を、Docker で起動します。SeaweedFS の <code>weed mini</code> は、1 つのコンテナで S3 互換の API を提供するモードです。
+  オプションの変更に備えて、イメージのタグは <code>4.48</code> に固定します。
+</p>
+<p>まず、SeaweedFS の S3 API が使うポート 8333 の空きを確かめます。何も表示されなければ空いています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> lsof -nP -iTCP:8333 -sTCP:LISTEN</span></pre>
+</div>
+<p>
+  次に、この端末に認証情報を設定します。値は SeaweedFS 用に決めた<strong>ダミーの鍵</strong>です。本物の AWS の鍵は使わないでください。
+  この後のコマンドはすべて、この設定をした端末で実行します（ステップ 5 で開く 2 つ目の端末でも、同じ設定をします）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> unset AWS_PROFILE AWS_SESSION_TOKEN</span><span class="terminal__line"><span class="terminal__prompt">$</span> export AWS_ACCESS_KEY_ID=tf04access AWS_SECRET_ACCESS_KEY=tf04secret123456 AWS_EC2_METADATA_DISABLED=true</span></pre>
+</div>
+<ul>
+  <li><code>AWS_ACCESS_KEY_ID</code> / <code>AWS_SECRET_ACCESS_KEY</code>: Terraform の <code>s3</code> バックエンドが使う鍵です。同じ値を SeaweedFS の起動時にも渡し、管理者の鍵として登録させます</li>
+  <li><code>unset AWS_PROFILE AWS_SESSION_TOKEN</code>: <code>AWS_PROFILE</code> で <code>~/.aws</code> の名前付きプロファイルを使う設定を外します。<code>AWS_SESSION_TOKEN</code> は、一時的な認証情報のトークンが残っていれば外します</li>
+  <li><code>AWS_EC2_METADATA_DISABLED=true</code>: AWS の SDK が EC2 のインスタンスメタデータサービス（IMDS）へ認証情報を取りにいくのを止めます。backend の <code>skip_metadata_api_check</code> と同じ目的の保険です</li>
+</ul>
+<div class="callout callout--warning">
+  <span class="callout__icon" aria-hidden="true">⚠️</span>
+  <div class="callout__body">
+    <p class="callout__title">本物の AWS へ接続しないために</p>
+    <p>
+      この項目の <code>backend "s3"</code> には、<code>skip_credentials_validation</code> と <code>skip_requesting_account_id</code> を書きます。どちらも、AWS の STS（認証の窓口）へ問い合わせないための設定です。
+      これらを外すと、Terraform は手元の SeaweedFS ではなく<strong>本物の AWS（STS）へ問い合わせにいきます</strong>。ダミーの鍵なので <code>403 InvalidClientTokenId</code> などで失敗しますが、アクセスキー ID と署名付きのリクエストが本物の AWS に届きます。
+    </p>
+    <p>
+      教材のとおりに書けば、接続先は手元の SeaweedFS だけです。本物の AWS の認証情報を環境変数や <code>~/.aws</code> に設定している人は、上の <code>unset</code> と <code>export</code> を省かないでください。
+    </p>
+  </div>
+</div>
+<p>SeaweedFS を起動します。最後の <code>-bucket=tfstate</code> で、起動と同時にバケット <code>tfstate</code> も作られます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> docker run -d --name tf04-seaweed -p 8333:8333 \</span><span class="terminal__line">    -e AWS_ACCESS_KEY_ID=tf04access -e AWS_SECRET_ACCESS_KEY=tf04secret123456 \</span><span class="terminal__line">    chrislusf/seaweedfs:4.48 mini -dir=/data -bucket=tfstate</span><span class="terminal__line">3816641e46ba3adfbcdc2a5598b03ed3efe59bdaebea7bc2054df32ec19a2266</span><span class="terminal__line"><span class="terminal__prompt">$</span> docker ps --filter name=tf04 --format "{{.Names}} {{.Image}} {{.Ports}} {{.Status}}"</span><span class="terminal__line">tf04-seaweed chrislusf/seaweedfs:4.48 7333/tcp, 8080/tcp, 8888/tcp, 9333/tcp, 18080/tcp, 18888/tcp, 19333/tcp, 0.0.0.0:8333-&gt;8333/tcp, [::]:8333-&gt;8333/tcp Up 5 seconds</span></pre>
+</div>
+<p>
+  1 行目の長い文字列はコンテナの ID で、実行ごとに変わります。イメージが手元に無い場合は、先に Docker Hub からイメージ（数百 MB）がダウンロードされ、進行状況が表示されます（表示の形は Docker のバージョンによって異なります）。
+  起動に数秒かかるので、少し待ってからログを確かめます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> docker logs tf04-seaweed 2&gt;&amp;1 | grep -i "bucket" | head -5</span><span class="terminal__line">I1004 04:53:43.320480 s3.go:312 S3 read filer buckets dir: /buckets</span><span class="terminal__line">I1004 04:53:43.326936 s3api_bucket_owner_index.go:277 bucket owner index ready</span><span class="terminal__line">I1004 04:53:44.030635 mini.go:2058 created bucket tfstate</span></pre>
+</div>
+<p>
+  <code>created bucket tfstate</code> が出ていれば、バケットができています。S3 の API を直接呼んで確かめます。
+  aws CLI などの S3 クライアントは使わず、curl の <code>--aws-sigv4</code> で署名付きのリクエストを送ります。<code>--user</code> に渡しているのは、上で設定したダミーの鍵です。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8333/status</span><span class="terminal__line">200</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "tf04access:tf04secret123456" "http://localhost:8333/"</span><span class="terminal__line">&lt;?xml version="1.0" encoding="UTF-8"?&gt;</span><span class="terminal__line">&lt;ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"&gt;&lt;Owner&gt;&lt;ID&gt;admin-tf04acce&lt;/ID&gt;&lt;DisplayName&gt;admin-tf04acce&lt;/DisplayName&gt;&lt;/Owner&gt;&lt;Buckets&gt;&lt;Bucket&gt;&lt;Name&gt;tfstate&lt;/Name&gt;&lt;CreationDate&gt;2026-10-04T04:53:44Z&lt;/CreationDate&gt;&lt;/Bucket&gt;&lt;/Buckets&gt;&lt;/ListAllMyBucketsResult&gt;</span></pre>
+</div>
+<p>
+  バケット一覧に <code>tfstate</code> があります。続けて、バケットの<strong>バージョニング</strong>を有効にします。バージョニングを有効にすると、オブジェクトを上書きしても古い版が残ります。
+  state を誤って壊したときに前の版へ戻せるので、<code>s3</code> バックエンドの公式ドキュメントもバージョニングを有効にすることを勧めています。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -sS -i -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user "tf04access:tf04secret123456" \</span><span class="terminal__line">    -H "Content-Type: application/xml" \</span><span class="terminal__line">    --data "&lt;VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"&gt;&lt;Status&gt;Enabled&lt;/Status&gt;&lt;/VersioningConfiguration&gt;" \</span><span class="terminal__line">    "http://localhost:8333/tfstate?versioning" | head -5</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">Accept-Ranges: bytes</span><span class="terminal__line">Content-Length: 0</span><span class="terminal__line">Server: SeaweedFS 30GB 4.48</span><span class="terminal__line">Vary: Origin</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "tf04access:tf04secret123456" "http://localhost:8333/tfstate?versioning"</span><span class="terminal__line">&lt;VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"&gt;&lt;Status&gt;Enabled&lt;/Status&gt;&lt;/VersioningConfiguration&gt;</span></pre>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>docker ps</code> に <code>tf04-seaweed</code> が <code>Up</code> で表示されることを確認してください。バケット一覧に <code>&lt;Name&gt;tfstate&lt;/Name&gt;</code> が含まれ、バージョニングの確認結果が <code>&lt;Status&gt;Enabled&lt;/Status&gt;</code> になります。</p>
+</div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>backend "s3"</code> を書いて state を移す</h3>
+        </div>
+        <div class="step__body">
+
+
+<p><code>main.tf</code> の <code>terraform</code> ブロックに、<code>backend "s3"</code> ブロックを追加します。あわせて <code>required_version</code> を <code>&gt;= 1.10</code> に上げます。ロックの設定 <code>use_lockfile</code> が Terraform 1.10 で追加された機能だからです（1.11 で正式版になり、従来の DynamoDB によるロックは非推奨になりました）。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> terraform {</span><span class="diff-line diff-line--remove">-  required_version = "&gt;= 1.9"</span><span class="diff-line diff-line--add">+  required_version = "&gt;= 1.10"</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+  backend "s3" {</span><span class="diff-line diff-line--add">+    bucket       = "tfstate"</span><span class="diff-line diff-line--add">+    key          = "handson/terraform.tfstate"</span><span class="diff-line diff-line--add">+    region       = "us-east-1"</span><span class="diff-line diff-line--add">+    use_lockfile = true</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+    endpoints = {</span><span class="diff-line diff-line--add">+      s3 = "http://localhost:8333"</span><span class="diff-line diff-line--add">+    }</span><span class="diff-line diff-line--add">+    use_path_style              = true</span><span class="diff-line diff-line--add">+    skip_credentials_validation = true</span><span class="diff-line diff-line--add">+    skip_requesting_account_id  = true</span><span class="diff-line diff-line--add">+    skip_metadata_api_check     = true</span><span class="diff-line diff-line--add">+    skip_region_validation      = true</span><span class="diff-line diff-line--add">+  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">   required_providers {</span><span class="diff-line">     local = {</span></pre>
+</div>
+<p>
+  前半の 4 つ（<code>bucket</code>・<code>key</code>・<code>region</code>・<code>use_lockfile</code>）は、本物の S3 に置く場合も書く設定です。<code>key</code> はバケットの中の state のパスで、ここでは <code>handson/terraform.tfstate</code> にしました。
+  後半の <code>endpoints</code> から下は、宛先を手元の SeaweedFS に向けるための設定です（<a href="#overview">概要</a>の表を参照）。認証情報は、ステップ 2 で設定した環境変数から読まれます。backend ブロックには書きません。
+</p>
+<p>backend を書いたら、<code>init</code> する前に <code>plan</code> を実行してみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line"></span><span class="terminal__line">Error: Backend initialization required, please run "terraform init"</span><span class="terminal__line"></span><span class="terminal__line">Reason: Initial configuration of the requested backend "s3"</span><span class="terminal__line"></span><span class="terminal__line">The "backend" is the interface that Terraform uses to store state,</span><span class="terminal__line">perform operations, etc. If this message is showing up, it means that the</span><span class="terminal__line">Terraform configuration you're using is using a custom configuration for</span><span class="terminal__line">the Terraform backend.</span><span class="terminal__line"></span><span class="terminal__line">Changes to backend configurations require reinitialization. This allows</span><span class="terminal__line">Terraform to set up the new configuration, copy existing state, etc. Please</span><span class="terminal__line">run</span><span class="terminal__line">"terraform init" with either the "-reconfigure" or "-migrate-state" flags to</span><span class="terminal__line">use the current configuration.</span><span class="terminal__line"></span><span class="terminal__line">If the change reason above is incorrect, please verify your configuration</span><span class="terminal__line">hasn't changed and try again. At this point, no changes to your existing</span><span class="terminal__line">configuration or state have been made.</span></pre>
+</div>
+<p>
+  backend を追加・変更したら、<code>init</code> し直す必要があります。エラー文が勧めるフラグは 2 つあります。<code>-migrate-state</code> は、いまの state を新しいバックエンドへコピーします。<code>-reconfigure</code> は、state を移さずに設定だけを切り替えます。
+  ローカルにある state をリモートへ移したいので、<code>-migrate-state</code> を付けます。確認を求められたら <code>yes</code> と入力します。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform init -migrate-state</span><span class="terminal__line">Initializing the backend...</span><span class="terminal__line">Do you want to copy existing state to the new backend?</span><span class="terminal__line">  Pre-existing state was found while migrating the previous "local" backend to the</span><span class="terminal__line">  newly configured "s3" backend. No existing state was found in the newly</span><span class="terminal__line">  configured "s3" backend. Do you want to copy this state to the new "s3"</span><span class="terminal__line">  backend? Enter "yes" to copy and "no" to start with an empty state.</span><span class="terminal__line"></span><span class="terminal__line">  Enter a value: yes</span><span class="terminal__line"></span><span class="terminal__line">Successfully configured the backend "s3"! Terraform will automatically</span><span class="terminal__line">use this backend unless the backend configuration changes.</span><span class="terminal__line"></span><span class="terminal__line">Initializing modules...</span><span class="terminal__line"></span><span class="terminal__line">Initializing provider plugins...</span><span class="terminal__line">- Reusing previous version of hashicorp/random from the dependency lock file</span><span class="terminal__line">- Reusing previous version of hashicorp/local from the dependency lock file</span><span class="terminal__line">- Using previously-installed hashicorp/random v3.9.1</span><span class="terminal__line">- Using previously-installed hashicorp/local v2.9.1</span><span class="terminal__line"></span><span class="terminal__line">Terraform has been successfully initialized!</span><span class="terminal__line"></span><span class="terminal__line">You may now begin working with Terraform. Try running "terraform plan" to see</span><span class="terminal__line">any changes that are required for your infrastructure. All Terraform commands</span><span class="terminal__line">should now work.</span><span class="terminal__line"></span><span class="terminal__line">If you ever set or change modules or backend configuration for Terraform,</span><span class="terminal__line">rerun this command to reinitialize your working directory. If you forget, other</span><span class="terminal__line">commands will detect it and remind you to do so if necessary.</span></pre>
+</div>
+<p>
+  「local バックエンドに既存の state があり、s3 バックエンドにはまだ無い。コピーするか」と聞かれ、<code>yes</code> でコピーされました。<code>Enter a value:</code> の後の <code>yes</code> は、自分で入力した文字です。
+  手元のファイルを見てみます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -la terraform.tfstate terraform.tfstate.backup</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff     0 10月  4 13:54 terraform.tfstate</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff  7056 10月  4 13:54 terraform.tfstate.backup</span></pre>
+</div>
+<p>
+  <code>terraform.tfstate</code> は 0 バイトになり、元の中身は <code>terraform.tfstate.backup</code> に残っています。以降、Terraform はこのローカルのファイルを使いません。
+  バケットの中を確かめます。<code>?list-type=2</code> はオブジェクトの一覧を返す API です。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "tf04access:tf04secret123456" "http://localhost:8333/tfstate?list-type=2"</span><span class="terminal__line">&lt;?xml version="1.0" encoding="UTF-8"?&gt;</span><span class="terminal__line">&lt;ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"&gt;&lt;Name&gt;tfstate&lt;/Name&gt;&lt;Prefix&gt;&lt;/Prefix&gt;&lt;MaxKeys&gt;1000&lt;/MaxKeys&gt;&lt;IsTruncated&gt;false&lt;/IsTruncated&gt;&lt;Contents&gt;&lt;Key&gt;handson/terraform.tfstate&lt;/Key&gt;&lt;ETag&gt;&amp;#34;ba9243fc73abbce90d3e460337b5e177&amp;#34;&lt;/ETag&gt;&lt;Size&gt;7056&lt;/Size&gt;&lt;StorageClass&gt;STANDARD&lt;/StorageClass&gt;&lt;LastModified&gt;2026-10-04T04:54:09Z&lt;/LastModified&gt;&lt;/Contents&gt;&lt;KeyCount&gt;1&lt;/KeyCount&gt;&lt;/ListBucketResult&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "tf04access:tf04secret123456" "http://localhost:8333/tfstate/handson/terraform.tfstate" | head -12</span><span class="terminal__line">{</span><span class="terminal__line">  "version": 4,</span><span class="terminal__line">  "terraform_version": "1.16.2",</span><span class="terminal__line">  "serial": 1,</span><span class="terminal__line">  "lineage": "79f714f8-e0c6-2e03-b5a4-24f3c4f8820d",</span><span class="terminal__line">  "outputs": {</span><span class="terminal__line">    "hello_path": {</span><span class="terminal__line">      "value": {</span><span class="terminal__line">        "goodbye": "./output/goodbye.txt",</span><span class="terminal__line">        "hello": "./output/hello.txt"</span><span class="terminal__line">      },</span><span class="terminal__line">      "type": [</span></pre>
+</div>
+<p>
+  <code>key</code> に書いたパス <code>handson/terraform.tfstate</code> で、数千バイトのオブジェクトができました（サイズはペットの名前の長さで数バイト変わります）。中身は、01 から見てきた state の JSON です。
+  なお、執筆時の環境では、移した後の <code>serial</code> は 1 で、<code>lineage</code> もローカルの state とは別の値になっていました。管理しているリソースはそのまま引き継がれています（次のステップで確かめます）。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>init -migrate-state</code> が <code>Successfully configured the backend "s3"!</code> で終わることを確認してください。手元の <code>terraform.tfstate</code> は 0 バイトになり、バケットの一覧に <code>&lt;Key&gt;handson/terraform.tfstate&lt;/Key&gt;</code> が表示されます。</p>
+</div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">リモートの state で作業する</h3>
+        </div>
+        <div class="step__body">
+
+
+<p>state をリモートに移しても、コマンドの使い方は変わりません。まず <code>plan</code> します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter: Refreshing state... [id=easy-stallion]</span><span class="terminal__line">module.greeting["hello"].random_pet.greeter: Refreshing state... [id=enough-phoenix]</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello: Refreshing state... [id=de62212ef66d2c8f68df308da8eff203f2fb1e3c]</span><span class="terminal__line">module.greeting["hello"].local_file.hello: Refreshing state... [id=f21752b823d729d8217fa1b57ae386e60e37c24a]</span><span class="terminal__line"></span><span class="terminal__line">No changes. Your infrastructure matches the configuration.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has compared your real infrastructure against your configuration</span><span class="terminal__line">and found no differences, so no changes are needed.</span></pre>
+</div>
+<p>
+  <code>No changes.</code> です。リモートの state に 5 つのリソースが入っていて、手元の実物と一致しています。
+  次に、state が書き換わる変更を 1 つ加えます。02 で作った変数 <code>shout</code> を、コマンドラインで <code>-var shout=true</code> と指定して <code>apply</code> します（ハッシュ値の行は「…」で省略しています）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve -var shout=true</span><span class="terminal__line">…</span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">-/+ destroy and then create replacement</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting["goodbye"].local_file.hello must be replaced</span><span class="terminal__line">-/+ resource "local_file" "hello" {</span><span class="terminal__line">      ~ content              = &lt;&lt;-EOT # forces replacement</span><span class="terminal__line">          - Goodbye, easy-stallion! (by Alice)</span><span class="terminal__line">          + GOODBYE, easy-stallion! (by Alice)</span><span class="terminal__line">        EOT</span><span class="terminal__line">      …</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting["hello"].local_file.hello must be replaced</span><span class="terminal__line">-/+ resource "local_file" "hello" {</span><span class="terminal__line">      ~ content              = &lt;&lt;-EOT # forces replacement</span><span class="terminal__line">          - Hello, enough-phoenix! (by Alice)</span><span class="terminal__line">          + HELLO, enough-phoenix! (by Alice)</span><span class="terminal__line">        EOT</span><span class="terminal__line">      …</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 2 to add, 0 to change, 2 to destroy.</span><span class="terminal__line">…</span><span class="terminal__line">Apply complete! Resources: 2 added, 0 changed, 2 destroyed.</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>-var</code> での指定は、そのコマンド 1 回だけに効きます。<code>terraform.tfvars</code> には書いていないので、次に <code>-var</code> なしで <code>plan</code> すると「<code>shout</code> を <code>false</code> に戻す」差分が出ます。
+  ステップ 5 では、この差分をロックを試すための「適用待ちの変更」として使います。
+</p>
+<p>バケットの中で、state の版がどう増えたかを見ます。<code>?versions</code> は全ての版を返す API です。出力が長いので、<code>grep</code> でキー・バージョン ID・最新かどうかだけを取り出します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "tf04access:tf04secret123456" "http://localhost:8333/tfstate?versions" | grep -o "&lt;Key&gt;[^&lt;]*&lt;/Key&gt;&lt;VersionId&gt;[^&lt;]*&lt;/VersionId&gt;&lt;IsLatest&gt;[a-z]*&lt;/IsLatest&gt;"</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate&lt;/Key&gt;&lt;VersionId&gt;6724c5718625d27ed74ddc589c4be537&lt;/VersionId&gt;&lt;IsLatest&gt;true&lt;/IsLatest&gt;</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate&lt;/Key&gt;&lt;VersionId&gt;6724c574135f8c28742474a305306036&lt;/VersionId&gt;&lt;IsLatest&gt;false&lt;/IsLatest&gt;</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate.tflock&lt;/Key&gt;&lt;VersionId&gt;6724c57185adf133479a8f6b45a8b0b4&lt;/VersionId&gt;&lt;IsLatest&gt;true&lt;/IsLatest&gt;</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate.tflock&lt;/Key&gt;&lt;VersionId&gt;6724c57193f0d8b6d0e50e7672b26d7f&lt;/VersionId&gt;&lt;IsLatest&gt;false&lt;/IsLatest&gt;</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate.tflock&lt;/Key&gt;&lt;VersionId&gt;6724c571992560a47632e49de3ca98e4&lt;/VersionId&gt;&lt;IsLatest&gt;false&lt;/IsLatest&gt;</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate.tflock&lt;/Key&gt;&lt;VersionId&gt;6724c571a8cd7500b658c64f4a8a1e87&lt;/VersionId&gt;&lt;IsLatest&gt;false&lt;/IsLatest&gt;</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate.tflock&lt;/Key&gt;&lt;VersionId&gt;6724c57412c0e8feec486ba2726893f8&lt;/VersionId&gt;&lt;IsLatest&gt;false&lt;/IsLatest&gt;</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate.tflock&lt;/Key&gt;&lt;VersionId&gt;6724c574209a7d49c07f0ca9c7a9837a&lt;/VersionId&gt;&lt;IsLatest&gt;false&lt;/IsLatest&gt;</span></pre>
+</div>
+<p>
+  <code>handson/terraform.tfstate</code> の版が 2 つあります。<code>IsLatest</code> が <code>true</code> の版が今回の <code>apply</code> 後の state、<code>false</code> の版がステップ 3 で移した state です。
+  <code>handson/terraform.tfstate.tflock</code> は、Terraform が操作のたびに作って消すロック用のファイルです。バージョニングが有効なので、作成と削除の記録が版として残っています（ロックはステップ 5 で詳しく見ます）。
+</p>
+<p>リモートの state の中身は、<code>terraform state pull</code> で標準出力に取り出せます。curl を使わなくても、Terraform のコマンドだけで確かめられます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform state pull | head -8</span><span class="terminal__line">{</span><span class="terminal__line">  "version": 4,</span><span class="terminal__line">  "terraform_version": "1.16.2",</span><span class="terminal__line">  "serial": 2,</span><span class="terminal__line">  "lineage": "79f714f8-e0c6-2e03-b5a4-24f3c4f8820d",</span><span class="terminal__line">  "outputs": {</span><span class="terminal__line">    "hello_path": {</span><span class="terminal__line">      "value": {</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">HELLO, enough-phoenix! (by Alice)</span><span class="terminal__line"><span class="terminal__prompt">$</span> wc -c terraform.tfstate</span><span class="terminal__line">       0 terraform.tfstate</span></pre>
+</div>
+<p><code>serial</code> が 1 から 2 に増えました。01 で見たとおり、<code>serial</code> は state が書き換わるたびに増える番号です。手元の <code>terraform.tfstate</code> は 0 バイトのままで、state の更新はリモートにだけ書かれています。</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>plan</code> が <code>No changes.</code> になり、<code>apply</code> が <code>Resources: 2 added, 0 changed, 2 destroyed.</code> で終わることを確認してください。<code>terraform state pull</code> の <code>serial</code> は 2 で、<code>output/hello.txt</code> は大文字の <code>HELLO</code> になっています。</p>
+</div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">2 つの端末でロックを確かめる</h3>
+        </div>
+        <div class="step__body">
+
+
+<p>
+  state を共有すると、2 人が同時に <code>apply</code> して state を壊す危険があります。これを防ぐのが<strong>ロック</strong>です。
+  ステップ 3 で書いた <code>use_lockfile = true</code> により、Terraform は操作の間、state の隣に <code>.tflock</code> というファイルを置きます。ファイルが既にあれば、別の操作はロックを取れずに止まります。
+</p>
+<p>
+  ここからは端末を 2 つ使います。いままでの端末を<strong>端末 A</strong>とします。もう 1 つ端末を開いて<strong>端末 B</strong>とし、同じ <code>04-remote-state</code> ディレクトリに移動して、ステップ 2 と同じ環境変数を設定します。端末 A で <code>pwd</code> を実行し、表示されたパスへ端末 B で <code>cd</code> します。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd （端末 A の pwd の結果）</span><span class="terminal__line"><span class="terminal__prompt">$</span> unset AWS_PROFILE AWS_SESSION_TOKEN</span><span class="terminal__line"><span class="terminal__prompt">$</span> export AWS_ACCESS_KEY_ID=tf04access AWS_SECRET_ACCESS_KEY=tf04secret123456 AWS_EC2_METADATA_DISABLED=true</span></pre>
+</div>
+<p>
+  端末 A で、<code>-var</code> を付けずに <code>apply</code> します。ステップ 4 で説明した「<code>shout</code> を <code>false</code> に戻す」実行計画が表示され、確認のプロンプト <code>Enter a value:</code> で止まります。
+  <strong>ここでは何も入力せず、そのままにしておきます。</strong>入力を待っている間、端末 A がロックを持ち続けます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 A</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply</span><span class="terminal__line">…</span><span class="terminal__line">Do you want to perform these actions?</span><span class="terminal__line">  Terraform will perform the actions described above.</span><span class="terminal__line">  Only 'yes' will be accepted to approve.</span><span class="terminal__line"></span><span class="terminal__line">  Enter a value:</span></pre>
+</div>
+<p>端末 B で、バケットの中を確かめます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "tf04access:tf04secret123456" "http://localhost:8333/tfstate?list-type=2" | grep -o "&lt;Key&gt;[^&lt;]*&lt;/Key&gt;"</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate&lt;/Key&gt;</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate.tflock&lt;/Key&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "tf04access:tf04secret123456" "http://localhost:8333/tfstate/handson/terraform.tfstate.tflock"</span><span class="terminal__line">{"ID":"c37aa59a-2a94-80b7-30f3-ef89f2275c8c","Operation":"OperationTypeApply","Info":"","Who":"yourname@your-host","Version":"1.16.2","Created":"2026-10-04T04:54:43.242845Z","Path":"tfstate/handson/terraform.tfstate"}</span></pre>
+</div>
+<p>
+  <code>handson/terraform.tfstate.tflock</code> ができています。中身は JSON で、ロックの ID（<code>ID</code>）、操作の種類（<code>Operation</code>）、誰がロックしたか（<code>Who</code>）などが入っています。<code>Who</code> には、実際には <code>ユーザー名@ホスト名</code> が入ります。
+  この状態で、端末 B から <code>plan</code> を実行します。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line"></span><span class="terminal__line">Error: Error acquiring the state lock</span><span class="terminal__line"></span><span class="terminal__line">Error message: operation error S3: PutObject, https response error</span><span class="terminal__line">StatusCode: 412, RequestID: 18DB3A972A27AFD37F763839, HostID: , api error</span><span class="terminal__line">PreconditionFailed: At least one of the pre-conditions you specified did not</span><span class="terminal__line">hold</span><span class="terminal__line">Lock Info:</span><span class="terminal__line">  ID:        c37aa59a-2a94-80b7-30f3-ef89f2275c8c</span><span class="terminal__line">  Path:      tfstate/handson/terraform.tfstate</span><span class="terminal__line">  Operation: OperationTypeApply</span><span class="terminal__line">  Who:       yourname@your-host</span><span class="terminal__line">  Version:   1.16.2</span><span class="terminal__line">  Created:   2026-10-04 04:54:43.242845 +0000 UTC</span><span class="terminal__line">  Info:</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line">Terraform acquires a state lock to protect the state from being written</span><span class="terminal__line">by multiple users at the same time. Please resolve the issue above and try</span><span class="terminal__line">again. For most commands, you can disable locking with the "-lock=false"</span><span class="terminal__line">flag, but this is not recommended.</span></pre>
+</div>
+<p>
+  <code>Error acquiring the state lock</code>（state のロックを取得できない）で止まりました。<code>StatusCode: 412</code> と <code>PreconditionFailed</code> は、「ファイルがまだ無いときだけ書き込む」という条件付きの書き込みが失敗したことを表します。<code>.tflock</code> が既にあるためです。
+  <code>Lock Info</code> には、<code>.tflock</code> の中身（誰が、いつ、何の操作でロックしたか）が表示されます。端末 B で <code>terraform apply</code> を実行しても、同じエラーで止まります。
+</p>
+<p><code>-lock-timeout</code> を付けると、ロックが外れるのを指定した時間だけ待ちます。5 秒待たせてみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -lock-timeout=5s</span><span class="terminal__line">Acquiring state lock. This may take a few moments...</span><span class="terminal__line"></span><span class="terminal__line">Error: Error acquiring the state lock</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>Acquiring state lock. This may take a few moments...</code> と表示され、約 5 秒待ってから同じエラーになりました。相手の操作がすぐ終わる見込みなら、<code>-lock-timeout</code> で待つのが安全です。
+</p>
+<p>
+  ロックを持ったまま操作が異常終了すると、<code>.tflock</code> が残り、誰も作業できなくなります。そのときに使うのが <code>terraform force-unlock</code> です。引数には、エラーの <code>Lock Info</code> にある <code>ID</code> を渡します。
+  ここでは練習として、端末 A がロックを持っている状態で外してみます（<code>-force</code> は確認のプロンプトを省くフラグです）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform force-unlock -force c37aa59a-2a94-80b7-30f3-ef89f2275c8c</span><span class="terminal__line">Terraform state has been successfully unlocked!</span><span class="terminal__line"></span><span class="terminal__line">The state has been unlocked, and Terraform commands should now be able to</span><span class="terminal__line">obtain a new lock on the remote state.</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "tf04access:tf04secret123456" "http://localhost:8333/tfstate?list-type=2" | grep -o "&lt;Key&gt;[^&lt;]*&lt;/Key&gt;"</span><span class="terminal__line">&lt;Key&gt;handson/terraform.tfstate&lt;/Key&gt;</span></pre>
+</div>
+<p>
+  <code>.tflock</code> が消えました。端末 A に戻り、プロンプトに <code>no</code> と入力して <code>apply</code> を取り消します。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 A</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">  Enter a value: no</span><span class="terminal__line"></span><span class="terminal__line">Apply cancelled.</span><span class="terminal__line"></span><span class="terminal__line">Error: Error releasing the state lock</span><span class="terminal__line"></span><span class="terminal__line">Error message: unable to retrieve file from S3 bucket 'tfstate' with key</span><span class="terminal__line">'handson/terraform.tfstate.tflock': operation error S3: GetObject, https</span><span class="terminal__line">response error StatusCode: 404, RequestID: 18DB3AAB0C3F35DD32CF7E15, HostID:</span><span class="terminal__line">, NoSuchKey: The specified key does not exist.</span><span class="terminal__line"></span><span class="terminal__line">Terraform acquires a lock when accessing your state to prevent others</span><span class="terminal__line">running Terraform to potentially modify the state at the same time. An</span><span class="terminal__line">error occurred while releasing this lock. This could mean that the lock</span><span class="terminal__line">did or did not release properly. If the lock didn't release properly,</span><span class="terminal__line">Terraform may not be able to run future commands since it'll appear as if</span><span class="terminal__line">the lock is held.</span><span class="terminal__line"></span><span class="terminal__line">In this scenario, please call the "force-unlock" command to unlock the</span><span class="terminal__line">state manually. This is a very dangerous operation since if it is done</span><span class="terminal__line">erroneously it could result in two people modifying state at the same time.</span><span class="terminal__line">Only call this command if you're certain that the unlock above failed and</span><span class="terminal__line">that no one else is holding a lock.</span></pre>
+</div>
+<p>
+  <code>Apply cancelled.</code> の後に <code>Error releasing the state lock</code>（ロックを解放できない）が出ました。端末 A は終了時に自分のロックを消そうとしましたが、<code>force-unlock</code> で先に消されていたため、<code>.tflock</code> が見つからなかった（<code>404</code>・<code>NoSuchKey</code>）のです。今回は練習で外したので、想定どおりの結果です。
+</p>
+<div class="callout callout--danger">
+  <span class="callout__icon" aria-hidden="true">🚫</span>
+  <div class="callout__body">
+    <p class="callout__title"><code>force-unlock</code> は最後の手段</p>
+    <p>エラー文にもあるとおり、<code>force-unlock</code> は危険な操作です。ロックを持っている操作がまだ動いているときに外すと、2 人が同時に state を書き換えられる状態になります。<code>Lock Info</code> の <code>Who</code> と <code>Created</code> を見て、その操作が本当に終わっている（異常終了した）ことを確かめてから使ってください。<code>-lock=false</code> でロックを無効にすることも勧められません。</p>
+  </div>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p>端末 A が確認待ちの間、端末 B の <code>plan</code> が <code>Error: Error acquiring the state lock</code> で止まることを確認してください。<code>Lock Info</code> には端末 A のロックの ID が表示されます。<code>force-unlock</code> の後は、バケットから <code>.tflock</code> が消えます。</p>
+</div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">別の作業ディレクトリから state を共有する</h3>
+        </div>
+        <div class="step__body">
+
+
+<p>
+  チームの別のメンバーが、同じ設定を自分の PC に取得して作業する場面を再現します。端末 B で、<code>/tmp/tf04-member</code> に同じソースをコピーします。
+  state・<code>.terraform/</code>・<code>output/</code> はコピーしません。メンバーの手元にあるのは、リポジトリにコミットされたファイルだけ、という想定です（この教材のリポジトリと同じく、lock ファイルはまだ無い想定です）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir /tmp/tf04-member</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp main.tf outputs.tf variables.tf terraform.tfvars /tmp/tf04-member/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R modules /tmp/tf04-member/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd /tmp/tf04-member</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -A</span><span class="terminal__line">main.tf</span><span class="terminal__line">modules</span><span class="terminal__line">outputs.tf</span><span class="terminal__line">terraform.tfvars</span><span class="terminal__line">variables.tf</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B（/tmp/tf04-member）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform init</span><span class="terminal__line">Initializing the backend...</span><span class="terminal__line"></span><span class="terminal__line">Successfully configured the backend "s3"! Terraform will automatically</span><span class="terminal__line">use this backend unless the backend configuration changes.</span><span class="terminal__line"></span><span class="terminal__line">Initializing modules...</span><span class="terminal__line">- greeting in modules/greeting</span><span class="terminal__line"></span><span class="terminal__line">Initializing provider plugins...</span><span class="terminal__line">- Finding hashicorp/random versions matching "&gt;= 3.0.0, ~&gt; 3.9"...</span><span class="terminal__line">- Finding hashicorp/local versions matching "&gt;= 2.0.0, ~&gt; 2.9"...</span><span class="terminal__line">- Installing hashicorp/local v2.9.1...</span><span class="terminal__line">- Installed hashicorp/local v2.9.1 (signed by HashiCorp)</span><span class="terminal__line">- Installing hashicorp/random v3.9.1...</span><span class="terminal__line">- Installed hashicorp/random v3.9.1 (signed by HashiCorp)</span><span class="terminal__line"></span><span class="terminal__line">Terraform has created a lock file .terraform.lock.hcl to record the provider</span><span class="terminal__line">selections it made above. Include this file in your version control repository</span><span class="terminal__line">so that Terraform can guarantee to make the same selections by default when</span><span class="terminal__line">you run "terraform init" in the future.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has been successfully initialized!</span><span class="terminal__line"></span><span class="terminal__line">You may now begin working with Terraform. Try running "terraform plan" to see</span><span class="terminal__line">any changes that are required for your infrastructure. All Terraform commands</span><span class="terminal__line">should now work.</span><span class="terminal__line"></span><span class="terminal__line">If you ever set or change modules or backend configuration for Terraform,</span><span class="terminal__line">rerun this command to reinitialize your working directory. If you forget, other</span><span class="terminal__line">commands will detect it and remind you to do so if necessary.</span></pre>
+</div>
+<p>今度は移す state が手元に無いので、<code>-migrate-state</code> は不要です。<code>init</code> だけで s3 バックエンドに接続しました。state を見てみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B（/tmp/tf04-member）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform state list</span><span class="terminal__line">local_sensitive_file.token</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter</span><span class="terminal__line">module.greeting["hello"].local_file.hello</span><span class="terminal__line">module.greeting["hello"].random_pet.greeter</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform output</span><span class="terminal__line">hello_path = {</span><span class="terminal__line">  "goodbye" = "./output/goodbye.txt"</span><span class="terminal__line">  "hello" = "./output/hello.txt"</span><span class="terminal__line">}</span><span class="terminal__line">pet_name = {</span><span class="terminal__line">  "goodbye" = "easy-stallion"</span><span class="terminal__line">  "hello" = "enough-phoenix"</span><span class="terminal__line">}</span><span class="terminal__line">token = &lt;sensitive&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -A</span><span class="terminal__line">.terraform</span><span class="terminal__line">.terraform.lock.hcl</span><span class="terminal__line">main.tf</span><span class="terminal__line">modules</span><span class="terminal__line">outputs.tf</span><span class="terminal__line">terraform.tfvars</span><span class="terminal__line">variables.tf</span></pre>
+</div>
+<p>
+  手元に <code>terraform.tfstate</code> が無いのに、元のディレクトリと同じ 5 つのリソースとペットの名前が見えます。これがリモートステートによる共有です。
+  続けて <code>plan</code> してみます（前半は「…」で省略しています）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B（/tmp/tf04-member）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">…</span><span class="terminal__line">  # module.greeting["hello"].local_file.hello will be created</span><span class="terminal__line">  + resource "local_file" "hello" {</span><span class="terminal__line">      + content              = &lt;&lt;-EOT</span><span class="terminal__line">            Hello, enough-phoenix! (by Alice)</span><span class="terminal__line">        EOT</span><span class="terminal__line">      + content_base64sha256 = (known after apply)</span><span class="terminal__line">      + content_base64sha512 = (known after apply)</span><span class="terminal__line">      + content_md5          = (known after apply)</span><span class="terminal__line">      + content_sha1         = (known after apply)</span><span class="terminal__line">      + content_sha256       = (known after apply)</span><span class="terminal__line">      + content_sha512       = (known after apply)</span><span class="terminal__line">      + directory_permission = "0777"</span><span class="terminal__line">      + file_permission      = "0777"</span><span class="terminal__line">      + filename             = "./output/hello.txt"</span><span class="terminal__line">      + id                   = (known after apply)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 3 to add, 0 to change, 0 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">─────────────────────────────────────────────────────────────────────────────</span><span class="terminal__line"></span><span class="terminal__line">Note: You didn't use the -out option to save this plan, so Terraform can't</span><span class="terminal__line">guarantee to take exactly these actions if you run "terraform apply" now.</span></pre>
+</div>
+<p>
+  <code>Plan: 3 to add</code> になりました。作り直しの対象は 2 つの <code>local_file</code> と <code>local_sensitive_file</code> です。
+  state は共有されていますが、<code>local_file</code> が作るファイルは、最初に <code>apply</code> した人のディスク（<code>04-remote-state/output/</code>）にしかありません。メンバーのディレクトリには <code>output/</code> が無いので、Terraform は「ファイルが消えた」と判断して作り直そうとします。<code>random_pet</code> は state の中だけで完結するので差分が出ません。
+  あいさつ文が大文字ではなく <code>Hello,</code> になっているのは、メンバーが <code>-var</code> を付けずに実行したため、設定どおり <code>shout = false</code> で計画されたからです。
+</p>
+<p>
+  これは、この教材が手元のファイルを管理対象にしているための挙動です。実務で管理するのはクラウド上のサーバーやバケットなど、誰の PC から見ても同じ実物です。その場合、ファイルが無いことによる差分は出ません。ただし今回の state には、ステップ 4 で <code>-var shout=true</code> を付けて適用した結果が残っています。そのため、メンバーの設定（<code>shout = false</code>）との差分は出ます。全員が同じ変数の値で実行することも、state を共有する前提です。ここでは <code>apply</code> しないでください。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>/tmp/tf04-member</code> で <code>init</code> しただけで、<code>terraform state list</code> に 5 つのアドレスが表示されることを確認してください。<code>terraform output</code> のペットの名前も、元のディレクトリと一致します。</p>
+</div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">backend の設定をファイルに分ける</h3>
+        </div>
+        <div class="step__body">
+
+
+<p>
+  バケット名や接続先は、開発用・本番用などの環境ごとに変わることがあります。<code>backend</code> ブロックには変数（<code>var.xxx</code>）を使えないため、環境ごとに変わる値は別のファイルに分け、<code>init</code> のときに渡します。これを <strong>partial configuration</strong>（部分的な設定）と呼びます。
+  このステップは、メンバー役の <code>/tmp/tf04-member</code> だけで試します。<code>04-remote-state</code> の <code>main.tf</code> はステップ 3 のままにします。
+</p>
+<p><code>/tmp/tf04-member/main.tf</code> の <code>backend</code> ブロックから、<code>bucket</code>・<code>key</code>・<code>endpoints</code> を削除します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">/tmp/tf04-member/main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> terraform {</span><span class="diff-line">   required_version = "&gt;= 1.10"</span><span class="diff-line"></span><span class="diff-line">   backend "s3" {</span><span class="diff-line diff-line--remove">-    bucket       = "tfstate"</span><span class="diff-line diff-line--remove">-    key          = "handson/terraform.tfstate"</span><span class="diff-line">     region       = "us-east-1"</span><span class="diff-line">     use_lockfile = true</span><span class="diff-line"></span><span class="diff-line diff-line--remove">-    endpoints = {</span><span class="diff-line diff-line--remove">-      s3 = "http://localhost:8333"</span><span class="diff-line diff-line--remove">-    }</span><span class="diff-line">     use_path_style              = true</span><span class="diff-line">     skip_credentials_validation = true</span><span class="diff-line">     skip_requesting_account_id  = true</span></pre>
+</div>
+<p>削除した値は、新しく作る <code>backend.hcl</code> に書きます。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">/tmp/tf04-member/backend.hcl</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">bucket = "tfstate"
+key    = "handson/terraform.tfstate"
+
+endpoints = {
+  s3 = "http://localhost:8333"
+}</code></pre>
+</div>
+<p>
+  backend の設定を変えたので、<code>init</code> し直します。バケットとキーは変わらず、state を移す必要は無いので、<code>-migrate-state</code> ではなく <code>-reconfigure</code> を付けます。まず、<code>backend.hcl</code> を渡し忘れた場合を見ます。対話で値を聞かれないよう <code>-input=false</code> を付けます（付けないと <code>bucket</code> と <code>key</code> を 1 つずつ尋ねられます。そのときは <kbd>Ctrl</kbd>+<kbd>C</kbd> で中断します）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B（/tmp/tf04-member）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform init -reconfigure -input=false</span><span class="terminal__line">Initializing the backend...</span><span class="terminal__line"></span><span class="terminal__line">Initializing modules...</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line">Error: Missing Required Value</span><span class="terminal__line"></span><span class="terminal__line">  on main.tf line 4, in terraform:</span><span class="terminal__line">   4:   backend "s3" {</span><span class="terminal__line"></span><span class="terminal__line">The attribute "bucket" is required by the backend.</span><span class="terminal__line"></span><span class="terminal__line">Refer to the backend documentation for additional information which</span><span class="terminal__line">attributes are required.</span><span class="terminal__line"></span><span class="terminal__line">Error: Missing Required Value</span><span class="terminal__line"></span><span class="terminal__line">  on main.tf line 4, in terraform:</span><span class="terminal__line">   4:   backend "s3" {</span><span class="terminal__line"></span><span class="terminal__line">The attribute "key" is required by the backend.</span><span class="terminal__line"></span><span class="terminal__line">Refer to the backend documentation for additional information which</span><span class="terminal__line">attributes are required.</span></pre>
+</div>
+<p><code>bucket</code> と <code>key</code> は必須なので、<code>Missing Required Value</code> で止まりました。<code>-backend-config</code> でファイルを渡します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B（/tmp/tf04-member）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform init -reconfigure -backend-config=backend.hcl</span><span class="terminal__line">Initializing the backend...</span><span class="terminal__line"></span><span class="terminal__line">Successfully configured the backend "s3"! Terraform will automatically</span><span class="terminal__line">use this backend unless the backend configuration changes.</span><span class="terminal__line"></span><span class="terminal__line">Initializing modules...</span><span class="terminal__line"></span><span class="terminal__line">Initializing provider plugins...</span><span class="terminal__line">- Reusing previous version of hashicorp/random from the dependency lock file</span><span class="terminal__line">- Reusing previous version of hashicorp/local from the dependency lock file</span><span class="terminal__line">- Using previously-installed hashicorp/random v3.9.1</span><span class="terminal__line">- Using previously-installed hashicorp/local v2.9.1</span><span class="terminal__line"></span><span class="terminal__line">Terraform has been successfully initialized!</span><span class="terminal__line"></span><span class="terminal__line">You may now begin working with Terraform. Try running "terraform plan" to see</span><span class="terminal__line">any changes that are required for your infrastructure. All Terraform commands</span><span class="terminal__line">should now work.</span><span class="terminal__line"></span><span class="terminal__line">If you ever set or change modules or backend configuration for Terraform,</span><span class="terminal__line">rerun this command to reinitialize your working directory. If you forget, other</span><span class="terminal__line">commands will detect it and remind you to do so if necessary.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform state list | head -3</span><span class="terminal__line">local_sensitive_file.token</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter</span></pre>
+</div>
+<p>
+  同じ state に接続できました。<code>init</code> で決まった backend の設定は、<code>.terraform/terraform.tfstate</code> に保存されます（名前は似ていますが、リソースの state ではありません）。中身を見てみます（項目の多くは <code>null</code> なので「…」で省略しています）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 B（/tmp/tf04-member）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cat .terraform/terraform.tfstate</span><span class="terminal__line">{</span><span class="terminal__line">  "version": 3,</span><span class="terminal__line">  "terraform_version": "1.16.2",</span><span class="terminal__line">  "backend": {</span><span class="terminal__line">    "type": "s3",</span><span class="terminal__line">    "config": {</span><span class="terminal__line">      "access_key": null,</span><span class="terminal__line">      …</span><span class="terminal__line">      "bucket": "tfstate",</span><span class="terminal__line">      …</span><span class="terminal__line">      "endpoints": {</span><span class="terminal__line">        "dynamodb": null,</span><span class="terminal__line">        "iam": null,</span><span class="terminal__line">        "s3": "http://localhost:8333",</span><span class="terminal__line">        "sso": null,</span><span class="terminal__line">        "sts": null</span><span class="terminal__line">      },</span><span class="terminal__line">      …</span><span class="terminal__line">      "key": "handson/terraform.tfstate",</span><span class="terminal__line">      …</span><span class="terminal__line">      "region": "us-east-1",</span><span class="terminal__line">      "retry_mode": null,</span><span class="terminal__line">      "secret_key": null,</span><span class="terminal__line">      …</span><span class="terminal__line">      "skip_credentials_validation": true,</span><span class="terminal__line">      "skip_metadata_api_check": true,</span><span class="terminal__line">      "skip_region_validation": true,</span><span class="terminal__line">      "skip_requesting_account_id": true,</span><span class="terminal__line">      …</span><span class="terminal__line">      "use_lockfile": true,</span><span class="terminal__line">      "use_path_style": true,</span><span class="terminal__line">      "workspace_key_prefix": null</span><span class="terminal__line">    },</span><span class="terminal__line">    "hash": 4038605029</span><span class="terminal__line">  }</span><span class="terminal__line">}</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rl "tf04secret" .</span></pre>
+</div>
+<p>
+  <code>backend.hcl</code> で渡した値も含め、backend の設定がまとめて保存されています。一方、<code>access_key</code> と <code>secret_key</code> は <code>null</code> です。鍵の文字列 <code>tf04secret</code> で検索しても、どのファイルにも見つかりません（<code>grep</code> の出力が空）。鍵を環境変数で渡したためです。
+</p>
+<ul>
+  <li>鍵は <code>backend</code> ブロックや <code>backend.hcl</code> に書かず、環境変数などで渡します。ファイルに書くと、<code>.terraform/terraform.tfstate</code> にも保存されます</li>
+  <li><code>.terraform/</code> は backend の設定を持つので、コミットしません（<code>.gitignore</code> には 01 から <code>.terraform/</code> が入っています）</li>
+  <li>鍵を含まない <code>backend.hcl</code> はコミットしてかまいません。環境ごとに <code>backend-dev.hcl</code> のようにファイルを分け、<code>-backend-config</code> で切り替えます</li>
+</ul>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>-backend-config</code> を付けない <code>init</code> が <code>Missing Required Value</code> で止まることを確認してください。<code>-backend-config=backend.hcl</code> を付けると成功します。<code>grep -rl "tf04secret" .</code> は何も表示しません。</p>
+</div>
+
+
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>destroy</code> とコンテナの削除で片付ける</h3>
+        </div>
+        <div class="step__body">
+
+
+<p>端末 A（<code>04-remote-state</code>）で <code>destroy</code> します（実行計画の部分は「…」で省略しています）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 A</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform destroy -auto-approve</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">module.greeting["hello"].random_pet.greeter: Refreshing state... [id=enough-phoenix]</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter: Refreshing state... [id=easy-stallion]</span><span class="terminal__line">module.greeting["hello"].local_file.hello: Refreshing state... [id=eecb24381b1f6a8da5b0caff08ce11432f6ab06b]</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello: Refreshing state... [id=a81447a08c5e30f14ad528edf78ad3cf53a58a1d]</span><span class="terminal__line">…</span><span class="terminal__line">Plan: 0 to add, 0 to change, 5 to destroy.</span><span class="terminal__line">…</span><span class="terminal__line">Destroy complete! Resources: 5 destroyed.</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 A</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -sS --aws-sigv4 "aws:amz:us-east-1:s3" --user "tf04access:tf04secret123456" "http://localhost:8333/tfstate/handson/terraform.tfstate" | grep -E '"(serial|resources)"'</span><span class="terminal__line">  "serial": 3,</span><span class="terminal__line">  "resources": [],</span></pre>
+</div>
+<p>
+  リモートの state は、リソースが空（<code>"resources": []</code>）になって残ります。<code>destroy</code> はリソースを消す操作で、state のオブジェクト自体はバケットから消えません。
+  この項目では、バケットごと SeaweedFS のコンテナを削除します。<code>-v</code> は、コンテナが使っていた匿名ボリューム（バケットのデータ）も一緒に消すオプションです。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">端末 A</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> docker rm -f -v tf04-seaweed</span><span class="terminal__line">tf04-seaweed</span><span class="terminal__line"><span class="terminal__prompt">$</span> docker ps -a --filter name=tf04</span><span class="terminal__line">CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES</span><span class="terminal__line"><span class="terminal__prompt">$</span> rm -rf /tmp/tf04-member</span></pre>
+</div>
+<p>
+  メンバー役の <code>/tmp/tf04-member</code> も削除しました。端末 B は閉じてかまいません。端末 A で別の作業を続ける場合は、ダミーの鍵を外しておきます。外すコマンドは <code>unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_EC2_METADATA_DISABLED</code> です。
+  イメージ <code>chrislusf/seaweedfs:4.48</code> は残っています。不要なら <code>docker image rm chrislusf/seaweedfs:4.48</code> で削除してください。
+</p>
+<p>最終的なディレクトリ構成は次のとおりです。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">04-remote-state/</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">04-remote-state/
+├── .gitignore
+├── .terraform/              （init が作る作業ディレクトリ）
+├── .terraform.lock.hcl      （init が作る lock ファイル）
+├── main.tf
+├── modules/
+│   └── greeting/
+│       ├── main.tf
+│       ├── outputs.tf
+│       └── variables.tf
+├── output/                  （生成物）
+├── outputs.tf
+├── terraform.tfstate        （移行後は 0 バイト。使われない）
+├── terraform.tfstate.backup （移行前の state のコピー）
+├── terraform.tfvars
+└── variables.tf</code></pre>
+</div>
+<p>
+  コミットするのは、ルートの <code>main.tf</code>・<code>variables.tf</code>・<code>outputs.tf</code>・<code>terraform.tfvars</code>・<code>.gitignore</code> です。加えて、<code>modules/greeting/</code> の 3 ファイルと、01〜03 と同じく <code>.terraform.lock.hcl</code> もコミットします。
+  <code>.gitignore</code> は 03 から変更していません。移行で残った <code>terraform.tfstate</code> と <code>terraform.tfstate.backup</code> は、<code>*.tfstate</code>・<code>*.tfstate.*</code> の行でコミットの対象から外れています。
+</p>
+<div class="callout callout--note">
+  <span class="callout__icon" aria-hidden="true">ℹ️</span>
+  <div class="callout__body">
+    <p class="callout__title">この教材リポジトリの完成コードについて</p>
+    <p>完成コードを置いているブランチ <code>infra/terraform/04-remote-state</code> には、lock ファイルは含まれていません。01〜03 と同じく、リポジトリのルートの <code>.gitignore</code> が <code>**/.terraform.lock.hcl</code> を無視する設定になっているためです。自分のプロジェクトでは lock ファイルをコミットしてください。</p>
+  </div>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>terraform destroy</code> が <code>Destroy complete! Resources: 5 destroyed.</code> で終わることを確認してください。<code>docker ps -a --filter name=tf04</code> には、コンテナが表示されなくなります。</p>
+</div>
+
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">SeaweedFS を Docker で起動し、curl の <code>--aws-sigv4</code> でバケットとバージョニングを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>backend "s3"</code> の設定のうち、本物の S3 でも書くものと、S3 互換サーバーに向けるためのものを区別できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">backend を書いた直後は <code>Backend initialization required</code> で止まり、<code>init -migrate-state</code> で state を移した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">移行後は手元の <code>terraform.tfstate</code> が 0 バイトになり、<code>terraform state pull</code> でリモートの state を読めることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">2 つの端末で、ロック中は <code>Error acquiring the state lock</code> で止まり、<code>.tflock</code> がバケットにできることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>-lock-timeout</code> と <code>force-unlock</code> の使いどころと、<code>force-unlock</code> の危険性を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">別の作業ディレクトリから <code>init</code> するだけで同じ state を共有できることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>-backend-config</code> で環境ごとの値を分け、鍵は環境変数で渡すことを確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Error: Backend initialization required</code> で止まる</p>
+          <p><code>backend</code> ブロックを追加・変更したのに、<code>init</code> し直していません。ローカルの state を移すなら <code>terraform init -migrate-state</code> を実行してください。state を移さず設定だけを切り替えるなら <code>terraform init -reconfigure</code> です。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">移したはずなのに <code>plan</code> が全リソースを「+ create」と言う</p>
+          <p><code>use_path_style = true</code> が抜けていないか確かめてください。抜けていると、Terraform はバケット名をホスト名に入れた <code>tfstate.localhost:8333</code> へ接続します。SeaweedFS はこれを別のバケット（パスの先頭の <code>handson</code>）への要求として扱うので、state が見つからず、エラーにならないまま空の state として扱われます。この状態で <code>apply</code> すると、同じリソースをもう一度作ろうとします。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Error: Error acquiring the state lock</code> で止まる</p>
+          <p>別の端末や別の人の操作がロックを持っています。<code>Lock Info</code> の <code>Who</code> と <code>Created</code> で誰の操作かを確かめ、終わるのを待つか、<code>-lock-timeout=60s</code> のように待ち時間を付けて実行してください。持ち主の操作が異常終了していると確かめられた場合に限り、<code>terraform force-unlock &lt;ID&gt;</code> でロックを外します。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">操作の最後に <code>Error: Error releasing the state lock</code> が出る</p>
+          <p>実行中に、別の端末から <code>force-unlock</code> でロックを外された場合に出ます。ロックのファイル（<code>.tflock</code>）が既に無いので、解放に失敗したという意味です。<code>force-unlock</code> した覚えがない場合は、誰かが外していないかをチームで確かめてください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">別のディレクトリで <code>plan</code> すると <code>local_file</code> が作り直しになる</p>
+          <p>state は共有されていますが、<code>local_file</code> が作るファイルは最初に <code>apply</code> した人のディスクにしかないためです。この教材の題材に特有の挙動で、クラウド上のリソースを管理する場合は起きません。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Error: Missing Required Value</code>（<code>The attribute "bucket" is required</code>）で止まる</p>
+          <p>partial configuration にした <code>backend</code> ブロックに対して、<code>-backend-config</code> を付けずに <code>init</code> しています。<code>terraform init -reconfigure -backend-config=backend.hcl</code> のように、値を書いたファイルを渡してください。<code>-input=false</code> を付けずに実行すると、エラーの代わりに <code>Enter a value:</code> で <code>bucket</code> の入力を求められます。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>backend "s3"</code> を書いて <code>init -migrate-state</code> するだけで、state の置き場所をローカルのファイルからリモートのストレージに移せました。リモートの state は、別のディレクトリ（別の人）からも <code>init</code> するだけで共有できます。
+        <code>use_lockfile = true</code> により、同時の操作はロックで止まります。<code>force-unlock</code> は、持ち主の操作が終わっていると確かめたうえで使う最後の手段です。
+        環境ごとに変わる値は <code>-backend-config</code> で分けます。鍵は設定ファイルに書かず、環境変数などで渡します。
+      </p>
+      <p>実務で使う主なバックエンドは次のとおりです。設定項目は公式ドキュメントを参照してください。</p>
+      <ul>
+        <li><a href="https://developer.hashicorp.com/terraform/language/backend/s3">s3</a>: Amazon S3 に置きます。この項目で使った <code>bucket</code>・<code>key</code>・<code>region</code>・<code>use_lockfile</code> をそのまま使います</li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/backend/gcs">gcs</a>: Google Cloud Storage に置きます</li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/backend/azurerm">azurerm</a>: Azure Blob Storage に置きます</li>
+        <li><a href="https://developer.hashicorp.com/terraform/cli/cloud/settings">HCP Terraform</a>: HashiCorp のサービスに state を置き、実行やチームの権限もまとめて管理します。<code>backend</code> ブロックではなく <code>cloud</code> ブロックで設定します</li>
+      </ul>
+      <p>
+        これで Terraform サブトラックは終わりです。01 で <code>init</code> / <code>plan</code> / <code>apply</code> の流れと state の役割を学びました。02 では入力変数と出力値で値をやり取りし、03 ではモジュールで設定を部品にしました。04 では state をリモートで共有管理しました。
+        この 4 つは、どのクラウドを相手にしても変わらない Terraform の基本です。次は各クラウドのサブトラック（Google Cloud / AWS / Azure / Cloudflare）に進み、本物のクラウドのリソースを Terraform で構築します。
+      </p>
+
+      <h2 id="references">参考資料</h2>
+      <ul>
+        <li><a href="https://developer.hashicorp.com/terraform/language/state/remote">Remote state</a>（リモートステートの考え方）</li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/backend">Backend block configuration overview</a>（<a href="https://developer.hashicorp.com/terraform/language/backend#partial-configuration">partial configuration</a> を含む）</li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/backend/s3">s3 backend</a>（<code>use_lockfile</code>・<code>skip_*</code>・バージョニングの推奨）</li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/state/locking">State locking</a></li>
+        <li><a href="https://developer.hashicorp.com/terraform/cli/commands/force-unlock">terraform force-unlock</a></li>
+        <li><a href="https://developer.hashicorp.com/terraform/cli/commands/state/pull">terraform state pull</a></li>
+        <li><a href="https://github.com/seaweedfs/seaweedfs">SeaweedFS（GitHub）</a></li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>infra/terraform/04-remote-state</code> の <code>infra/terraform/04-remote-state/</code> ディレクトリにあります。<code>main.tf</code> はステップ 3 の状態です（ステップ 7 の変更は <code>/tmp/tf04-member</code> だけで行いました）。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../03-modules/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">03: モジュール化</span>
+        </a>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../../assets/js/main.js"></script>
+</body>
+</html>
