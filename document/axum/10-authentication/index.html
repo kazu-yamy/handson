@@ -1,0 +1,1490 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10: パスワードハッシュとログイン | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">10</li>
+        </ol>
+        <h1 class="lesson-title">パスワードハッシュとログイン</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: 09 までの API に、利用者の登録とパスワードによるログインを足したい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法、SQL の基本、09 で使った sqlx-cli（<code>sqlx migrate</code>）と結合テスト（<code>#[sqlx::test]</code>）の構成</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../09-migrations/index.html">09: マイグレーション運用と記事リソース</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>argon2（argon2id）でパスワードをハッシュ化し、PHC 形式の文字列として保存・検証する</li>
+          <li>重いハッシュ計算を <code>spawn_blocking</code> で別スレッドに逃がし、debug ビルドでも argon2 だけを最適化する</li>
+          <li>認証情報とセッションのテーブルをマイグレーションで追加する</li>
+          <li>3 つの <code>INSERT</code> を 1 つのトランザクションにまとめて登録処理を書き、重複したメールアドレスを 409 にする</li>
+          <li>乱数のトークンを発行し、DB にはトークンの SHA-256 だけを保存する</li>
+          <li>ログインの失敗を、理由を区別しない同じ 401 で返す</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        09 では、記事の作成・更新・削除を API キーだけで保護していました。API キーさえあれば、誰の名義でも投稿できる状態です。
+        足りないのは、リクエストを送ってきたのが「誰であるか」を確かめる仕組み（認証）です。
+      </p>
+      <p>
+        このレッスンでは、その土台として利用者の登録とログインを作ります。
+        登録ではパスワードを安全な形に変えて保存し、ログインに成功したらトークンを発行します。
+        このレッスンで増えるエンドポイントは次の 2 つです。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>メソッド</th><th>パス</th><th>認証</th><th>成功時</th><th>主なエラー</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>POST</td><td><code>/auth/register</code></td><td>不要</td><td>201 <code>{"user": {"id", "name"}, "token", "expires_at"}</code></td><td>409（メールアドレスの重複）、422</td></tr>
+          <tr><td>POST</td><td><code>/auth/login</code></td><td>不要</td><td>200（登録と同じ形）</td><td>401（理由によらず同じ文言）、422（JSON の型違い）</td></tr>
+        </tbody>
+      </table>
+      <p>既存のエンドポイント（<code>/health</code>・<code>/users</code>・<code>/posts</code> など）は 09 のまま変えません。</p>
+
+      <div class="callout callout--warning">
+        <span class="callout__icon" aria-hidden="true">⚠️</span>
+        <div class="callout__body">
+          <p class="callout__title">このレッスンを終えても、記事の API はまだ守られていません</p>
+          <p>10 で作るのは、利用者が「誰であるか」を確かめるための登録とログインまでです。発行したトークンを受け取って確かめる処理はまだありません。記事の作成・更新・削除は 09 と同じく API キーだけで保護されており、他人の名義で投稿できる穴も残っています。</p>
+          <p>トークンを使ってリクエストの送り手を特定し、自分の記事だけを変更できるようにするのは、11「認証エクストラクタと認可」です。ログアウト（<code>/auth/logout</code>）と、自分の情報を返す <code>/auth/me</code> も 11 で作ります。</p>
+          <p>06 から使っている <code>POST /users</code>（API キーで保護）も残しています。ここで作った user には認証情報が無いので、ログインできません（ステップ 7 で確かめます）。11 で <code>/users</code> の書き込み系を外し、登録を <code>/auth/register</code> に一本化します。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>Rust（rustc）1.99.0 / cargo 1.99.0（Rust edition 2024）で動作を確認しています。</p>
+          <p>新しく argon2 0.6.0・getrandom 0.4.3・base64 0.23.1・sha2 0.11.0 の 4 つのクレートを追加します。ほかのクレートと sqlx-cli は 09 と同じです（axum 0.8.9・sqlx 0.9.0・sqlx-cli 0.9.0 など）。バージョンは執筆時点（2026年10月）のものです。</p>
+          <p>DB の中身を見るために <code>sqlite3</code> コマンドを使う箇所があります（09 と同じく、macOS に標準で入っているものを使いました）。手元に無い場合、その確認は読むだけで構いません。</p>
+        </div>
+      </div>
+
+      <h2 id="security">セキュリティの考え方</h2>
+      <p>認証はセキュリティに直結します。このレッスンのコードが何を防ごうとしているかを、先に一覧表でまとめます。詳しくは各ステップで説明します。</p>
+      <table>
+        <thead>
+          <tr><th>論点</th><th>このレッスンでの扱い</th><th>ステップ</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>パスワードの保存</td><td>平文では保存せず、argon2id でハッシュ化した文字列だけを保存する。DB が漏れても、パスワードはそのまま読めない</td><td>2</td></tr>
+          <tr><td>ソルト</td><td>ハッシュ化のたびにランダムなソルトを作り、ハッシュの文字列に埋め込む。同じパスワードでも、利用者ごとに違う文字列になる</td><td>2</td></tr>
+          <tr><td>計算の重さ</td><td>argon2 は意図的に重い計算で、パスワードを総当たりで試す側にも同じ重さがかかる。サーバー側は別スレッドで計算する。大量の要求で CPU を使わせる攻撃への対策（レート制限・本文サイズの上限）は 12 で扱う</td><td>2・3</td></tr>
+          <tr><td>パスワードの長さ</td><td>15〜128 文字。下限は NIST SP 800-63B-4 に合わせる</td><td>5</td></tr>
+          <tr><td>ログインの失敗</td><td>メールアドレスが未登録でもパスワード違いでも、同じステータス・同じ本文の 401 を返す</td><td>6</td></tr>
+          <tr><td>応答時間</td><td>未登録のメールアドレスでもダミーのハッシュで検証し、応答時間の差を小さくする</td><td>3・6</td></tr>
+          <tr><td>トークン</td><td>32 バイトの乱数から作る。DB にはトークンの SHA-256 だけを保存する</td><td>6</td></tr>
+          <tr><td>ログと応答</td><td>パスワードを持つ型に <code>Debug</code>・<code>Serialize</code> を付けない。応答とログに、パスワード・ハッシュ・トークンを出さない</td><td>5・6・7</td></tr>
+          <tr><td>通信</td><td>本番では HTTPS が前提。このレッスンでは、ローカルの HTTP で試す</td><td>7</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">09 のプロジェクトをコピーし、クレートを追加する</h3>
+        </div>
+        <div class="step__body">
+          <p>09 の完成コードを出発点としてコピーします。<code>09-migrations</code> ディレクトリがある場所で、次のコマンドを実行してください。<code>target/</code>・<code>app.db*</code>・<code>.env</code> はコピーせず、<code>.env</code> は <code>.env.example</code> から作り直します。コマンドは何も表示せずに終わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p 10-authentication</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 09-migrations</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp Cargo.toml Cargo.lock .gitignore .env.example ../10-authentication/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R src migrations tests ../10-authentication/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ../10-authentication</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp .env.example .env</span></pre>
+</div>
+          <p><code>Cargo.toml</code> の <code>name</code> を <code>authentication</code> に変えます。<code>[lib]</code> の <code>name = "app"</code> と <code>[[bin]]</code> の <code>name = "server"</code> は 09 のままにします。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "migrations"</span><span class="diff-line diff-line--add">+ name = "authentication"</span><span class="diff-line">  version = "0.1.0"</span><span class="diff-line">  edition = "2024"</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>ビルドとテストが 09 と同じように通ることを確かめます。<code>cargo build</code> の出力は一部を省略し、<code>cargo test</code> の出力は、テストバイナリーと集計の行だけを <code>grep</code> で抜き出しています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   …</span><span class="terminal__line">   Compiling sqlx-macros-core v0.9.0</span><span class="terminal__line">   Compiling sqlx-macros v0.9.0</span><span class="terminal__line">   Compiling sqlx v0.9.0</span><span class="terminal__line">   Compiling authentication v0.1.0 (/path/to/10-authentication)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 20.77s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test 2&gt;&amp;1 | grep -E "Running|test result"</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-d47129c245c6da56)</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-e6deb3f14e20a4b8)</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-6931216b1107cf84)</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-78f5ddeaac5401a9)</span><span class="terminal__line">test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.46s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-a32a228a1e641d1a)</span><span class="terminal__line">test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+          <p>09 と同じ 25 件（health 1・posts 18・users 6）が成功します。lib と main.rs の単体テストはまだ 0 件です。<code>target/debug/deps/</code> の後ろのハッシュは環境ごとに変わります。</p>
+          <p>次に、このレッスンで使う 4 つのクレートを <code>cargo add</code> で追加します。</p>
+          <ul>
+            <li><code>argon2</code>: パスワードのハッシュ化と検証</li>
+            <li><code>getrandom</code>: OS から乱数を取得する（トークンの生成に使う）</li>
+            <li><code>base64</code>: 乱数のバイト列を、URL にそのまま使える文字列にする</li>
+            <li><code>sha2</code>: トークンの SHA-256 を計算する</li>
+          </ul>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add argon2 2&gt;&amp;1</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding argon2 v0.6.0 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             + alloc</span><span class="terminal__line">             + getrandom</span><span class="terminal__line">             + password-hash</span><span class="terminal__line">             - kdf</span><span class="terminal__line">             - parallel</span><span class="terminal__line">             - rand_core</span><span class="terminal__line">             - zeroize</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">     Locking 5 packages to highest Rust 1.99.0 compatible versions</span><span class="terminal__line">      Adding argon2 v0.6.0</span><span class="terminal__line">      Adding base64ct v1.8.3</span><span class="terminal__line">      Adding blake2 v0.11.0</span><span class="terminal__line">      Adding password-hash v0.6.1</span><span class="terminal__line">      Adding phc v0.6.1</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add getrandom base64 sha2 2&gt;&amp;1</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding getrandom v0.4.3 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             - std</span><span class="terminal__line">             - sys_rng</span><span class="terminal__line">             - wasm_js</span><span class="terminal__line">      Adding base64 v0.23.1 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             + alloc</span><span class="terminal__line">             + simd-unsafe</span><span class="terminal__line">             + std</span><span class="terminal__line">      Adding sha2 v0.11.0 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             + alloc</span><span class="terminal__line">             + oid</span><span class="terminal__line">             - zeroize</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">     Locking 2 packages to highest Rust 1.99.0 compatible versions</span><span class="terminal__line">      Adding base64 v0.23.1</span><span class="terminal__line">      Adding const-oid v0.10.2</span></pre>
+</div>
+          <ul>
+            <li>argon2 0.6.0 は、既定の機能（<code>Features</code> の <code>+</code> の行）に <code>getrandom</code> が入っています。ソルトを作るための乱数は、追加の設定なしで使えます。</li>
+            <li>getrandom 0.4.3 は、ほかのクレートの依存として既に入っていたので、<code>Locking</code> の行には出ません。機能（feature）を足さずに使えます。</li>
+            <li>sha2 は、sqlx を経由して 0.10.9 も入っています。このプロジェクトが直接使うのは 0.11.0 で、2 つの版は別のクレートとして共存します。</li>
+          </ul>
+          <p><code>Cargo.toml</code> の <code>[dependencies]</code> は次のようになります。<code>cargo add</code> はアルファベット順に挿入します。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">TOML</span>
+    <span class="code-block__filename">Cargo.toml（[dependencies] の部分）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-toml">[dependencies]
+argon2 = "0.6.0"
+axum = "0.8.9"
+base64 = "0.23.1"
+dotenvy = "0.15.7"
+getrandom = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread"] }</code></pre>
+</div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo add</code> の出力に 4 つのクレートの版が出て、09 と同じ 25 件のテストが成功すれば OK です。以降のコマンドは全て <code>10-authentication</code> ディレクトリで実行します。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">パスワードをハッシュ化して検証する</h3>
+        </div>
+        <div class="step__body">
+          <p>パスワードの扱いを <code>src/password.rs</code> にまとめます。まずは、ハッシュ化と検証の 2 つの関数と、その単体テストを書きます。</p>
+          <p>DB にパスワードをそのまま（平文で）保存すると、DB が漏れたとき（バックアップの流出や SQL インジェクションなど）に、全員のパスワードがそのまま読めてしまいます。そこで、パスワードから計算したハッシュだけを保存します。ログインのときは、送られてきたパスワードから同じ計算をして照合します。</p>
+          <p>ハッシュには、意図的に計算を重くした argon2 の argon2id 方式を使います。SHA-256 のような速いハッシュだと、漏れたハッシュに対して、候補のパスワードを次々に計算して照合する総当たりが速く進んでしまいます。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src/password.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">use argon2::{
+    Argon2,
+    password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},
+};
+
+// パスワードを argon2id でハッシュ化し、PHC 形式の文字列（$argon2id$v=19$...）で返す。
+// ソルトは hash_password がランダムに作って文字列の中に埋め込む
+pub fn hash_password(password: &amp;str) -&gt; Result&lt;String, argon2::password_hash::Error&gt; {
+    let hash = Argon2::default().hash_password(password.as_bytes())?;
+    Ok(hash.to_string())
+}
+
+// 保存してあるハッシュ文字列とパスワードが一致するか。壊れたハッシュ文字列も false 扱い
+pub fn verify_password(password: &amp;str, hash: &amp;str) -&gt; bool {
+    let Ok(parsed) = PasswordHash::new(hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &amp;parsed)
+        .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_has_phc_format_and_differs_every_time() {
+        let first = hash_password("correct horse battery").unwrap();
+        let second = hash_password("correct horse battery").unwrap();
+        println!("{first}");
+        println!("{second}");
+        assert!(first.starts_with("$argon2id$v=19$m=19456,t=2,p=1$"));
+        assert_ne!(first, second); // ソルトが毎回違うので、同じパスワードでも別のハッシュになる
+    }
+
+    #[test]
+    fn verify_accepts_right_password_and_rejects_wrong_one() {
+        let hash = hash_password("correct horse battery").unwrap();
+        assert!(verify_password("correct horse battery", &amp;hash));
+        assert!(!verify_password("wrong password", &amp;hash));
+        assert!(!verify_password(
+            "correct horse battery",
+            "not a phc string"
+        ));
+    }
+}</code></pre>
+</div>
+          <p><code>src/lib.rs</code> にモジュールを登録します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  pub mod error;</span><span class="diff-line">  pub mod middleware;</span><span class="diff-line diff-line--add">+ pub mod password;</span><span class="diff-line">  pub mod routes;</span><span class="diff-line">  pub mod state;</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>Argon2::default()</code> は、argon2id 方式と既定のパラメータで計算します。</li>
+            <li><code>hash_password</code> は、ソルト（ハッシュごとに作るランダムな値）を自動で作り、結果の文字列に埋め込みます。返る文字列は PHC 形式と呼ばれ、方式・パラメータ・ソルト・ハッシュを 1 つにまとめたものです。</li>
+            <li><code>verify_password</code> は、保存した文字列からソルトとパラメータを読み取り、同じ計算をして照合します。文字列が壊れていて読めない場合も <code>false</code> を返します。</li>
+            <li><code>PasswordHasher</code>・<code>PasswordVerifier</code> はトレイトです。<code>use</code> しないと、<code>hash_password</code>・<code>verify_password</code> メソッドが見つからずにコンパイルエラーになります。</li>
+          </ul>
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">argon2 0.6 は、0.5 と書き方が違う</p>
+              <p>argon2 0.6 の <code>hash_password</code> には、ソルトを渡しません（自動で作ります）。古い記事にある <code>SaltString::generate(&amp;mut OsRng)</code> でソルトを作る書き方は不要です。</p>
+              <p><code>PasswordHash</code> 型の場所も <code>argon2::password_hash::phc::PasswordHash</code> に変わっています。0.5 向けのコードは、そのままでは動きません。</p>
+            </div>
+          </div>
+          <p>ビルドし、単体テストだけを実行します（<code>--lib</code>）。<code>--nocapture</code> を付けると、テストの中の <code>println!</code> が表示されます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   …</span><span class="terminal__line">   Compiling digest v0.10.7</span><span class="terminal__line">   Compiling crypto-common v0.2.2</span><span class="terminal__line">   Compiling block-buffer v0.12.1</span><span class="terminal__line">   Compiling sha2 v0.10.9</span><span class="terminal__line">   Compiling sqlx-core v0.9.0</span><span class="terminal__line">   Compiling digest v0.11.3</span><span class="terminal__line">   Compiling blake2 v0.11.0</span><span class="terminal__line">   Compiling sha2 v0.11.0</span><span class="terminal__line">   Compiling argon2 v0.6.0</span><span class="terminal__line">   Compiling sqlx-sqlite v0.9.0</span><span class="terminal__line">   Compiling sqlx-macros-core v0.9.0</span><span class="terminal__line">   Compiling sqlx-macros v0.9.0</span><span class="terminal__line">   Compiling sqlx v0.9.0</span><span class="terminal__line">   Compiling authentication v0.1.0 (/path/to/10-authentication)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.92s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --lib -- --nocapture</span><span class="terminal__line">   Compiling authentication v0.1.0 (/path/to/10-authentication)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.14s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-4292fa69f77aef28)</span><span class="terminal__line"></span><span class="terminal__line">running 2 tests</span><span class="terminal__line">$argon2id$v=19$m=19456,t=2,p=1$Pbj3vd8//2S1hmuY08mggw$Cdap/wyx7hIyj72JSoxTgaWTdkGyOPyOUfr621Je5m0</span><span class="terminal__line">$argon2id$v=19$m=19456,t=2,p=1$NSgOEM9tNQT0WgGmfFZaYA$TRkJ8p1Kaw3KYCp9UqBq8ezlNB9Iu3sI0iwQrLFQtZw</span><span class="terminal__line">test password::tests::hash_has_phc_format_and_differs_every_time ... ok</span><span class="terminal__line">test password::tests::verify_accepts_right_password_and_rejects_wrong_one ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s</span></pre>
+</div>
+          <ul>
+            <li>表示された文字列は <code>$argon2id$v=19$m=19456,t=2,p=1$&lt;ソルト 22 文字&gt;$&lt;ハッシュ 43 文字&gt;</code> の形です。<code>argon2id</code> は方式、<code>v=19</code> は argon2 のアルゴリズムの版です。<code>m</code> は計算に使うメモリ量（KiB 単位。19456 KiB = 19 MiB）、<code>t</code> は繰り返しの回数、<code>p</code> は並列度を表します。</li>
+            <li>同じパスワード <code>correct horse battery</code> から、ソルトの部分が違う 2 つの文字列ができました。同じパスワードを使う利用者がいても、DB のハッシュを見比べただけでは分かりません。ソルトとハッシュの値は実行ごとに変わります。</li>
+          </ul>
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">既定のパラメータについて</p>
+              <p>argon2 クレート（0.6.0）の既定値 m=19456（19 MiB）・t=2・p=1 をそのまま使います。これは <a href="https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html">OWASP Password Storage Cheat Sheet</a> が argon2id の最小構成として挙げる設定の 1 つと同じ値です（2026 年 10 月確認）。サーバーに余裕があれば、より大きくしても構いません。</p>
+            </div>
+          </div>
+          <p>argon2 は意図的に重い計算で、最適化しない debug ビルドでは、さらに何倍も遅くなります。テストのたびに待たされないよう、argon2 と、argon2 が内部で使う blake2 だけを、debug ビルドでも最適化します。<code>Cargo.toml</code> の末尾に追記します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  http-body-util = "0.1.5"</span><span class="diff-line">  tower = { version = "0.5.3", features = ["util"] }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ # argon2 は意図的に重い計算なので、debug ビルドでも最適化する（これが無いとテストが極端に遅い）</span><span class="diff-line diff-line--add">+ [profile.dev.package.argon2]</span><span class="diff-line diff-line--add">+ opt-level = 3</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ [profile.dev.package.blake2]</span><span class="diff-line diff-line--add">+ opt-level = 3</span></pre>
+</div>
+          <p>次の <code>cargo build</code>・<code>cargo test</code> で、argon2 と blake2 が最適化して再コンパイルされます。どれくらい速くなるかは、ステップ 8 の読み物で紹介します。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>2 件のテストが成功し、表示された 2 つの文字列がどちらも <code>$argon2id$v=19$m=19456,t=2,p=1$</code> で始まり、その後ろが互いに違えば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">ハッシュ計算を別スレッドで実行する</h3>
+        </div>
+        <div class="step__body">
+          <p>argon2 の計算は、CPU を十数ミリ秒占有します。Axum の async のハンドラは、tokio のワーカースレッドの上で、ほかのリクエストと交代しながら進みます。ハンドラの中で直接計算すると、その間、そのワーカースレッドではほかのリクエストが進みません。そこで <code>tokio::task::spawn_blocking</code> を使い、重い処理のための専用のスレッドで計算します。</p>
+          <p>先にエラー型を広げます。計算の失敗を表す <code>Internal</code> を足し、<code>AppError</code> に <code>Debug</code> を付けます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/error.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">              fields: None,</span><span class="diff-line">          },</span><span class="diff-line">      };</span><span class="diff-line">      (status, Json(body)).into_response()</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ #[derive(Debug)]</span><span class="diff-line">  pub enum AppError {</span><span class="diff-line">      NotFound(&amp;'static str),</span><span class="diff-line">      Validation(BTreeMap&lt;String, Vec&lt;String&gt;&gt;),</span><span class="diff-line">      Database(sqlx::Error),</span><span class="diff-line diff-line--add">+     Internal(String),</span><span class="diff-line">      JsonRejection(JsonRejection),</span><span class="diff-line">      QueryRejection(QueryRejection),</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  impl AppError {</span><span class="diff-line">      pub fn field(name: &amp;str, message: &amp;str) -&gt; Self {</span><span class="diff-line">  ...</span><span class="diff-line">                  error_response(</span><span class="diff-line">                      StatusCode::INTERNAL_SERVER_ERROR,</span><span class="diff-line">                      "internal",</span><span class="diff-line">                      "internal server error",</span><span class="diff-line">                  )</span><span class="diff-line">              }</span><span class="diff-line diff-line--add">+             AppError::Internal(message) =&gt; {</span><span class="diff-line diff-line--add">+                 eprintln!("internal error: {message}");</span><span class="diff-line diff-line--add">+                 error_response(</span><span class="diff-line diff-line--add">+                     StatusCode::INTERNAL_SERVER_ERROR,</span><span class="diff-line diff-line--add">+                     "internal",</span><span class="diff-line diff-line--add">+                     "internal server error",</span><span class="diff-line diff-line--add">+                 )</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line">              AppError::JsonRejection(rejection) =&gt; {</span><span class="diff-line">                  let status = rejection.status();</span><span class="diff-line">                  let code = match status {</span><span class="diff-line">                      StatusCode::UNPROCESSABLE_ENTITY =&gt; "validation_failed",</span><span class="diff-line">                      StatusCode::UNSUPPORTED_MEDIA_TYPE =&gt; "unsupported_media_type",</span><span class="diff-line">                      StatusCode::PAYLOAD_TOO_LARGE =&gt; "payload_too_large",</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>Internal(String)</code>: ハッシュ計算や <code>spawn_blocking</code> の失敗に使います。詳細はサーバーのログ（標準エラー出力）にだけ出し、応答は 500 の <code>internal</code> にします。</li>
+            <li><code>#[derive(Debug)]</code>: テストで <code>Result&lt;_, AppError&gt;</code> に <code>.unwrap()</code> するために必要です。付け忘れたときのエラーは、つまずきポイントに載せています。</li>
+          </ul>
+          <p><code>src/password.rs</code> に、非同期のラッパーとダミーのハッシュ、テストを足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/password.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      password_hash::{PasswordHasher, PasswordVerifier, phc::PasswordHash},</span><span class="diff-line">  };</span><span class="diff-line diff-line--add">+ use std::sync::OnceLock;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ use crate::error::AppError;</span><span class="diff-line"> </span><span class="diff-line">  // パスワードを argon2id でハッシュ化し、PHC 形式の文字列（$argon2id$v=19$...）で返す。</span><span class="diff-line">  ...</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ // 登録されていないメールでもログインのときに同じ時間をかけるための、ダミーのハッシュ。</span><span class="diff-line diff-line--add">+ // 毎回計算すると無駄なので、最初に使うときに 1 回だけ作る</span><span class="diff-line diff-line--add">+ fn dummy_hash() -&gt; &amp;'static str {</span><span class="diff-line diff-line--add">+     static DUMMY: OnceLock&lt;String&gt; = OnceLock::new();</span><span class="diff-line diff-line--add">+     DUMMY.get_or_init(|| hash_password("dummy password for timing").expect("hash dummy password"))</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // サーバーの起動時に呼ぶ。ダミーのハッシュを先に作っておかないと、起動後に最初に来た</span><span class="diff-line diff-line--add">+ // 「未登録のメール」のログインだけ、ダミーを作る分（argon2 1 回ぶん）余計に時間がかかってしまう</span><span class="diff-line diff-line--add">+ pub fn warm_up() {</span><span class="diff-line diff-line--add">+     dummy_hash();</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // argon2 は CPU を十数ミリ秒占有する。async のハンドラの中で直接呼ぶと、</span><span class="diff-line diff-line--add">+ // その間そのワーカースレッドで他のリクエストが進まないので、spawn_blocking の専用スレッドに逃がす</span><span class="diff-line diff-line--add">+ pub async fn hash_password_blocking(password: String) -&gt; Result&lt;String, AppError&gt; {</span><span class="diff-line diff-line--add">+     tokio::task::spawn_blocking(move || hash_password(&amp;password))</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .map_err(|error| AppError::Internal(format!("hash task failed: {error}")))?</span><span class="diff-line diff-line--add">+         .map_err(|error| AppError::Internal(format!("hash failed: {error}")))</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // hash が None（未登録のメール）のときは、ダミーのハッシュで検証して時間をそろえ、必ず false を返す</span><span class="diff-line diff-line--add">+ pub async fn verify_password_blocking(</span><span class="diff-line diff-line--add">+     password: String,</span><span class="diff-line diff-line--add">+     hash: Option&lt;String&gt;,</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;bool, AppError&gt; {</span><span class="diff-line diff-line--add">+     tokio::task::spawn_blocking(move || match hash {</span><span class="diff-line diff-line--add">+         Some(hash) =&gt; verify_password(&amp;password, &amp;hash),</span><span class="diff-line diff-line--add">+         None =&gt; {</span><span class="diff-line diff-line--add">+             verify_password(&amp;password, dummy_hash());</span><span class="diff-line diff-line--add">+             false</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+     })</span><span class="diff-line diff-line--add">+     .await</span><span class="diff-line diff-line--add">+     .map_err(|error| AppError::Internal(format!("verify task failed: {error}")))</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  #[cfg(test)]</span><span class="diff-line">  mod tests {</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+     // 計測用（`cargo test --lib measure -- --ignored --nocapture`）。判定はしない</span><span class="diff-line diff-line--add">+     #[test]</span><span class="diff-line diff-line--add">+     #[ignore]</span><span class="diff-line diff-line--add">+     fn measure_hash_and_verify_time() {</span><span class="diff-line diff-line--add">+         use std::time::Instant;</span><span class="diff-line diff-line--add">+         let start = Instant::now();</span><span class="diff-line diff-line--add">+         let hash = hash_password("correct horse battery").unwrap();</span><span class="diff-line diff-line--add">+         println!("hash:   {:?}", start.elapsed());</span><span class="diff-line diff-line--add">+         let start = Instant::now();</span><span class="diff-line diff-line--add">+         verify_password("correct horse battery", &amp;hash);</span><span class="diff-line diff-line--add">+         println!("verify: {:?}", start.elapsed());</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     #[tokio::test]</span><span class="diff-line diff-line--add">+     async fn blocking_wrappers_work_and_unknown_hash_is_false() {</span><span class="diff-line diff-line--add">+         let hash = hash_password_blocking("correct horse battery".to_string())</span><span class="diff-line diff-line--add">+             .await</span><span class="diff-line diff-line--add">+             .unwrap();</span><span class="diff-line diff-line--add">+         let verify = |password: &amp;str, hash: Option&lt;String&gt;| {</span><span class="diff-line diff-line--add">+             verify_password_blocking(password.to_string(), hash)</span><span class="diff-line diff-line--add">+         };</span><span class="diff-line diff-line--add">+         assert!(</span><span class="diff-line diff-line--add">+             verify("correct horse battery", Some(hash.clone()))</span><span class="diff-line diff-line--add">+                 .await</span><span class="diff-line diff-line--add">+                 .unwrap()</span><span class="diff-line diff-line--add">+         );</span><span class="diff-line diff-line--add">+         assert!(!verify("wrong password", Some(hash)).await.unwrap());</span><span class="diff-line diff-line--add">+         assert!(!verify("correct horse battery", None).await.unwrap());</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">      #[test]</span><span class="diff-line">      fn verify_accepts_right_password_and_rejects_wrong_one() {</span><span class="diff-line">  ...</span><span class="diff-line">          assert!(verify_password("correct horse battery", &amp;hash));</span><span class="diff-line">          assert!(!verify_password("wrong password", &amp;hash));</span><span class="diff-line">          assert!(!verify_password(</span><span class="diff-line">              "correct horse battery",</span><span class="diff-line">              "not a phc string"</span><span class="diff-line">          ));</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+          <ul>
+            <li><code>hash_password_blocking</code>: <code>spawn_blocking</code> に渡したクロージャは、別のスレッドで動きます。クロージャは呼び出し元の変数を借りられないので、パスワードを <code>String</code> で受け取って <code>move</code> で渡します。</li>
+            <li><code>spawn_blocking</code> を <code>.await</code> した結果は、2 重の <code>Result</code> です。外側はタスク自体の失敗（<code>JoinError</code>）、内側は <code>hash_password</code> の結果です。<code>.map_err(...)?</code> で外側を、続く <code>.map_err(...)</code> で内側を、それぞれ <code>AppError::Internal</code> に変えます。</li>
+            <li><code>verify_password_blocking</code>: 保存したハッシュを <code>Option</code> で受け取ります。<code>None</code>（メールアドレスが未登録）のときもダミーのハッシュで検証し、必ず <code>false</code> を返します。未登録のときだけ計算を省くと、応答が速くなり、登録済みかどうかを見分けられてしまうためです（ステップ 6）。</li>
+            <li><code>dummy_hash</code>: ダミーのハッシュを <code>OnceLock</code> で 1 回だけ作り、使い回します。<code>warm_up</code> は、サーバーの起動時にこれを先に作っておくための関数です。</li>
+            <li><code>measure_hash_and_verify_time</code>: 計測用のテストです。<code>#[ignore]</code> を付けたので、通常の <code>cargo test</code> では実行されません。</li>
+          </ul>
+          <p>サーバーの起動時に <code>warm_up</code> を呼びます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/main.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">- use app::{build_app, config::Config, state::AppState};</span><span class="diff-line diff-line--add">+ use app::{build_app, config::Config, password, state::AppState};</span><span class="diff-line">  use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};</span><span class="diff-line">  use std::str::FromStr;</span><span class="diff-line">  ...</span><span class="diff-line">      let config = Config::from_env()?;</span><span class="diff-line">      println!("config: {config:?}");</span><span class="diff-line diff-line--add">+     password::warm_up();</span><span class="diff-line"> </span><span class="diff-line">      let options = SqliteConnectOptions::from_str(&amp;config.database_url)?</span><span class="diff-line">  ...</span></pre>
+</div>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: ダミーのハッシュを起動時に作っておく理由</summary>
+            <div class="disclosure__body">
+          <p>執筆の途中までは <code>warm_up</code> を呼ばず、ダミーのハッシュは初めて使う時点で作っていました。そのときの実測です。手元で実行する必要はありません。</p>
+          <p>サーバーを起動したあと、パスワード違いと未登録のメールアドレスのログインを、この順に送りました。サーバーのログ（抜粋）は次のとおりです。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">サーバーのログ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">POST /auth/login -&gt; 401 Unauthorized (12.486ms)</span><span class="terminal__line">POST /auth/login -&gt; 401 Unauthorized (25.155833ms)</span></pre>
+</div>
+          <p>2 行目の未登録のメールアドレスだけ、約 2 倍の時間がかかりました。ダミーのハッシュを作る分、argon2 の計算が 1 回多く入ったためです。起動後の最初の 1 回だけとはいえ、応答時間から「このメールアドレスは未登録だ」と見分ける手がかりになります。</p>
+          <p><code>warm_up</code> を足して空の DB で起動し直し、最初のリクエストを未登録のメールアドレスのログインにしました。続けて、登録・パスワード違い・未登録のメールアドレスの順に送ったときのサーバーのログです。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">サーバーのログ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">config: Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", api_key: "***", session_ttl_secs: 604800 }</span><span class="terminal__line">listening on 127.0.0.1:8080</span><span class="terminal__line">POST /auth/login -&gt; 401 Unauthorized (12.77025ms)</span><span class="terminal__line">POST /auth/register -&gt; 201 Created (13.069ms)</span><span class="terminal__line">POST /auth/login -&gt; 401 Unauthorized (12.34425ms)</span><span class="terminal__line">POST /auth/login -&gt; 401 Unauthorized (12.98525ms)</span></pre>
+</div>
+          <p>最初の未登録のメールアドレスのログイン（12.77ms）が、パスワード違い（12.34ms）と同じ程度になりました。時間は実行する環境とその負荷で変わります。</p>
+            </div>
+          </details>
+          <p>テストを実行します。lib の単体テスト以外の出力は省略しています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   …</span><span class="terminal__line">   Compiling authentication v0.1.0 (/path/to/10-authentication)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.62s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-2030045cad007562)</span><span class="terminal__line"></span><span class="terminal__line">running 4 tests</span><span class="terminal__line">test password::tests::measure_hash_and_verify_time ... ignored</span><span class="terminal__line">test password::tests::hash_has_phc_format_and_differs_every_time ... ok</span><span class="terminal__line">test password::tests::verify_accepts_right_password_and_rejects_wrong_one ... ok</span><span class="terminal__line">test password::tests::blocking_wrappers_work_and_unknown_hash_is_false ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.08s</span><span class="terminal__line">…</span></pre>
+</div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>lib の単体テストが <code>3 passed; 0 failed; 1 ignored</code> になり、続く health・posts・users のテストも成功すれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">認証情報とセッションのテーブルを追加する</h3>
+        </div>
+        <div class="step__body">
+          <p>メールアドレスとパスワードのハッシュを保存する <code>credentials</code> と、発行したトークンを保存する <code>sessions</code> の 2 つのテーブルを足します。まず、今の適用状況を見ます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate info</span><span class="terminal__line">error: error returned from database: (code: 14) unable to open database file</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo "exit=$?"</span><span class="terminal__line">exit=1</span></pre>
+</div>
+          <p><code>app.db</code> はコピーしていないので、接続先の DB ファイルがまだ無く、エラーになります。先にマイグレーションのファイルを作ります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate add create_credentials_and_sessions</span><span class="terminal__line">Creating migrations/0003_create_credentials_and_sessions.sql</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls migrations</span><span class="terminal__line">0001_create_users.sql</span><span class="terminal__line">0002_create_posts.sql</span><span class="terminal__line">0003_create_credentials_and_sessions.sql</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat migrations/0003_create_credentials_and_sessions.sql</span><span class="terminal__line">-- Add migration script here</span></pre>
+</div>
+          <p>連番の <code>0003_</code> が付きました。中身のコメントを消し、次の内容で上書きします。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SQL</span>
+    <span class="code-block__filename">migrations/0003_create_credentials_and_sessions.sql</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-sql">CREATE TABLE credentials (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL
+);
+CREATE TABLE sessions (
+    token_hash BLOB PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX sessions_user_id ON sessions (user_id);</code></pre>
+</div>
+          <ul>
+            <li><code>credentials.user_id</code>: 主キーで、<code>users(id)</code> を参照します。user 1 人につき 1 行です。</li>
+            <li><code>email TEXT NOT NULL UNIQUE COLLATE NOCASE</code>: 大文字と小文字を区別せずに重複を禁止します。アプリ側でも小文字にそろえてから保存するので（ステップ 5）、二重の守りになります。DB 側の <code>NOCASE</code> は、アプリを通さずに入れた行に対する保険です。</li>
+            <li><code>password_hash</code>: ステップ 2 の PHC 形式の文字列です。</li>
+            <li><code>sessions.token_hash BLOB PRIMARY KEY</code>: トークンの SHA-256（32 バイト）です。トークンそのものは保存しません（ステップ 6）。</li>
+            <li><code>expires_at INTEGER</code>: 有効期限を UNIX 秒（1970 年 1 月 1 日からの秒数）で持ちます。</li>
+            <li><code>ON DELETE CASCADE</code>: user を削除すると、その user の認証情報とセッションも一緒に削除されます。</li>
+          </ul>
+          <p><code>users</code> に列を足さず、別のテーブルにしたのには理由があります。<code>users</code> を返す既存のコード（<code>SELECT id, name</code> と <code>User { id, name }</code>）は、このままで安全です。もし <code>users</code> に <code>password_hash</code> の列があると、<code>SELECT *</code> などで、うっかり応答に含めてしまう危険があります。SQLite の <code>ALTER TABLE ... ADD COLUMN</code> では、<code>UNIQUE</code> や、既存の行がある表に既定値の無い <code>NOT NULL</code> の列を追加できないことも理由です。</p>
+          <p><code>sqlx database create</code> で <code>DATABASE_URL</code> の DB ファイルを作り、マイグレーションを適用します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx database create</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo "exit=$?"</span><span class="terminal__line">exit=0</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate info</span><span class="terminal__line">1/pending create users</span><span class="terminal__line">2/pending create posts</span><span class="terminal__line">3/pending create credentials and sessions</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate run</span><span class="terminal__line">Applied 1/migrate create users (665.458µs)</span><span class="terminal__line">Applied 2/migrate create posts (878.083µs)</span><span class="terminal__line">Applied 3/migrate create credentials and sessions (447.791µs)</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate info</span><span class="terminal__line">1/installed create users</span><span class="terminal__line">2/installed create posts</span><span class="terminal__line">3/installed create credentials and sessions</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 app.db '.schema credentials' '.schema sessions'</span><span class="terminal__line">CREATE TABLE credentials (</span><span class="terminal__line">    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,</span><span class="terminal__line">    email TEXT NOT NULL UNIQUE COLLATE NOCASE,</span><span class="terminal__line">    password_hash TEXT NOT NULL</span><span class="terminal__line">);</span><span class="terminal__line">CREATE TABLE sessions (</span><span class="terminal__line">    token_hash BLOB PRIMARY KEY,</span><span class="terminal__line">    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,</span><span class="terminal__line">    expires_at INTEGER NOT NULL,</span><span class="terminal__line">    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))</span><span class="terminal__line">);</span><span class="terminal__line">CREATE INDEX sessions_user_id ON sessions (user_id);</span></pre>
+</div>
+          <p><code>sqlx database create</code> は何も表示せずに終わります。<code>Applied</code> の所要時間は実行ごとに変わります。</p>
+          <p><code>sqlx::migrate!()</code> は、ビルドの時点でマイグレーションのファイルを埋め込みます。09 のつまずきポイントで見たとおり、ファイルを足しただけでは再ビルドされないことがあるので、<code>touch</code> してからビルドします。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> touch src/main.rs</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build 2&gt;&amp;1 | tail -3</span><span class="terminal__line">   Compiling authentication v0.1.0 (/path/to/10-authentication)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.69s</span></pre>
+</div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>sqlx migrate info</code> に 3 件とも <code>installed</code> と表示され、<code>.schema</code> の出力がマイグレーションの SQL と同じなら OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">登録をトランザクションで実装する</h3>
+        </div>
+        <div class="step__body">
+          <p><code>POST /auth/register</code> を作ります。この段階の応答は <code>{"user": {...}}</code> だけで、トークンはステップ 6 で足します。</p>
+          <p>重複したメールアドレスを表す <code>Conflict</code>（409）を <code>AppError</code> に足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/error.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  pub enum AppError {</span><span class="diff-line">      NotFound(&amp;'static str),</span><span class="diff-line diff-line--add">+     Conflict(&amp;'static str),</span><span class="diff-line">      Validation(BTreeMap&lt;String, Vec&lt;String&gt;&gt;),</span><span class="diff-line">      Database(sqlx::Error),</span><span class="diff-line">  ...</span><span class="diff-line">                  error_response(StatusCode::NOT_FOUND, "not_found", message)</span><span class="diff-line">              }</span><span class="diff-line diff-line--add">+             AppError::Conflict(message) =&gt; {</span><span class="diff-line diff-line--add">+                 error_response(StatusCode::CONFLICT, "conflict", message)</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line">              AppError::Validation(fields) =&gt; {</span><span class="diff-line">                  let body = ErrorBody {</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>登録のハンドラから <code>User</code> を組み立てられるよう、フィールドを <code>pub</code> にします。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/users.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  #[derive(Clone, Serialize, sqlx::FromRow)]</span><span class="diff-line">  pub struct User {</span><span class="diff-line diff-line--remove">-     id: i64,</span><span class="diff-line diff-line--remove">-     name: String,</span><span class="diff-line diff-line--add">+     pub id: i64,</span><span class="diff-line diff-line--add">+     pub name: String,</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>登録のハンドラを <code>src/routes/auth.rs</code> に新しく作ります。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src/routes/auth.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">use axum::{Json, extract::State, extract::rejection::JsonRejection, http::StatusCode};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+use crate::error::AppError;
+use crate::password::hash_password_blocking;
+use crate::routes::users::User;
+use crate::state::AppState;
+
+// password を持つので Debug / Serialize は付けない（付けるとログや応答にうっかり出せてしまう）
+#[derive(Deserialize)]
+pub struct RegisterRequest {
+    name: String,
+    email: String,
+    password: String,
+}
+
+// 検証と正規化を済ませた入力
+struct NewAccount {
+    name: String,
+    email: String,
+    password: String,
+}
+
+impl RegisterRequest {
+    // 不正なフィールドは全部まとめて 1 回の 422 で返す
+    fn validate(self) -&gt; Result&lt;NewAccount, AppError&gt; {
+        let mut fields = BTreeMap::new();
+
+        let name = self.name.trim().to_string();
+        if !(1..=50).contains(&amp;name.chars().count()) {
+            fields.insert(
+                "name".to_string(),
+                vec!["name must be 1 to 50 characters".to_string()],
+            );
+        }
+
+        // メールアドレスは前後の空白を取って小文字にそろえる
+        let email = self.email.trim().to_lowercase();
+        if !email.contains('@') || email.len() &gt; 254 {
+            fields.insert(
+                "email".to_string(),
+                vec!["email must contain @ and be 254 characters or less".to_string()],
+            );
+        }
+
+        // 下限 15 は NIST SP 800-63B-4（パスワードだけで認証する場合は 15 文字以上）に合わせた値。上限は極端に長い入力を弾くため
+        if !(15..=128).contains(&amp;self.password.chars().count()) {
+            fields.insert(
+                "password".to_string(),
+                vec!["password must be 15 to 128 characters".to_string()],
+            );
+        }
+
+        if fields.is_empty() {
+            Ok(NewAccount {
+                name,
+                email,
+                password: self.password,
+            })
+        } else {
+            Err(AppError::Validation(fields))
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct RegisterResponse {
+    user: User,
+}
+
+pub async fn register(
+    State(state): State&lt;AppState&gt;,
+    payload: Result&lt;Json&lt;RegisterRequest&gt;, JsonRejection&gt;,
+) -&gt; Result&lt;(StatusCode, Json&lt;RegisterResponse&gt;), AppError&gt; {
+    let Json(payload) = payload?;
+    let account = payload.validate()?;
+
+    // ハッシュ計算はトランザクションを開く前に済ませる（計算中にトランザクションを持ち続けない）
+    let password_hash = hash_password_blocking(account.password).await?;
+
+    // users と credentials の 2 つの INSERT を 1 つのトランザクションにする。
+    // 途中で `return Err(...)` すると tx が drop され、それまでの INSERT は自動でロールバックされる
+    let mut tx = state.pool.begin().await?;
+    let user = sqlx::query_as::&lt;_, User&gt;("INSERT INTO users (name) VALUES (?) RETURNING id, name")
+        .bind(&amp;account.name)
+        .fetch_one(&amp;mut *tx)
+        .await?;
+    let inserted =
+        sqlx::query("INSERT INTO credentials (user_id, email, password_hash) VALUES (?, ?, ?)")
+            .bind(user.id)
+            .bind(&amp;account.email)
+            .bind(&amp;password_hash)
+            .execute(&amp;mut *tx)
+            .await;
+    match inserted {
+        Ok(_) =&gt; {}
+        // email の UNIQUE 制約に違反した = すでに登録されているメールアドレス
+        Err(sqlx::Error::Database(error)) if error.is_unique_violation() =&gt; {
+            return Err(AppError::Conflict("email already registered"));
+        }
+        Err(error) =&gt; return Err(error.into()),
+    }
+    tx.commit().await?;
+
+    Ok((StatusCode::CREATED, Json(RegisterResponse { user })))
+}</code></pre>
+</div>
+          <ul>
+            <li><code>RegisterRequest</code> には <code>Debug</code> も <code>Serialize</code> も付けません。パスワードを持つ型にこれらを付けると、<code>{:?}</code> でのログへの出力や、応答への混入が 1 行でできてしまうためです。</li>
+            <li><code>validate</code> は、不正な項目を全部まとめて 1 回の 422 で返します（09 と同じ考え方）。<code>name</code> は前後の空白を除いて 1〜50 文字、<code>email</code> は前後の空白を除いて小文字にそろえ、<code>@</code> を含む 254 文字以下、<code>password</code> は 15〜128 文字です。</li>
+            <li>下限の 15 文字は、NIST SP 800-63B の 2025 年の改訂（<a href="https://pages.nist.gov/800-63-4/sp800-63b.html">SP 800-63B-4</a>）に合わせた値です。この改訂は、パスワードだけで認証する場合は 15 文字以上を求め、8 文字は多要素認証の一部として使う場合の下限としています。上限の 128 文字は、同じ文書の「64 文字以上を受け付ける」を満たしたうえで、極端に長い入力を受け付けないための値です。</li>
+            <li>ハッシュ計算は、トランザクションを開く（<code>pool.begin()</code>）<strong>前</strong>に済ませます。計算をトランザクションの中（最初の <code>INSERT</code> の後）に置くと、その間 SQLite の書き込みロックを持ち続け、ほかの書き込みを待たせます。<code>begin()</code> の直後に置いても、計算の間プールの接続を 1 本占有します。</li>
+            <li>トランザクションは <code>state.pool.begin().await?</code> で始め、各クエリに <code>&amp;mut *tx</code> を渡し、最後に <code>tx.commit()</code> で確定します。<code>commit</code> を呼ばずに関数を抜けると（<code>return Err(...)</code> や <code>?</code> を含む）、<code>tx</code> が破棄され、それまでの <code>INSERT</code> は自動でロールバックされます。</li>
+            <li><code>&amp;mut *tx</code> は、<code>Transaction</code> を参照外し（<code>Deref</code>）した先の接続（<code>SqliteConnection</code>）を借りる書き方です。<code>*</code> を忘れて <code>&amp;mut tx</code> と書いたときのエラーは、つまずきポイントに載せています。</li>
+            <li>メールアドレスの重複は、DB の <code>UNIQUE</code> 制約の違反（<code>is_unique_violation()</code>）で判定し、409 を返します。「先に <code>SELECT</code> で存在を確かめてから <code>INSERT</code> する」書き方だと、同じメールアドレスのリクエストが同時に 2 つ来たときに、両方とも通ってしまいます。</li>
+          </ul>
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">登録の 409 は、メールアドレスが登録済みかどうかを教えてしまう</p>
+              <p>ログインでは失敗の理由を区別しません（ステップ 6）。一方、登録の 409 からは「このメールアドレスは登録済み」と分かるので、登録済みのメールアドレスを調べる（列挙する）手段に使えます。実務では、メールアドレスの確認（確認のメールを送るフロー）を組み合わせて避けます。このレッスンでは扱いません。</p>
+            </div>
+          </div>
+          <p>ルートを追加します。<code>/auth/register</code> は、API キーのミドルウェアを掛けない（誰でも呼べる）側に置きます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+ pub mod auth;</span><span class="diff-line">  mod health;</span><span class="diff-line">  pub mod posts;</span><span class="diff-line">  ...</span><span class="diff-line">      Router::new()</span><span class="diff-line">          .route("/health", get(health::health))</span><span class="diff-line diff-line--add">+         .route("/auth/register", post(auth::register))</span><span class="diff-line">          .route("/users", get(users::list_users))</span><span class="diff-line">          .route("/users/{id}", get(users::get_user))</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>結合テストを <code>tests/auth.rs</code> に新しく作ります。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tests/auth.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">mod common;
+
+use axum::http::StatusCode;
+use common::{get, json_request, send, test_app};
+use sqlx::SqlitePool;
+
+fn register_body(name: &amp;str, email: &amp;str, password: &amp;str) -&gt; String {
+    serde_json::json!({ "name": name, "email": email, "password": password }).to_string()
+}
+
+fn register_request(
+    name: &amp;str,
+    email: &amp;str,
+    password: &amp;str,
+) -&gt; axum::http::Request&lt;axum::body::Body&gt; {
+    json_request(
+        "POST",
+        "/auth/register",
+        None,
+        &amp;register_body(name, email, password),
+    )
+}
+
+#[sqlx::test]
+async fn register_creates_user_and_stores_only_the_hash(pool: SqlitePool) {
+    let app = test_app(pool.clone());
+
+    let (status, body) = send(
+        app.clone(),
+        register_request("alice", "alice@example.com", "password-123456"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["user"]["name"], "alice");
+    // 応答にはパスワードもハッシュもメールアドレスも含めない
+    assert_eq!(body["user"].as_object().unwrap().len(), 2);
+    assert!(!body.to_string().contains("password"));
+
+    // DB には平文ではなく argon2id のハッシュ（PHC 文字列）が入っている
+    let stored: String = sqlx::query_scalar(
+        "SELECT password_hash FROM credentials WHERE email = 'alice@example.com'",
+    )
+    .fetch_one(&amp;pool)
+    .await
+    .unwrap();
+    assert!(stored.starts_with("$argon2id$"));
+    assert!(!stored.contains("password-123456"));
+
+    // 登録した user は既存の GET /users からも見える
+    let (_, users) = send(app, get("/users")).await;
+    assert_eq!(
+        users,
+        serde_json::json!([{ "id": body["user"]["id"], "name": "alice" }])
+    );
+}
+
+#[sqlx::test]
+async fn register_trims_and_lowercases_the_email(pool: SqlitePool) {
+    let (status, _) = send(
+        test_app(pool.clone()),
+        register_request("alice", "  Alice@Example.COM ", "password-123456"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let email: String = sqlx::query_scalar("SELECT email FROM credentials")
+        .fetch_one(&amp;pool)
+        .await
+        .unwrap();
+    assert_eq!(email, "alice@example.com");
+}
+
+#[sqlx::test]
+async fn register_with_duplicate_email_is_conflict_and_rolls_back(pool: SqlitePool) {
+    let app = test_app(pool.clone());
+    let (status, _) = send(
+        app.clone(),
+        register_request("alice", "alice@example.com", "password-123456"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // 大文字小文字だけが違うメールも重複として扱う
+    let (status, body) = send(
+        app,
+        register_request("mallory", "ALICE@example.com", "another-password"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["code"], "conflict");
+
+    // 2 回目の users への INSERT はロールバックされ、mallory の行は残らない
+    let names: Vec&lt;String&gt; = sqlx::query_scalar("SELECT name FROM users ORDER BY id")
+        .fetch_all(&amp;pool)
+        .await
+        .unwrap();
+    assert_eq!(names, vec!["alice".to_string()]);
+}
+
+#[sqlx::test]
+async fn register_reports_every_invalid_field_at_once(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool.clone()),
+        register_request("   ", "no-at-sign", "short"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["code"], "validation_failed");
+    for field in ["name", "email", "password"] {
+        assert!(body["error"]["fields"][field].is_array(), "{field}");
+    }
+    assert_eq!(
+        body["error"]["fields"]["password"][0],
+        "password must be 15 to 128 characters"
+    );
+
+    // 検証で弾かれたときは何も保存されない
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&amp;pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[sqlx::test]
+async fn register_rejects_a_password_over_128_characters(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        register_request("alice", "alice@example.com", &amp;"x".repeat(129)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["error"]["fields"]["password"].is_array());
+}</code></pre>
+</div>
+          <ul>
+            <li><code>register_creates_user_and_stores_only_the_hash</code>: 応答にパスワードもハッシュもメールアドレスも含まれず、DB には <code>$argon2id$</code> で始まる文字列が入っていることを確かめます。</li>
+            <li><code>register_with_duplicate_email_is_conflict_and_rolls_back</code>: 大文字と小文字だけが違うメールアドレスで 409 になり、2 人目（mallory）の <code>users</code> の行がロールバックされて残らないことを確かめます。</li>
+            <li>残りの 3 件は、メールアドレスの正規化、まとめて返す 422（<code>password</code> の文言が 15〜128 文字の規則になっていることも確かめる）、129 文字のパスワードの 422 です。</li>
+          </ul>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">…</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-22e452d6cabf048f)</span><span class="terminal__line"></span><span class="terminal__line">running 5 tests</span><span class="terminal__line">test register_rejects_a_password_over_128_characters ... ok</span><span class="terminal__line">test register_reports_every_invalid_field_at_once ... ok</span><span class="terminal__line">test register_trims_and_lowercases_the_email ... ok</span><span class="terminal__line">test register_creates_user_and_stores_only_the_hash ... ok</span><span class="terminal__line">test register_with_duplicate_email_is_conflict_and_rolls_back ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s</span><span class="terminal__line">…</span></pre>
+</div>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: トランザクションを使わないと、途中で失敗したときに中途半端なユーザーが残る</summary>
+            <div class="disclosure__body">
+          <p><code>tx</code> を使わずにプールへ直接クエリを送ると、どうなるかを試した結果です。手元で実行する必要はありません。</p>
+          <p><code>src/routes/auth.rs</code> の 2 つのクエリの <code>&amp;mut *tx</code> を <code>&amp;state.pool</code> に置き換え（<code>tx</code> は開くだけで使わない）、重複のテストを実行しました。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sed -i '' 's/\.fetch_one(&amp;mut \*tx)/.fetch_one(\&amp;state.pool)/; s/\.execute(&amp;mut \*tx)/.execute(\&amp;state.pool)/' src/routes/auth.rs</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test auth duplicate 2&gt;&amp;1 | tail -25</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.72s</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-22e452d6cabf048f)</span><span class="terminal__line"></span><span class="terminal__line">running 1 test</span><span class="terminal__line">test register_with_duplicate_email_is_conflict_and_rolls_back ... FAILED</span><span class="terminal__line"></span><span class="terminal__line">failures:</span><span class="terminal__line"></span><span class="terminal__line">---- register_with_duplicate_email_is_conflict_and_rolls_back stdout ----</span><span class="terminal__line">POST /auth/register -&gt; 201 Created (18.795958ms)</span><span class="terminal__line">POST /auth/register -&gt; 409 Conflict (16.215458ms)</span><span class="terminal__line"></span><span class="terminal__line">thread 'register_with_duplicate_email_is_conflict_and_rolls_back' (10025022) panicked at tests/auth.rs:97:5:</span><span class="terminal__line">assertion `left == right` failed</span><span class="terminal__line">  left: ["alice", "mallory"]</span><span class="terminal__line"> right: ["alice"]</span><span class="terminal__line">note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line">failures:</span><span class="terminal__line">    register_with_duplicate_email_is_conflict_and_rolls_back</span><span class="terminal__line"></span><span class="terminal__line">test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.05s</span><span class="terminal__line"></span><span class="terminal__line">error: test failed, to rerun pass `--test auth`</span></pre>
+</div>
+          <p>2 回目の登録では、1 つ目の <code>INSERT</code> で <code>users</code> に mallory が入ります。そのあと 2 つ目の <code>INSERT</code> がメールアドレスの重複で失敗し、409 を返しました。トランザクションの外で実行した 1 つ目の <code>INSERT</code> は取り消されないので、登録は失敗したのに、認証情報の無い mallory が <code>users</code> に残りました。元に戻すと 5 件とも成功します。</p>
+            </div>
+          </details>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>tests/auth.rs</code> の 5 件を含めて、33 件のテストが成功すれば OK です（ほかに計測用の 1 件が ignored になります）。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">トークンを発行し、ログインを実装する</h3>
+        </div>
+        <div class="step__body">
+          <p>登録とログインに成功したら、トークンを返します。クライアントは以降のリクエストでこのトークンを送り、サーバーは <code>sessions</code> と照合して利用者を特定します（照合の処理は 11 で作ります）。トークンの生成とハッシュを <code>src/token.rs</code> に新しく作ります。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src/token.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use sha2::{Digest, Sha256};
+
+// 32 バイトの乱数を base64url（パディング無し、43 文字）にした、意味を持たない（不透明な）トークンを作る
+pub fn generate_token() -&gt; Result&lt;String, getrandom::Error&gt; {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&amp;mut bytes)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+// DB にはトークンそのものではなく SHA-256（32 バイト）だけを保存する。
+// 乱数が十分に長いので、パスワードのような遅いハッシュ（argon2）は要らない
+pub fn hash_token(token: &amp;str) -&gt; Vec&lt;u8&gt; {
+    Sha256::digest(token.as_bytes()).to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_is_43_url_safe_characters_and_never_repeats() {
+        let first = generate_token().unwrap();
+        let second = generate_token().unwrap();
+        assert_eq!(first.len(), 43);
+        assert!(
+            first
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn hash_is_sha256_of_the_token_string() {
+        // SHA-256("abc") の既知の値（NIST のテストベクトル）
+        let hash = hash_token("abc");
+        let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
+        assert_eq!(
+            hex,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li><code>generate_token</code>: 32 バイト（256 ビット）の乱数を <code>getrandom::fill</code> で取り、base64url（パディング無し）で 43 文字の文字列にします。中身に意味を持たない、不透明な文字列です。</li>
+            <li><code>hash_token</code>: トークンの SHA-256（32 バイト）を返します。DB に保存するのは、このハッシュだけです。</li>
+            <li>平文で保存しない理由: DB が漏れたとき、<code>sessions</code> の中身がそのまま使えるトークンだと、全員になりすませてしまいます。ハッシュだけなら、DB からトークンを復元できません。</li>
+            <li>SHA-256 で足りる理由: パスワードと違い、256 ビットの乱数は総当たりで当てられません。argon2 のような遅いハッシュは要りません。遅くすると、リクエストのたびの照合が重くなるだけです。</li>
+            <li>ハッシュするのは、受け取った 43 文字の文字列（UTF-8 のバイト列）です。base64 をデコードした 32 バイトではありません。11 でトークンを照合するときも、同じ方法でハッシュします。</li>
+          </ul>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  pub mod routes;</span><span class="diff-line">  pub mod state;</span><span class="diff-line diff-line--add">+ pub mod token;</span><span class="diff-line"> </span><span class="diff-line">  use axum::Router;</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>トークンの有効期間を設定に足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/config.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      pub database_url: String,</span><span class="diff-line">      pub api_key: String,</span><span class="diff-line diff-line--add">+     pub session_ttl_secs: i64,</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">              .filter(|value| !value.is_empty())</span><span class="diff-line">              .ok_or(ConfigError::Missing("API_KEY"))?;</span><span class="diff-line diff-line--add">+         // セッション（トークン）の有効期間。既定は 7 日</span><span class="diff-line diff-line--add">+         let session_ttl_secs = match env::var("SESSION_TTL_SECS") {</span><span class="diff-line diff-line--add">+             Ok(value) =&gt; value</span><span class="diff-line diff-line--add">+                 .parse()</span><span class="diff-line diff-line--add">+                 .ok()</span><span class="diff-line diff-line--add">+                 .filter(|secs| *secs &gt; 0)</span><span class="diff-line diff-line--add">+                 .ok_or(ConfigError::Invalid("SESSION_TTL_SECS", value))?,</span><span class="diff-line diff-line--add">+             Err(_) =&gt; 604800,</span><span class="diff-line diff-line--add">+         };</span><span class="diff-line"> </span><span class="diff-line">          Ok(Config {</span><span class="diff-line">  ...</span><span class="diff-line">              database_url,</span><span class="diff-line">              api_key,</span><span class="diff-line diff-line--add">+             session_ttl_secs,</span><span class="diff-line">          })</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">              .field("database_url", &amp;self.database_url)</span><span class="diff-line">              .field("api_key", &amp;"***")</span><span class="diff-line diff-line--add">+             .field("session_ttl_secs", &amp;self.session_ttl_secs)</span><span class="diff-line">              .finish()</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">.env.example（.env にも同じ 2 行を足す）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  # 開発用のダミー値。本番では十分に長いランダムな値を実環境変数で渡す</span><span class="diff-line">  API_KEY=change-me-dev-only</span><span class="diff-line diff-line--add">+ # ログインで発行するトークンの有効期間（秒）。省略すると 604800（7 日）</span><span class="diff-line diff-line--add">+ SESSION_TTL_SECS=604800</span></pre>
+</div>
+          <ul>
+            <li><code>SESSION_TTL_SECS</code> の既定は 604800 秒（7 日）です。0 以下や数値でない値は、起動時のエラー（<code>ConfigError::Invalid</code>）にします。</li>
+            <li><code>Debug</code> の出力にも <code>session_ttl_secs</code> を足します。<code>api_key</code> は 09 と同じく <code>***</code> に置き換えたままです。</li>
+          </ul>
+          <p>ログインの失敗を表す <code>Unauthorized</code>（401）を <code>AppError</code> に足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/error.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      Json,</span><span class="diff-line">      extract::rejection::{JsonRejection, QueryRejection},</span><span class="diff-line diff-line--remove">-     http::StatusCode,</span><span class="diff-line diff-line--add">+     http::{HeaderValue, StatusCode, header::WWW_AUTHENTICATE},</span><span class="diff-line">      response::{IntoResponse, Response},</span><span class="diff-line">  };</span><span class="diff-line">  ...</span><span class="diff-line">      NotFound(&amp;'static str),</span><span class="diff-line">      Conflict(&amp;'static str),</span><span class="diff-line diff-line--add">+     Unauthorized(&amp;'static str),</span><span class="diff-line">      Validation(BTreeMap&lt;String, Vec&lt;String&gt;&gt;),</span><span class="diff-line">      Database(sqlx::Error),</span><span class="diff-line">  ...</span><span class="diff-line">                  error_response(StatusCode::CONFLICT, "conflict", message)</span><span class="diff-line">              }</span><span class="diff-line diff-line--add">+             AppError::Unauthorized(message) =&gt; {</span><span class="diff-line diff-line--add">+                 let mut response =</span><span class="diff-line diff-line--add">+                     error_response(StatusCode::UNAUTHORIZED, "unauthorized", message);</span><span class="diff-line diff-line--add">+                 response</span><span class="diff-line diff-line--add">+                     .headers_mut()</span><span class="diff-line diff-line--add">+                     .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));</span><span class="diff-line diff-line--add">+                 response</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line">              AppError::Validation(fields) =&gt; {</span><span class="diff-line">                  let body = ErrorBody {</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>401 の応答には <code>WWW-Authenticate: Bearer</code> ヘッダーを付け、Bearer トークンで認証する API であることを示します。09 から残る API キーの 401（<code>require_api_key</code>）には付きません。API キーは 11 で外すので、そのままにしています。</p>
+          <p><code>src/routes/auth.rs</code> を、トークンの発行とログインを含む形に変えます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/auth.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  use axum::{Json, extract::State, extract::rejection::JsonRejection, http::StatusCode};</span><span class="diff-line">  use serde::{Deserialize, Serialize};</span><span class="diff-line diff-line--add">+ use sqlx::SqliteConnection;</span><span class="diff-line">  use std::collections::BTreeMap;</span><span class="diff-line"> </span><span class="diff-line">  use crate::error::AppError;</span><span class="diff-line diff-line--remove">- use crate::password::hash_password_blocking;</span><span class="diff-line diff-line--add">+ use crate::password::{hash_password_blocking, verify_password_blocking};</span><span class="diff-line">  use crate::routes::users::User;</span><span class="diff-line">  use crate::state::AppState;</span><span class="diff-line diff-line--add">+ use crate::token::{generate_token, hash_token};</span><span class="diff-line"> </span><span class="diff-line">  // password を持つので Debug / Serialize は付けない（付けるとログや応答にうっかり出せてしまう）</span><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">  #[derive(Serialize)]</span><span class="diff-line diff-line--remove">- pub struct RegisterResponse {</span><span class="diff-line diff-line--add">+ pub struct AuthResponse {</span><span class="diff-line">      user: User,</span><span class="diff-line diff-line--add">+     token: String,</span><span class="diff-line diff-line--add">+     // 有効期限（UNIX 秒）</span><span class="diff-line diff-line--add">+     expires_at: i64,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // 新しいトークンを作り、ハッシュだけを sessions に保存して (平文のトークン, expires_at) を返す。</span><span class="diff-line diff-line--add">+ // 期限は DB の時計（unixepoch()）に有効期間を足して決める</span><span class="diff-line diff-line--add">+ async fn issue_session(</span><span class="diff-line diff-line--add">+     conn: &amp;mut SqliteConnection,</span><span class="diff-line diff-line--add">+     user_id: i64,</span><span class="diff-line diff-line--add">+     ttl_secs: i64,</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;(String, i64), AppError&gt; {</span><span class="diff-line diff-line--add">+     let token = generate_token()</span><span class="diff-line diff-line--add">+         .map_err(|error| AppError::Internal(format!("generate token failed: {error}")))?;</span><span class="diff-line diff-line--add">+     let expires_at: i64 = sqlx::query_scalar(</span><span class="diff-line diff-line--add">+         "INSERT INTO sessions (token_hash, user_id, expires_at) \</span><span class="diff-line diff-line--add">+          VALUES (?, ?, unixepoch() + ?) RETURNING expires_at",</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .bind(hash_token(&amp;token))</span><span class="diff-line diff-line--add">+     .bind(user_id)</span><span class="diff-line diff-line--add">+     .bind(ttl_secs)</span><span class="diff-line diff-line--add">+     .fetch_one(conn)</span><span class="diff-line diff-line--add">+     .await?;</span><span class="diff-line diff-line--add">+     Ok((token, expires_at))</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line">      payload: Result&lt;Json&lt;RegisterRequest&gt;, JsonRejection&gt;,</span><span class="diff-line diff-line--remove">- ) -&gt; Result&lt;(StatusCode, Json&lt;RegisterResponse&gt;), AppError&gt; {</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;(StatusCode, Json&lt;AuthResponse&gt;), AppError&gt; {</span><span class="diff-line">      let Json(payload) = payload?;</span><span class="diff-line">      let account = payload.validate()?;</span><span class="diff-line">  ...</span><span class="diff-line">      let password_hash = hash_password_blocking(account.password).await?;</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     // users と credentials の 2 つの INSERT を 1 つのトランザクションにする。</span><span class="diff-line diff-line--add">+     // users・credentials・sessions の 3 つの INSERT を 1 つのトランザクションにする。</span><span class="diff-line">      // 途中で `return Err(...)` すると tx が drop され、それまでの INSERT は自動でロールバックされる</span><span class="diff-line">      let mut tx = state.pool.begin().await?;</span><span class="diff-line">  ...</span><span class="diff-line">          Err(error) =&gt; return Err(error.into()),</span><span class="diff-line">      }</span><span class="diff-line diff-line--add">+     let (token, expires_at) =</span><span class="diff-line diff-line--add">+         issue_session(&amp;mut tx, user.id, state.config.session_ttl_secs).await?;</span><span class="diff-line">      tx.commit().await?;</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     Ok((StatusCode::CREATED, Json(RegisterResponse { user })))</span><span class="diff-line diff-line--add">+     Ok((</span><span class="diff-line diff-line--add">+         StatusCode::CREATED,</span><span class="diff-line diff-line--add">+         Json(AuthResponse {</span><span class="diff-line diff-line--add">+             user,</span><span class="diff-line diff-line--add">+             token,</span><span class="diff-line diff-line--add">+             expires_at,</span><span class="diff-line diff-line--add">+         }),</span><span class="diff-line diff-line--add">+     ))</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[derive(Deserialize)]</span><span class="diff-line diff-line--add">+ pub struct LoginRequest {</span><span class="diff-line diff-line--add">+     email: String,</span><span class="diff-line diff-line--add">+     password: String,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // 失敗の理由（メールが無い / パスワードが違う）は区別せず、常に同じ文言を返す</span><span class="diff-line diff-line--add">+ const LOGIN_FAILED: &amp;str = "invalid email or password";</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[derive(sqlx::FromRow)]</span><span class="diff-line diff-line--add">+ struct Credential {</span><span class="diff-line diff-line--add">+     user_id: i64,</span><span class="diff-line diff-line--add">+     name: String,</span><span class="diff-line diff-line--add">+     password_hash: String,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ pub async fn login(</span><span class="diff-line diff-line--add">+     State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--add">+     payload: Result&lt;Json&lt;LoginRequest&gt;, JsonRejection&gt;,</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;Json&lt;AuthResponse&gt;, AppError&gt; {</span><span class="diff-line diff-line--add">+     let Json(payload) = payload?;</span><span class="diff-line diff-line--add">+     let email = payload.email.trim().to_lowercase();</span><span class="diff-line diff-line--add">+     // 登録時の上限（128 文字）を超えるパスワードは正しいはずが無いので、無駄な計算を省くため失敗扱いにする（argon2 の計算時間は入力の長さにほとんど左右されない）</span><span class="diff-line diff-line--add">+     if payload.password.chars().count() &gt; 128 {</span><span class="diff-line diff-line--add">+         return Err(AppError::Unauthorized(LOGIN_FAILED));</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let credential = sqlx::query_as::&lt;_, Credential&gt;(</span><span class="diff-line diff-line--add">+         "SELECT c.user_id, u.name, c.password_hash \</span><span class="diff-line diff-line--add">+          FROM credentials c JOIN users u ON u.id = c.user_id WHERE c.email = ?",</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .bind(&amp;email)</span><span class="diff-line diff-line--add">+     .fetch_optional(&amp;state.pool)</span><span class="diff-line diff-line--add">+     .await?;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // メールが登録されていなくても、ダミーのハッシュで検証して同じ時間をかける</span><span class="diff-line diff-line--add">+     let hash = credential.as_ref().map(|c| c.password_hash.clone());</span><span class="diff-line diff-line--add">+     let verified = verify_password_blocking(payload.password, hash).await?;</span><span class="diff-line diff-line--add">+     let credential = match credential {</span><span class="diff-line diff-line--add">+         Some(credential) if verified =&gt; credential,</span><span class="diff-line diff-line--add">+         _ =&gt; return Err(AppError::Unauthorized(LOGIN_FAILED)),</span><span class="diff-line diff-line--add">+     };</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let mut conn = state.pool.acquire().await?;</span><span class="diff-line diff-line--add">+     let (token, expires_at) =</span><span class="diff-line diff-line--add">+         issue_session(&amp;mut conn, credential.user_id, state.config.session_ttl_secs).await?;</span><span class="diff-line diff-line--add">+     Ok(Json(AuthResponse {</span><span class="diff-line diff-line--add">+         user: User {</span><span class="diff-line diff-line--add">+             id: credential.user_id,</span><span class="diff-line diff-line--add">+             name: credential.name,</span><span class="diff-line diff-line--add">+         },</span><span class="diff-line diff-line--add">+         token,</span><span class="diff-line diff-line--add">+         expires_at,</span><span class="diff-line diff-line--add">+     }))</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <ul>
+            <li><code>issue_session</code>: トークンを作り、そのハッシュを <code>sessions</code> に <code>INSERT</code> して、平文のトークンと <code>expires_at</code> を返します。期限は DB の時計（<code>unixepoch() + ?</code>）で決め、<code>RETURNING</code> で受け取ります。11 で期限切れを判定するときも DB の <code>unixepoch()</code> と比べるので、同じ時計を使うことになります。</li>
+            <li><code>issue_session</code> は <code>&amp;mut SqliteConnection</code> を受け取ります。登録では <code>&amp;mut tx</code> を渡し（<code>Deref</code> で中の接続になる）、トランザクションの中で実行します。これで <code>users</code>・<code>credentials</code>・<code>sessions</code> の 3 つの <code>INSERT</code> が 1 つのトランザクションになります。ログインでは <code>pool.acquire()</code> で得た接続を渡します。</li>
+            <li><code>login</code>: メールアドレスを登録時と同じく正規化し、<code>credentials</code> と <code>users</code> を結合して引きます。パスワードの検証結果と合わせて <code>match</code> で判定し、未登録のメールアドレスもパスワード違いも、同じ <code>LOGIN_FAILED</code> の 401 にします。</li>
+            <li>未登録のメールアドレスでも、<code>verify_password_blocking(.., None)</code> がダミーのハッシュで同じ計算をするので、応答時間がほぼ同じになります。</li>
+            <li>128 文字を超えるパスワードは、DB を引かず、ハッシュも計算せずに同じ 401 を返します（理由は下の読み物）。</li>
+            <li><code>Credential</code> は <code>password_hash</code> を持ちますが、<code>Serialize</code> を付けていません。応答に使う <code>AuthResponse</code> と <code>User</code> は、パスワードもハッシュも持ちません。<code>LoginRequest</code> にも <code>Debug</code>・<code>Serialize</code> を付けません。</li>
+          </ul>
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">ログインの失敗で理由を区別しない理由</p>
+              <p>「そのメールアドレスは登録されていません」と返すと、ログインの API を使って、あるメールアドレスが登録済みかどうかを調べられてしまいます。そこで、ステータス・ヘッダー・本文を同じにし、ダミーのハッシュで応答時間の差も小さくしています。</p>
+            </div>
+          </div>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: 128 文字を超えるパスワードを、計算せずに 401 にする理由</summary>
+            <div class="disclosure__body">
+          <p>登録できるパスワードは 128 文字までです。それより長いパスワードで登録された利用者はいないので、ログインで 128 文字を超えるパスワードが来たら、正しいパスワードのはずがありません。</p>
+          <p>そこで、128 文字を超える入力は、DB を引かず、ハッシュも計算せずに同じ 401 を返します。登録済みかどうかに関係なく同じ応答・同じ速さ（実測 1 ミリ秒前後）なので、登録の有無の手がかりにはなりません。分かるのは「128 文字を超えると速く返る」ことだけで、これは公開している検証規則と同じ情報です。argon2 の計算時間は入力の長さにほとんど左右されないので、この早期リターンは DoS 対策ではなく、無駄な計算を省くためのものです。</p>
+          <p>テスト <code>login_with_a_huge_password_is_unauthorized</code> は、100,000 文字のパスワードで同じ文言の 401 になることを確かめます。</p>
+            </div>
+          </details>
+          <p>ルートを追加します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          .route("/health", get(health::health))</span><span class="diff-line">          .route("/auth/register", post(auth::register))</span><span class="diff-line diff-line--add">+         .route("/auth/login", post(auth::login))</span><span class="diff-line">          .route("/users", get(users::list_users))</span><span class="diff-line">          .route("/users/{id}", get(users::get_user))</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>テスト用の設定にも <code>session_ttl_secs</code> を足します。テストでは 1 時間（3600 秒）にします。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">tests/common/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">  pub const TEST_API_KEY: &amp;str = "test-api-key";</span><span class="diff-line diff-line--add">+ pub const TEST_SESSION_TTL_SECS: i64 = 3600;</span><span class="diff-line"> </span><span class="diff-line">  pub fn test_app(pool: SqlitePool) -&gt; Router {</span><span class="diff-line">  ...</span><span class="diff-line">          database_url: "unused".to_string(),</span><span class="diff-line">          api_key: TEST_API_KEY.to_string(),</span><span class="diff-line diff-line--add">+         session_ttl_secs: TEST_SESSION_TTL_SECS,</span><span class="diff-line">      };</span><span class="diff-line">      build_app(AppState {</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>tests/auth.rs</code> に、トークンとログインのテストを足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">tests/auth.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  mod common;</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ use app::token::hash_token;</span><span class="diff-line">  use axum::http::StatusCode;</span><span class="diff-line diff-line--remove">- use common::{get, json_request, send, test_app};</span><span class="diff-line diff-line--add">+ use common::{TEST_SESSION_TTL_SECS, get, json_request, send, test_app};</span><span class="diff-line">  use sqlx::SqlitePool;</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">      assert_eq!(status, StatusCode::CREATED);</span><span class="diff-line">      assert_eq!(body["user"]["name"], "alice");</span><span class="diff-line diff-line--remove">-     // 応答にはパスワードもハッシュもメールアドレスも含めない</span><span class="diff-line diff-line--add">+     // 応答のキーは user・token・expires_at だけ。パスワードもハッシュもメールアドレスも含めない</span><span class="diff-line diff-line--add">+     let mut keys: Vec&lt;&amp;String&gt; = body.as_object().unwrap().keys().collect();</span><span class="diff-line diff-line--add">+     keys.sort();</span><span class="diff-line diff-line--add">+     assert_eq!(keys, ["expires_at", "token", "user"]);</span><span class="diff-line">      assert_eq!(body["user"].as_object().unwrap().len(), 2);</span><span class="diff-line">      assert!(!body.to_string().contains("password"));</span><span class="diff-line">  ...</span><span class="diff-line">      assert!(body["error"]["fields"]["password"].is_array());</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ fn login_request(email: &amp;str, password: &amp;str) -&gt; axum::http::Request&lt;axum::body::Body&gt; {</span><span class="diff-line diff-line--add">+     json_request(</span><span class="diff-line diff-line--add">+         "POST",</span><span class="diff-line diff-line--add">+         "/auth/login",</span><span class="diff-line diff-line--add">+         None,</span><span class="diff-line diff-line--add">+         &amp;serde_json::json!({ "email": email, "password": password }).to_string(),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ fn now_unix() -&gt; i64 {</span><span class="diff-line diff-line--add">+     std::time::SystemTime::now()</span><span class="diff-line diff-line--add">+         .duration_since(std::time::UNIX_EPOCH)</span><span class="diff-line diff-line--add">+         .unwrap()</span><span class="diff-line diff-line--add">+         .as_secs() as i64</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn register_returns_a_token_and_stores_only_its_hash(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let (status, body) = send(</span><span class="diff-line diff-line--add">+         test_app(pool.clone()),</span><span class="diff-line diff-line--add">+         register_request("alice", "alice@example.com", "password-123456"),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::CREATED);</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // トークンは 32 バイトの乱数を base64url（パディング無し）にした 43 文字</span><span class="diff-line diff-line--add">+     let token = body["token"].as_str().unwrap();</span><span class="diff-line diff-line--add">+     assert_eq!(token.len(), 43);</span><span class="diff-line diff-line--add">+     // 期限は「今 + TTL」あたり</span><span class="diff-line diff-line--add">+     let expires_at = body["expires_at"].as_i64().unwrap();</span><span class="diff-line diff-line--add">+     assert!((expires_at - (now_unix() + TEST_SESSION_TTL_SECS)).abs() &lt;= 5);</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // sessions には SHA-256（32 バイト）だけがあり、平文のトークンは入っていない</span><span class="diff-line diff-line--add">+     let stored: Vec&lt;u8&gt; = sqlx::query_scalar("SELECT token_hash FROM sessions")</span><span class="diff-line diff-line--add">+         .fetch_one(&amp;pool)</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+     assert_eq!(stored.len(), 32);</span><span class="diff-line diff-line--add">+     assert_eq!(stored, hash_token(token));</span><span class="diff-line diff-line--add">+     let plain_matches: i64 =</span><span class="diff-line diff-line--add">+         sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE token_hash = CAST(? AS BLOB)")</span><span class="diff-line diff-line--add">+             .bind(token)</span><span class="diff-line diff-line--add">+             .fetch_one(&amp;pool)</span><span class="diff-line diff-line--add">+             .await</span><span class="diff-line diff-line--add">+             .unwrap();</span><span class="diff-line diff-line--add">+     assert_eq!(plain_matches, 0);</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn login_with_right_password_returns_a_new_token(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let app = test_app(pool.clone());</span><span class="diff-line diff-line--add">+     let (_, registered) = send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         register_request("alice", "alice@example.com", "password-123456"),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // メールの大文字小文字や前後の空白は無視する</span><span class="diff-line diff-line--add">+     let (status, body) = send(app, login_request(" Alice@Example.com ", "password-123456")).await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::OK);</span><span class="diff-line diff-line--add">+     assert_eq!(body["user"], registered["user"]);</span><span class="diff-line diff-line--add">+     assert_ne!(body["token"], registered["token"]); // ログインのたびに新しいトークン</span><span class="diff-line diff-line--add">+     assert!(body["expires_at"].as_i64().unwrap() &gt; now_unix());</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")</span><span class="diff-line diff-line--add">+         .fetch_one(&amp;pool)</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+     assert_eq!(sessions, 2); // 登録時とログイン時</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn login_failures_look_the_same(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let app = test_app(pool.clone());</span><span class="diff-line diff-line--add">+     send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         register_request("alice", "alice@example.com", "password-123456"),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let (wrong_status, wrong_password) = send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         login_request("alice@example.com", "wrong-password"),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     let (unknown_status, unknown_email) = send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         login_request("nobody@example.com", "password-123456"),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // パスワード違いも未登録のメールも、同じステータス・同じ本文</span><span class="diff-line diff-line--add">+     assert_eq!(wrong_status, StatusCode::UNAUTHORIZED);</span><span class="diff-line diff-line--add">+     assert_eq!(unknown_status, StatusCode::UNAUTHORIZED);</span><span class="diff-line diff-line--add">+     assert_eq!(wrong_password, unknown_email);</span><span class="diff-line diff-line--add">+     assert_eq!(wrong_password["error"]["code"], "unauthorized");</span><span class="diff-line diff-line--add">+     assert_eq!(</span><span class="diff-line diff-line--add">+         wrong_password["error"]["message"],</span><span class="diff-line diff-line--add">+         "invalid email or password"</span><span class="diff-line diff-line--add">+     );</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // 失敗したログインではセッションが増えない（登録時の 1 件のまま）</span><span class="diff-line diff-line--add">+     let sessions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")</span><span class="diff-line diff-line--add">+         .fetch_one(&amp;pool)</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+     assert_eq!(sessions, 1);</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn login_failure_has_www_authenticate_header(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     use tower::ServiceExt;</span><span class="diff-line diff-line--add">+     let response = test_app(pool)</span><span class="diff-line diff-line--add">+         .oneshot(login_request("nobody@example.com", "password-123456"))</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);</span><span class="diff-line diff-line--add">+     assert_eq!(response.headers()["www-authenticate"], "Bearer");</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn login_with_a_huge_password_is_unauthorized(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let (status, body) = send(</span><span class="diff-line diff-line--add">+         test_app(pool),</span><span class="diff-line diff-line--add">+         login_request("alice@example.com", &amp;"x".repeat(100_000)),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::UNAUTHORIZED);</span><span class="diff-line diff-line--add">+     assert_eq!(body["error"]["message"], "invalid email or password");</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <ul>
+            <li><code>register_returns_a_token_and_stores_only_its_hash</code>: トークンが 43 文字で、<code>sessions</code> には SHA-256 の 32 バイトだけがあり、平文のトークンは入っていないことを確かめます。</li>
+            <li><code>login_with_right_password_returns_a_new_token</code>: 前後に空白があり、大文字を含むメールアドレスでもログインでき、登録時とは別のトークンが返ることを確かめます。</li>
+            <li><code>login_failures_look_the_same</code>: パスワード違いと未登録のメールアドレスで、ステータスと本文が同じことを確かめます。</li>
+            <li><code>login_failure_has_www_authenticate_header</code>・<code>login_with_a_huge_password_is_unauthorized</code>: ヘッダーと、長すぎるパスワードの扱いを確かめます。</li>
+          </ul>
+          <p>テストを実行します。lib と <code>tests/auth.rs</code> 以外の出力は省略しています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling authentication v0.1.0 (/path/to/10-authentication)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-2030045cad007562)</span><span class="terminal__line"></span><span class="terminal__line">running 6 tests</span><span class="terminal__line">test password::tests::measure_hash_and_verify_time ... ignored</span><span class="terminal__line">test token::tests::hash_is_sha256_of_the_token_string ... ok</span><span class="terminal__line">test token::tests::token_is_43_url_safe_characters_and_never_repeats ... ok</span><span class="terminal__line">test password::tests::hash_has_phc_format_and_differs_every_time ... ok</span><span class="terminal__line">test password::tests::verify_accepts_right_password_and_rejects_wrong_one ... ok</span><span class="terminal__line">test password::tests::blocking_wrappers_work_and_unknown_hash_is_false ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.11s</span><span class="terminal__line"></span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-6b105b9350aac080)</span><span class="terminal__line"></span><span class="terminal__line">running 0 tests</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line"></span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-22e452d6cabf048f)</span><span class="terminal__line"></span><span class="terminal__line">running 10 tests</span><span class="terminal__line">test register_rejects_a_password_over_128_characters ... ok</span><span class="terminal__line">test register_reports_every_invalid_field_at_once ... ok</span><span class="terminal__line">test login_with_a_huge_password_is_unauthorized ... ok</span><span class="terminal__line">test register_returns_a_token_and_stores_only_its_hash ... ok</span><span class="terminal__line">test register_creates_user_and_stores_only_the_hash ... ok</span><span class="terminal__line">test register_trims_and_lowercases_the_email ... ok</span><span class="terminal__line">test login_failure_has_www_authenticate_header ... ok</span><span class="terminal__line">test register_with_duplicate_email_is_conflict_and_rolls_back ... ok</span><span class="terminal__line">test login_with_right_password_returns_a_new_token ... ok</span><span class="terminal__line">test login_failures_look_the_same ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s</span><span class="terminal__line">…</span></pre>
+</div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>lib の 5 件、<code>tests/auth.rs</code> の 10 件、残りの health・posts・users の 25 件が成功すれば OK です（ほかに ignored が 1 件）。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">空の DB から curl で登録とログインを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>サーバーを起動して、<code>curl</code> で確かめます。<code>app.db</code> は、ステップ 4 でテーブルを作っただけで、行はありません。途中で行を入れて試した場合は、<code>app.db</code>（と、あれば <code>app.db-shm</code>・<code>app.db-wal</code>）を削除してから起動してください。起動時に <code>sqlx::migrate!()</code> が 3 つのマイグレーションを適用します。</p>
+          <p>1 つ目のターミナルでサーバーを起動します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">config: Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", api_key: "***", session_ttl_secs: 604800 }</span><span class="terminal__line">listening on 127.0.0.1:8080</span></pre>
+</div>
+          <p>起動ログの <code>Config</code> に <code>session_ttl_secs</code> が出ます。<code>api_key</code> は <code>***</code> に隠れます。パスワードは <code>Config</code> に含まれません。</p>
+          <p>2 つ目のターミナルで、登録を 3 回試します。正しい登録、大文字と小文字だけが違うメールアドレスでの登録、不正な入力の順です。<code>date</code> ヘッダーは実行した時刻になります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate info</span><span class="terminal__line">1/installed create users</span><span class="terminal__line">2/installed create posts</span><span class="terminal__line">3/installed create credentials and sessions</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/register -H 'content-type: application/json' -d '{"name":"alice","email":"alice@example.com","password":"password-123456"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 110</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"user":{"id":1,"name":"alice"},"token":"RNY5SCj8mgFM97W2z-3zfgDsog95N8A8WvPNoQ9sc84","expires_at":1791704208}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/register -H 'content-type: application/json' -d '{"name":"mallory","email":"ALICE@example.com","password":"another-password"}'</span><span class="terminal__line">HTTP/1.1 409 Conflict</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 66</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"conflict","message":"email already registered"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/register -H 'content-type: application/json' -d '{"name":"  ","email":"no-at-sign","password":"short"}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 236</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"validation_failed","message":"invalid request","fields":{"email":["email must contain @ and be 254 characters or less"],"name":["name must be 1 to 50 characters"],"password":["password must be 15 to 128 characters"]}}}</span></pre>
+</div>
+          <ul>
+            <li>登録は 201 で、本文は <code>{"user": {"id", "name"}, "token", "expires_at"}</code> です。<code>token</code> と <code>expires_at</code> の値は実行ごとに変わります。</li>
+            <li><code>ALICE@example.com</code> の登録は、409 の <code>conflict</code> になりました。</li>
+            <li>不正な 3 つの項目は、1 回の 422 にまとまります。<code>fields</code> のキーは <code>BTreeMap</code> なので、アルファベット順に並びます。</li>
+          </ul>
+          <p>続けて、ログインを 3 回試します。正しいパスワード、間違ったパスワード、未登録のメールアドレスの順です。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/login -H 'content-type: application/json' -d '{"email":"alice@example.com","password":"password-123456"}'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 110</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"user":{"id":1,"name":"alice"},"token":"NhMjFDDroryYi0Kq4GbEBYy2YlqRRdBSvlPYzevgVpk","expires_at":1791704208}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/login -H 'content-type: application/json' -d '{"email":"alice@example.com","password":"wrong-password"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">www-authenticate: Bearer</span><span class="terminal__line">content-length: 71</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"invalid email or password"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/login -H 'content-type: application/json' -d '{"email":"nobody@example.com","password":"password-123456"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">www-authenticate: Bearer</span><span class="terminal__line">content-length: 71</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"invalid email or password"}}</span></pre>
+</div>
+          <ul>
+            <li>ログインの成功は 200 で、登録時とは別のトークンが返りました。</li>
+            <li>パスワード違いと未登録のメールアドレスの 401 は、ヘッダー（<code>www-authenticate: Bearer</code>）も本文も全く同じです。応答からは、メールアドレスが登録済みかどうかを区別できません。</li>
+          </ul>
+          <p>user の一覧と、DB の中身を見ます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 25</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"}]</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 -header app.db 'SELECT id, name FROM users;'</span><span class="terminal__line">id|name</span><span class="terminal__line">1|alice</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 -header app.db 'SELECT user_id, email, password_hash FROM credentials;'</span><span class="terminal__line">user_id|email|password_hash</span><span class="terminal__line">1|alice@example.com|$argon2id$v=19$m=19456,t=2,p=1$D9pCcQHOZgE4DVO2H8tTWQ$nRbnQmMbRU/LXVjTtTKjFFsJYl/4YWrLU7n6YXmIByQ</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 -header app.db 'SELECT hex(token_hash) AS token_hash_hex, length(token_hash) AS len, user_id, expires_at, created_at FROM sessions;'</span><span class="terminal__line">token_hash_hex|len|user_id|expires_at|created_at</span><span class="terminal__line">BAF3029F67C056DF4277FB5097761691691BC9E16EA8620E0E98865291028A6D|32|1|1791704208|2026-10-04T07:36:48Z</span><span class="terminal__line">E3FE8444E857042C01EC3563A0184643E8202B5E6A297F29171391BFF4A40795|32|1|1791704208|2026-10-04T07:36:48Z</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> date -u +%s</span><span class="terminal__line">1791099408</span></pre>
+</div>
+          <ul>
+            <li><code>GET /users</code> が返すのは <code>{id, name}</code> だけです。メールアドレスもハッシュも含みません。</li>
+            <li><code>credentials.password_hash</code> は、<code>$argon2id$v=19$m=19456,t=2,p=1$&lt;ソルト&gt;$&lt;ハッシュ&gt;</code> の PHC 文字列です。DB を見ても、パスワードは分かりません。</li>
+            <li><code>sessions</code> には、登録時とログイン時の 2 行があります。<code>token_hash</code> は 32 バイトの BLOB（16 進数で 64 文字）で、応答で返したトークン（43 文字）は、どこにも保存されていません。</li>
+            <li><code>expires_at</code>（1791704208）は、直後の <code>date -u +%s</code>（1791099408）に 604800（7 日）を足した値と一致します。</li>
+          </ul>
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">本番では HTTPS が前提</p>
+              <p>ここでは、ローカルのサーバーに HTTP で送って試しています。登録とログインのリクエストの本文にはパスワードが、応答にはトークンが、そのまま入っています。本番では、HTTPS で通信を暗号化することが前提です。</p>
+            </div>
+          </div>
+          <p>同じ DB で続けて、id の採番と、API キーで作った user の扱いを確かめます。bob を登録し、<code>POST /users</code>（API キー）で carol を作って、carol でログインを試します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/register -H 'content-type: application/json' -d '{"name":"bob","email":"bob@example.com","password":"password-456789"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 108</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"user":{"id":2,"name":"bob"},"token":"ZIzUqu9S_lNozY9GW9ZPDG_rjHEWPxe63_yo5PECGo4","expires_at":1791704208}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/users -H 'content-type: application/json' -H 'x-api-key: change-me-dev-only' -d '{"name":"carol"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":3,"name":"carol"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/login -H 'content-type: application/json' -d '{"email":"carol@example.com","password":"password-123456"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">www-authenticate: Bearer</span><span class="terminal__line">content-length: 71</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"invalid email or password"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 -header app.db 'SELECT u.id, u.name, c.email FROM users u LEFT JOIN credentials c ON c.user_id = u.id ORDER BY u.id;'</span><span class="terminal__line">id|name|email</span><span class="terminal__line">1|alice|alice@example.com</span><span class="terminal__line">2|bob|bob@example.com</span><span class="terminal__line">3|carol|</span></pre>
+</div>
+          <ul>
+            <li>bob の id は 2 でした。409 になった mallory の <code>INSERT</code> はロールバックされたので、id は飛んでいません。</li>
+            <li>API キーで作った carol（id 3）には <code>credentials</code> の行が無く、<code>LEFT JOIN</code> で <code>email</code> が空になります。carol のメールアドレスでのログインは、未登録のメールアドレスと区別のつかない 401 です。このように、10 の時点ではログインできない user を <code>POST /users</code> で作れてしまいます。11 で <code>/users</code> の書き込み系を外し、登録を <code>/auth/register</code> に一本化します。</li>
+          </ul>
+          <p>最後に、パスワードの下限の境界を確かめます。14 文字の <code>password-12345</code> と、15 文字の <code>password-123456</code> で登録します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/register -H 'content-type: application/json' -d '{"name":"dave","email":"dave@example.com","password":"password-12345"}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 130</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"validation_failed","message":"invalid request","fields":{"password":["password must be 15 to 128 characters"]}}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/register -H 'content-type: application/json' -d '{"name":"erin","email":"erin@example.com","password":"password-123456"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 109</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:36:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"user":{"id":4,"name":"erin"},"token":"kOTkbkTxjX1e1Hx2sAseBG3-eIbnnKSQKM-OkpxqVN4","expires_at":1791704208}</span></pre>
+</div>
+          <ul>
+            <li>14 文字は 422 で、<code>fields</code> には <code>password</code> だけが入ります。15 文字は 201 で登録でき、id は 4 になりました。</li>
+          </ul>
+          <p>1 つ目のターミナル（サーバー）には、リクエストごとに 1 行が出ています。全体は次のとおりです。最後の 2 行は、境界の確認（dave・erin）の分です。時間は実行ごとに変わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">config: Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", api_key: "***", session_ttl_secs: 604800 }</span><span class="terminal__line">listening on 127.0.0.1:8080</span><span class="terminal__line">POST /auth/register -&gt; 201 Created (16.110625ms)</span><span class="terminal__line">POST /auth/register -&gt; 409 Conflict (15.274625ms)</span><span class="terminal__line">POST /auth/register -&gt; 422 Unprocessable Entity (78.458µs)</span><span class="terminal__line">POST /auth/login -&gt; 200 OK (15.722333ms)</span><span class="terminal__line">POST /auth/login -&gt; 401 Unauthorized (15.179125ms)</span><span class="terminal__line">POST /auth/login -&gt; 401 Unauthorized (16.20525ms)</span><span class="terminal__line">GET /users -&gt; 200 OK (273µs)</span><span class="terminal__line">POST /auth/register -&gt; 201 Created (13.060875ms)</span><span class="terminal__line">POST /users -&gt; 201 Created (316.583µs)</span><span class="terminal__line">POST /auth/login -&gt; 401 Unauthorized (12.006916ms)</span><span class="terminal__line">POST /auth/register -&gt; 422 Unprocessable Entity (74.292µs)</span><span class="terminal__line">POST /auth/register -&gt; 201 Created (12.862916ms)</span></pre>
+</div>
+          <p>ログに出るのは、メソッド・URI・ステータス・所要時間だけです（これまでの <code>log_request</code>）。パスワード、トークン、リクエストの本文は出ません。422 は検証だけで返すので速く、ハッシュ計算を伴う登録とログインは十数ミリ秒かかっています。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: ログインの失敗の応答時間を比べる</summary>
+            <div class="disclosure__body">
+          <p>執筆時に、パスワード違い（登録済みのメールアドレス）と未登録のメールアドレスのログインを交互に 6 回送り、<code>curl</code> で応答時間（秒）を測った結果です。手元で実行する必要はありません。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">wrong-password: 0.014483   unknown-email: 0.014024
+wrong-password: 0.014660   unknown-email: 0.014177
+wrong-password: 0.014655   unknown-email: 0.013038
+wrong-password: 0.013713   unknown-email: 0.013072
+wrong-password: 0.012900   unknown-email: 0.012995
+wrong-password: 0.012690   unknown-email: 0.012967</code></pre>
+</div>
+          <p>どちらも 12〜15 ミリ秒の範囲に入り、差は測定のばらつきの範囲でした。未登録のメールアドレスでも、ダミーのハッシュで同じ計算をしているためです。計測時は、ほかのプロセスが動いている環境でした。時間は環境とその負荷で変わります。</p>
+            </div>
+          </details>
+          <p>確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>登録が 201・409・422、ログインが 200・401・401 で返り、2 つの 401 が全く同じ応答になれば OK です。14 文字のパスワードが 422、15 文字が 201 になることも確かめてください。<code>sessions</code> の <code>token_hash</code> が 32 バイトで、応答のトークンと違う値であることも確かめてください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">テストを全件実行して仕上げる</h3>
+        </div>
+        <div class="step__body">
+          <p>最後に、フォーマット・clippy・テストをまとめて確かめます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check &amp;&amp; cargo clippy --all-targets -- -D warnings &amp;&amp; cargo test</span><span class="terminal__line">    Checking typenum v1.20.1</span><span class="terminal__line">    …（依存クレートの Checking / Compiling の行が続く。初回は約 120 行）</span><span class="terminal__line">    Checking authentication v0.1.0 (/path/to/10-authentication)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.86s</span><span class="terminal__line">   Compiling authentication v0.1.0 (/path/to/10-authentication)</span><span class="terminal__line">    …（以下 cargo test の出力。下の grep の結果を参照）</span></pre>
+</div>
+          <p><code>cargo fmt --check</code> は何も表示せずに成功し、<code>cargo clippy</code> は警告なしで <code>Finished</code> の行まで進みます。2 回目以降は、clippy の部分は <code>Checking authentication</code> と <code>Finished</code> の 2 行だけになります。<code>cargo test</code> の結果から、テストバイナリーと集計の行だけを抜き出すと次のとおりです。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test 2&gt;&amp;1 | grep -E "Running|test result"</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-2030045cad007562)</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.08s</span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-6b105b9350aac080)</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-22e452d6cabf048f)</span><span class="terminal__line">test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-3d6bd6612aa54a32)</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-6548155403c7863c)</span><span class="terminal__line">test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-54f75e54823f5135)</span><span class="terminal__line">test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+          <p>合計 40 件（lib 5・auth 10・health 1・posts 18・users 6）が成功しました。ほかに、計測用の <code>#[ignore]</code> のテストが 1 件あります。計測用のテストは <code>cargo test --lib measure -- --ignored --nocapture</code> で実行できます。</p>
+          <p>10 の完成時点のエンドポイントは次のとおりです。</p>
+          <table>
+            <thead>
+              <tr><th>メソッド</th><th>パス</th><th>認証</th><th>備考</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>GET</td><td><code>/health</code></td><td>不要</td><td>06 から</td></tr>
+              <tr><td>POST</td><td><code>/auth/register</code></td><td>不要</td><td><strong>10 で追加</strong>。201、409 <code>conflict</code>、422</td></tr>
+              <tr><td>POST</td><td><code>/auth/login</code></td><td>不要</td><td><strong>10 で追加</strong>。200、401 <code>unauthorized</code>（常に同じ文言）、422（JSON の型違い）</td></tr>
+              <tr><td>GET</td><td><code>/users</code>、<code>/users/{id}</code></td><td>不要</td><td>06 から</td></tr>
+              <tr><td>POST / PUT / DELETE</td><td><code>/users</code>、<code>/users/{id}</code></td><td>API キー</td><td>06 から。11 で削除する</td></tr>
+              <tr><td>GET</td><td><code>/posts</code>、<code>/posts/{id}</code></td><td>不要</td><td>09 から</td></tr>
+              <tr><td>POST / PATCH / DELETE</td><td><code>/posts</code>、<code>/posts/{id}</code></td><td>API キー</td><td>09 から。11 でトークンと所有者の検査に変える</td></tr>
+              <tr><td>POST</td><td><code>/posts/{id}/like</code></td><td>不要</td><td>09 から</td></tr>
+            </tbody>
+          </table>
+          <p>最終的なディレクトリ構成は次のとおりです（<code>target/</code> は省略）。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">10-authentication/
+  .env                 # ローカル専用（コミットしない）。SESSION_TTL_SECS を追加
+  .env.example         # SESSION_TTL_SECS を追加
+  .gitignore
+  Cargo.toml           # name = "authentication"、4 つのクレートと profile.dev.package を追加
+  Cargo.lock
+  app.db               # 開発用の DB（WAL の app.db-shm・app.db-wal も。コミットしない）
+  migrations/
+    0001_create_users.sql
+    0002_create_posts.sql
+    0003_create_credentials_and_sessions.sql  # credentials と sessions
+  src/
+    main.rs              # 起動時に password::warm_up() を呼ぶ
+    lib.rs               # password・token を追加
+    config.rs            # session_ttl_secs を追加
+    state.rs
+    error.rs             # Conflict・Unauthorized・Internal と Debug を追加
+    middleware.rs
+    password.rs          # argon2id のハッシュ化と検証、spawn_blocking のラッパー（単体テスト 3 件 + 計測用 1 件）
+    token.rs             # トークンの生成と SHA-256（単体テスト 2 件）
+    routes/
+      mod.rs             # /auth/register・/auth/login を追加
+      auth.rs            # 登録とログイン
+      health.rs
+      posts.rs
+      users.rs           # User のフィールドを pub に
+  tests/
+    common/
+      mod.rs             # TEST_SESSION_TTL_SECS を追加
+    auth.rs              # 10 件
+    health.rs            # 1 件
+    posts.rs             # 18 件
+    users.rs             # 6 件</code></pre>
+</div>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: argon2 の最適化を外すと、どれくらい遅くなるか</summary>
+            <div class="disclosure__body">
+          <p>ステップ 2 で足した <code>[profile.dev.package.argon2]</code>・<code>[profile.dev.package.blake2]</code> を外すと、どれくらい遅くなるかを試した結果です。手元で実行する必要はありません。</p>
+          <p>完成したプロジェクトで、設定ありと設定なしの <code>cargo test</code> をそれぞれ 3 回実行しました（ビルドの時間は含めていません）。<code>user</code> は CPU 時間の合計、<code>total</code> は経過時間です。</p>
+              <table>
+                <thead>
+                  <tr><th>項目</th><th>設定なし（3 回）</th><th>設定あり（3 回）</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>tests/auth.rs</code>（10 件）の実行時間</td><td>0.74〜0.80 秒</td><td>0.07〜0.09 秒</td></tr>
+                  <tr><td>lib の単体テスト（5 件。argon2 を使うのは password の 3 件）の実行時間</td><td>1.11〜1.15 秒</td><td>0.07〜0.11 秒</td></tr>
+                  <tr><td><code>cargo test</code> の CPU 時間（<code>user</code>）</td><td>5.54〜5.84 秒</td><td>0.61〜0.75 秒</td></tr>
+                  <tr><td><code>cargo test</code> の経過時間（<code>total</code>）</td><td>2.74〜5.46 秒</td><td>0.95〜3.89 秒</td></tr>
+                </tbody>
+              </table>
+          <p>argon2 を使うテストは約 10 倍速くなり、CPU 時間の合計は 5.5 秒前後から 0.6 秒前後に減りました。argon2 を使わない posts・users のテストには影響しません。経過時間は、テストの並列実行とほかのプロセスの負荷で大きくばらつきました。</p>
+          <p>ハッシュ 1 回の時間も、計測用のテストで測りました。ほかのプロセスが多く動いていた執筆時の環境では、設定なしで約 0.26〜1.2 秒、設定ありで約 20〜25 ミリ秒でした。数値は環境とその負荷で大きく変わるので、目安として読んでください。</p>
+          <p>テストが少ないうちは数秒の差ですが、登録やログインを呼ぶテストが増えるほど、差が積み上がります。</p>
+            </div>
+          </details>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo clippy</code> が警告なしで終わり、40 件のテストが成功すれば完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">argon2 でハッシュ化した PHC 文字列の各部分（方式・パラメータ・ソルト・ハッシュ）を説明でき、同じパスワードでも毎回違う文字列になる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">ハッシュ計算を <code>spawn_blocking</code> で別スレッドに逃がす理由と、2 重の <code>Result</code> の扱いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>[profile.dev.package.argon2]</code> を入れる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>credentials</code> と <code>sessions</code> のテーブルを追加し、<code>users</code> に列を足さない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">登録の 3 つの <code>INSERT</code> を 1 つのトランザクションにまとめ、重複したメールアドレスで 409 になり、行が残らないことを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">DB にはトークンの SHA-256 だけを保存し、平文のトークンが無いことを <code>sqlite3</code> で確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">パスワード違いと未登録のメールアドレスで、全く同じ 401 が返ることを確かめ、その理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>cargo test</code> の 40 件が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>hash_password</code> メソッドが見つからない、古い記事のコードが動かない</p>
+          <p><code>use argon2::password_hash::{PasswordHasher, PasswordVerifier}</code> でトレイトを読み込んでいるか確かめてください。トレイトが見えていないと、メソッドが見つかりません。argon2 0.6 では、<code>SaltString</code> や <code>OsRng</code> でソルトを作る必要はありません。<code>PasswordHash</code> は <code>password_hash::phc::PasswordHash</code> にあります（ステップ 2 を参照）。</p>
+          <p><code>use</code> から <code>PasswordHasher</code>・<code>PasswordVerifier</code> を外してビルドしたときのエラーです（先頭の 1 件。一部を省略）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">error[E0599]: no method named `hash_password` found for struct `Argon2&lt;'key&gt;` in the current scope</span><span class="terminal__line">   --&gt; src/password.rs:9:34</span><span class="terminal__line">    |</span><span class="terminal__line">  9 |     let hash = Argon2::default().hash_password(password.as_bytes())?;</span><span class="terminal__line">    |                                  ^^^^^^^^^^^^^</span><span class="terminal__line">    |</span><span class="terminal__line">   ::: ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/password-hash-0.6.1/src/lib.rs:107:8</span><span class="terminal__line">    |</span><span class="terminal__line">107 |     fn hash_password(&amp;self, password: &amp;[u8]) -&gt; Result&lt;H&gt; {</span><span class="terminal__line">    |        ------------- the method is available for `Argon2&lt;'_&gt;` here</span><span class="terminal__line">    |</span><span class="terminal__line">    = help: items from traits can only be used if the trait is in scope</span><span class="terminal__line">help: there is a method `hash_password_into` with a similar name, but with different arguments</span><span class="terminal__line">   --&gt; ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/argon2-0.6.0/src/lib.rs:285:5</span><span class="terminal__line">    |</span><span class="terminal__line">285 |     pub fn hash_password_into(&amp;self, pwd: &amp;[u8], salt: &amp;[u8], out: &amp;mut [u8]) -&gt; Result&lt;()&gt; {</span><span class="terminal__line">    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span><span class="terminal__line">help: trait `PasswordHasher` which provides `hash_password` is implemented but not in scope; perhaps you want to import it</span><span class="terminal__line">    |</span><span class="terminal__line">  1 + use argon2::PasswordHasher;</span><span class="terminal__line">    |</span><span class="terminal__line">…</span><span class="terminal__line">error: could not compile `authentication` (lib) due to 2 previous errors</span></pre>
+</div>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">テストが極端に遅い</p>
+          <p><code>Cargo.toml</code> に、argon2 と blake2 の <code>opt-level = 3</code>（<code>[profile.dev.package.*]</code>）があるか確かめてください。無いと、debug ビルドの argon2 は最適化されません。ハッシュ 1 回に数百ミリ秒以上かかります（ステップ 8 の読み物を参照）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>`AppError` doesn't implement `Debug`</code></p>
+          <p><code>AppError</code> に <code>#[derive(Debug)]</code> を付ける前に、テストで <code>.unwrap()</code> したときのエラーです（同じエラーが 4 件出るうちの最後の 1 件を抜粋）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">error[E0277]: `AppError` doesn't implement `Debug`</span><span class="terminal__line">    --&gt; src/password.rs:105:62</span><span class="terminal__line">     |</span><span class="terminal__line"> 105 |         assert!(!verify("correct horse battery", None).await.unwrap());</span><span class="terminal__line">     |                                                              ^^^^^^ the trait `Debug` is not implemented for `AppError`</span><span class="terminal__line">     |</span><span class="terminal__line">note: required by a bound in `Result::&lt;T, E&gt;::unwrap`</span><span class="terminal__line">    --&gt; ~/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/src/rust/library/core/src/result.rs:1228:12</span><span class="terminal__line">     |</span><span class="terminal__line">1226 |     pub fn unwrap(self) -&gt; T</span><span class="terminal__line">…</span><span class="terminal__line">help: consider annotating `AppError` with `#[derive(Debug)]`</span><span class="terminal__line">    --&gt;  src/error.rs:38:1</span><span class="terminal__line">     |</span><span class="terminal__line">  38 + #[derive(Debug)]</span><span class="terminal__line">  39 | pub enum AppError {</span><span class="terminal__line">     |</span><span class="terminal__line"></span><span class="terminal__line">For more information about this error, try `rustc --explain E0277`.</span><span class="terminal__line">error: could not compile `authentication` (lib test) due to 4 previous errors</span></pre>
+</div>
+          <p><code>Result::unwrap</code> は、失敗したときにエラーの内容を表示するため、エラーの型に <code>Debug</code> を求めます。<code>error.rs</code> の <code>pub enum AppError</code> の前に <code>#[derive(Debug)]</code> を付けてください（ステップ 3）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>the trait bound `&amp;mut Transaction&lt;'_, Sqlite&gt;: Executor&lt;'_&gt;` is not satisfied</code></p>
+          <p>クエリに <code>&amp;mut *tx</code> ではなく <code>&amp;mut tx</code> を渡したときのエラーです（先頭部分）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">error[E0277]: the trait bound `&amp;mut Transaction&lt;'_, Sqlite&gt;: Executor&lt;'_&gt;` is not satisfied</span><span class="terminal__line">   --&gt; src/routes/auth.rs:87:20</span><span class="terminal__line">    |</span><span class="terminal__line"> 87 |         .fetch_one(&amp;mut tx)</span><span class="terminal__line">    |          --------- ^^^^^^^ the trait `Executor&lt;'_&gt;` is not implemented for `&amp;mut Transaction&lt;'_, Sqlite&gt;`</span><span class="terminal__line">    |          |</span><span class="terminal__line">    |          required by a bound introduced by this call</span></pre>
+</div>
+          <p><code>Executor</code> を実装しているのは、<code>Transaction</code> そのものではなく、中の接続（<code>&amp;mut SqliteConnection</code>）です。<code>&amp;mut *tx</code> と書いて、<code>Deref</code> した先の接続を借ります。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>sqlx migrate info</code> が <code>unable to open database file</code> で失敗する</p>
+          <p>DB ファイル（<code>app.db</code>）がまだありません。<code>sqlx database create</code> で作ってから <code>sqlx migrate run</code> を実行してください（ステップ 4）。sqlx-cli は、カレントディレクトリの <code>.env</code> を読むので、<code>10-authentication</code> ディレクトリで実行します。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>POST /users</code> で作った user でログインできない</p>
+          <p><code>POST /users</code>（API キー）は、<code>users</code> に行を作るだけで、<code>credentials</code> を作りません。ログインできるのは <code>/auth/register</code> で登録した user だけです（ステップ 7）。11 で <code>/users</code> の書き込み系を外し、登録を <code>/auth/register</code> に一本化します。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">新しいマイグレーションを足したのに、起動しても適用されない</p>
+          <p>09 と同じく、<code>sqlx::migrate!()</code> はビルドの時点でマイグレーションを埋め込みます。<code>touch src/main.rs</code> してから <code>cargo build</code> してください。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        パスワードを argon2id でハッシュ化して保存し、登録の 3 つの <code>INSERT</code> を 1 つのトランザクションにまとめました。
+        ログインに成功するとトークンを発行し、DB にはその SHA-256 だけを保存します。
+        ログインの失敗は、理由を区別しない同じ 401 で返します。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>観点</th><th>このレッスンでの扱い</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>パスワードの保存</td><td>argon2id（<code>m=19456,t=2,p=1</code>）の PHC 文字列。ソルトはハッシュ化のたびにランダムに作る。パスワードは 15〜128 文字</td></tr>
+          <tr><td>重い計算</td><td><code>spawn_blocking</code> で別スレッドに逃がす。debug ビルドでも argon2・blake2 だけを最適化する</td></tr>
+          <tr><td>テーブル</td><td><code>credentials</code>（メールアドレスとハッシュ）と <code>sessions</code>（トークンのハッシュと期限）を <code>users</code> と分ける</td></tr>
+          <tr><td>登録</td><td>3 つの <code>INSERT</code> を 1 つのトランザクションに。重複は <code>UNIQUE</code> 違反を 409 に変換する</td></tr>
+          <tr><td>トークン</td><td>32 バイトの乱数を base64url にした 43 文字。DB には SHA-256 だけ。期限は <code>SESSION_TTL_SECS</code>（既定 7 日）</td></tr>
+          <tr><td>ログインの失敗</td><td>理由を区別せず、同じ 401（<code>WWW-Authenticate: Bearer</code> 付き）。未登録でもダミーのハッシュで検証する</td></tr>
+          <tr><td>漏らさない</td><td>パスワードを持つ型に <code>Debug</code>・<code>Serialize</code> を付けない。ログと応答にパスワード・ハッシュ・トークンを出さない</td></tr>
+          <tr><td>残っていること</td><td>トークンの検証、記事の API の保護、ログアウトと <code>/auth/me</code>、<code>/users</code> の書き込み系の削除。11 で扱う。ログインの総当たり対策（レート制限）は 12 で扱う</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/10-authentication</code> の <code>axum/10-authentication/</code> ディレクトリにあります。<code>.env</code> はコミットしていないので、<code>.env.example</code> をコピーして作ってください。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../09-migrations/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">09: マイグレーション運用と記事リソース</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">11: 認証エクストラクタと認可</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
