@@ -1432,7 +1432,7 @@ class TodoRepositoryTest {
   </div>
   <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls files/datastore&quot;</span><span class="terminal__line">run-as: package not debuggable: com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -c &quot;FATAL EXCEPTION&quot;</span><span class="terminal__line">0</span></pre>
 </div>
-          <p>起動し直すと、「完了」のチップが選ばれた状態で、完了済みの Todo だけが出ました。release ビルドは debuggable でないので、<code>run-as</code> は使えず、設定ファイルの中身は見られません。画面の動きで確かめます。R8 で DataStore が動かなくなることはなく、<code>proguard-rules.pro</code> に keep ルールを足す必要はありませんでした。</p>
+          <p>起動し直すと、「完了」のチップが選ばれた状態で、完了済みの Todo だけが出ました。release ビルドは debuggable でないので、<code>run-as</code> は使えず、設定ファイルの中身は見られません。画面の動きで確かめます。R8 で DataStore が動かなくなることはなく、<code>app/src/main/keepRules/rules.keep</code> に keep ルールを足す必要はありませんでした。</p>
           <p>確認が終わったら、作業用ディレクトリの APK を削除し、アプリをアンインストールします。エミュレータと Gradle デーモンも止めます。Gradle デーモンは、プロジェクトのディレクトリに戻ってから止めます。</p>
 
 <div class="terminal">

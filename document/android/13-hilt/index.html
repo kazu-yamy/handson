@@ -1318,7 +1318,7 @@ enum class TodoFilter {
   </div>
   <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -c &quot;FATAL EXCEPTION&quot;</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -b crash | wc -l</span><span class="terminal__line">0</span></pre>
 </div>
-          <p>起動し直すと、「完了」のチップが選ばれた状態でした。クラッシュは記録されていません。<code>proguard-rules.pro</code> に自前の keep ルールを足す必要はありませんでした。</p>
+          <p>起動し直すと、「完了」のチップが選ばれた状態でした。クラッシュは記録されていません。<code>app/src/main/keepRules/rules.keep</code> に自前の keep ルールを足す必要はありませんでした。</p>
           <p>keep ルールが要らなかった理由は、生成されたファイルで確かめられます。生成されたファイルはプロジェクトのディレクトリにあるので、先に作業用ディレクトリから戻ります。Hilt の KSP が、<code>@HiltViewModel</code> の ViewModel 用の keep ルールを生成していました。</p>
 
 <div class="terminal">
@@ -1481,7 +1481,7 @@ enum class TodoFilter {
         ViewModel は <code>@HiltViewModel</code> にして、画面では <code>hiltViewModel()</code> で受け取ります。一覧と詳細で同じ ViewModel を使う作りは 12 までのままです。
         UI テストは <code>HiltTestApplication</code> で動かし、偽物は <code>@TestInstallIn</code> の <code>FakeDataModule</code> でまとめて差し込みました。単体テスト 76 件と、<code>testViewModel()</code> を使う UI テスト 62 件は、ほとんど変えずに通ります。
         最後に <code>TodoFilter</code> を <code>data</code> に移し、<code>data</code> から画面側への依存をなくしました。</p>
-      <p>次の項目（14: WorkManager）では、WorkManager でバックグラウンドの処理を動かします。Worker でも Hilt の部品を使うため、この項目で空にした <code>TodoApplication</code> へ、WorkManager の設定を足す予定です。</p>
+      <p>次の項目（<a href="../14-workmanager/index.html">14: WorkManager で定期バックアップ</a>）では、WorkManager でバックグラウンドの処理を動かします。Worker でも Hilt の部品を使うため、この項目で空にした <code>TodoApplication</code> へ、WorkManager の設定を足す予定です。</p>
 
       <div class="callout callout--note">
             <span class="callout__icon" aria-hidden="true">ℹ️</span>
@@ -1497,10 +1497,10 @@ enum class TodoFilter {
           <span class="lesson-nav__direction">← 前のレッスン</span>
           <span class="lesson-nav__title">12: DataStore で設定を保存</span>
         </a>
-        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
-          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
-          <span class="lesson-nav__title">14: WorkManager</span>
-        </span>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../14-workmanager/index.html">
+          <span class="lesson-nav__direction">次のレッスン →</span>
+          <span class="lesson-nav__title">14: WorkManager で定期バックアップ</span>
+        </a>
       </nav>
 
     </div>
