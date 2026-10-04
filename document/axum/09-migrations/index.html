@@ -1,0 +1,1531 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>09: マイグレーション運用と記事リソース | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">09</li>
+        </ol>
+        <h1 class="lesson-title">マイグレーション運用と記事リソース</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: 08 までの users の API に 2 つ目のテーブルを足し、記事（posts）の API を作りたい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法、SQL の基本（<code>CREATE TABLE</code>・<code>SELECT</code>・<code>UPDATE</code>）、08 で書いた結合テスト（<code>tests/common/mod.rs</code> と <code>#[sqlx::test]</code>）の構成</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../08-integration-test/index.html">08: 結合テスト</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>sqlx-cli を入れ、<code>sqlx migrate info</code>・<code>add</code>・<code>run</code> でマイグレーションを管理する</li>
+          <li>外部キー（<code>REFERENCES ... ON DELETE CASCADE</code>）と索引を持つ <code>posts</code> テーブルを追加する</li>
+          <li><code>SqliteConnectOptions</code> で、外部キー・WAL・待ち時間を指定して DB に接続する</li>
+          <li>記事の作成・取得・更新・削除を実装し、複数の項目の検証エラーを 1 回の 422 にまとめて返す</li>
+          <li>キーセット方式のページネーションで記事の一覧を返す</li>
+          <li>いいねの数を 1 文の <code>UPDATE</code> で原子的に増やす</li>
+          <li>適用済みのマイグレーションを書き換えると何が起きるかを確かめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        このレッスンから、題材に記事（posts）が登場します。
+        08 までの users に 2 つ目のテーブル <code>posts</code> を足し、記事の作成・一覧・取得・更新・削除と「いいね」の API を作ります。
+        ここで決める API の形（パス・JSON のフィールド名・エラーの形）は、以降の項目でも使い続けます。
+      </p>
+      <p>
+        テーブルを足すには、DB の構造を変えるマイグレーションを書きます。
+        08 までは <code>migrations/0001_create_users.sql</code> を 1 つ持ち、サーバーの起動時に適用していました。
+        このレッスンでは、マイグレーションを管理するコマンドラインツール sqlx-cli を使い、新しいマイグレーションの追加と適用状況の確認をコマンドで行います。
+      </p>
+      <p>このレッスンで完成する記事の API は次のとおりです。</p>
+
+      <table>
+        <thead>
+          <tr><th>メソッド</th><th>パス</th><th>API キー</th><th>成功時</th><th>主なエラー</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/posts?limit=&amp;cursor=&amp;author_id=</code></td><td>不要</td><td>200 <code>{"items": [...], "next_cursor": ...}</code></td><td>400（型違い）、422（<code>limit</code> の範囲外）</td></tr>
+          <tr><td>GET</td><td><code>/posts/{id}</code></td><td>不要</td><td>200 記事</td><td>404</td></tr>
+          <tr><td>POST</td><td><code>/posts</code></td><td>必要</td><td>201 記事</td><td>401、422</td></tr>
+          <tr><td>PATCH</td><td><code>/posts/{id}</code></td><td>必要</td><td>200 記事</td><td>401、404、422</td></tr>
+          <tr><td>DELETE</td><td><code>/posts/{id}</code></td><td>必要</td><td>204</td><td>401、404</td></tr>
+          <tr><td>POST</td><td><code>/posts/{id}/like</code></td><td>不要</td><td>200 <code>{"id": ..., "like_count": ...}</code></td><td>404</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--warning">
+        <span class="callout__icon" aria-hidden="true">⚠️</span>
+        <div class="callout__body">
+          <p class="callout__title">このレッスンの API には、わざと残しているセキュリティ上の穴があります</p>
+          <p>09 の時点では、利用者のログイン（認証）がありません。記事の作成・更新・削除は、06 から使っている API キーだけで保護します。</p>
+          <p>そのため、API キーを知っている人なら誰でも、本文の <code>author_id</code> に他人の id を書いて他人の名前で投稿できます。他人の記事を書き換えたり削除したりもできます（ステップ 6 で実際に確かめます）。</p>
+          <p>この穴は、10「パスワードハッシュとログイン」と 11「認証エクストラクタと認可」で直します。このレッスンのコードを、そのまま公開する API に使わないでください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>Rust（rustc）1.99.0 / cargo 1.99.0（Rust edition 2024）で動作を確認しています。</p>
+          <p>クレートは 08 と同じで、追加はありません（sqlx 0.9.0 など）。新しく sqlx-cli 0.9.0 をインストールします。sqlx-cli の版は、プロジェクトの sqlx クレートの版にそろえます。バージョンは執筆時点（2026年10月）のものです。</p>
+          <p>DB の中身を見るために <code>sqlite3</code> コマンドを使う箇所があります（macOS に標準で入っているものを使いました）。手元に無い場合、その確認は読むだけで構いません。</p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">08 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>08 の完成コードを出発点としてコピーします。<code>08-integration-test</code> ディレクトリがある場所で、次のコマンドを実行してください。<code>target/</code>・<code>app.db*</code>・<code>.env</code> はコピーせず、<code>.env</code> は <code>.env.example</code> から作り直します。コマンドは何も表示せずに終わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p 09-migrations</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 09-migrations</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp ../08-integration-test/Cargo.toml ../08-integration-test/Cargo.lock ../08-integration-test/.gitignore ../08-integration-test/.env.example .</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R ../08-integration-test/src ../08-integration-test/migrations ../08-integration-test/tests .</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp .env.example .env</span></pre>
+</div>
+          <p><code>Cargo.toml</code> の <code>name</code> を <code>migrations</code> に変えます。<code>[lib]</code> の <code>name = "app"</code> と <code>[[bin]]</code> の <code>name = "server"</code> は 08 のままにします。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "integration-test"</span><span class="diff-line diff-line--add">+ name = "migrations"</span><span class="diff-line">  version = "0.1.0"</span><span class="diff-line">  edition = "2024"</span></pre>
+</div>
+          <p>ビルドとテストが 08 と同じように通ることを確かめます。<code>cargo build</code> の出力は先頭を省略しています。<code>cargo test</code> は、<code>grep</code> でテスト名と集計の行だけを抜き出しています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   …</span><span class="terminal__line">   Compiling sqlx-macros-core v0.9.0</span><span class="terminal__line">   Compiling sqlx-macros v0.9.0</span><span class="terminal__line">   Compiling sqlx v0.9.0</span><span class="terminal__line">   Compiling migrations v0.1.0 (/path/to/09-migrations)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.39s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test 2&gt;&amp;1 | grep -E 'test result|Running|^test '</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-e53fba3e618312ab)</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-e6a2f77531dd0687)</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-ceb6a1c2ee269341)</span><span class="terminal__line">test health_returns_ok ... ok</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-6371cd2ecf2ad68c)</span><span class="terminal__line">test create_with_empty_name_is_unprocessable ... ok</span><span class="terminal__line">test create_with_broken_json_is_bad_request ... ok</span><span class="terminal__line">test create_without_api_key_is_unauthorized ... ok</span><span class="terminal__line">test get_unknown_user_is_not_found ... ok</span><span class="terminal__line">test list_starts_empty ... ok</span><span class="terminal__line">test create_then_get_user ... ok</span><span class="terminal__line">test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Cargo.toml</code> の <code>name</code> が <code>migrations</code> になり、08 と同じ 7 件（health 1 件・users 6 件）のテストが成功すれば OK です。以降のコマンドは全て <code>09-migrations</code> ディレクトリで実行します。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">sqlx-cli を入れ、マイグレーションの適用状況を見る</h3>
+        </div>
+        <div class="step__body">
+          <p>sqlx-cli は、sqlx のプロジェクトでマイグレーションを作成・適用・確認するためのコマンドです。<code>cargo install</code> でソースからビルドしてインストールします。</p>
+          <p>sqlx-cli は既定で複数の DB に対応した形でビルドされます。<code>--no-default-features</code> で既定の機能を外し、<code>--features sqlite,rustls</code> で SQLite と TLS（rustls）だけを有効にします。対応する DB を絞ると、ビルドするクレートが減ります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo install sqlx-cli --no-default-features --features sqlite,rustls</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">  Installing sqlx-cli v0.9.0</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">     Locking 222 packages to highest compatible versions</span><span class="terminal__line">      Adding console v0.15.11 (available: v0.16.6)</span><span class="terminal__line">      Adding crypto-common v0.1.6 (available: v0.1.7)</span><span class="terminal__line">      Adding dialoguer v0.11.0 (available: v0.12.0)</span><span class="terminal__line">…</span><span class="terminal__line">   Compiling sqlx-core v0.9.0</span><span class="terminal__line">   Compiling sqlx-sqlite v0.9.0</span><span class="terminal__line">…</span><span class="terminal__line">    Finished `release` profile [optimized] target(s) in 30.97s</span><span class="terminal__line">  Installing ~/.cargo/bin/cargo-sqlx</span><span class="terminal__line">  Installing ~/.cargo/bin/sqlx</span><span class="terminal__line">   Installed package `sqlx-cli v0.9.0` (executables `cargo-sqlx`, `sqlx`)</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx --version</span><span class="terminal__line">sqlx-cli 0.9.0</span></pre>
+</div>
+          <p>ビルドには時間がかかります。執筆時の環境（Apple Silicon の Mac、クレートのキャッシュあり）では約 31 秒でした。所要時間は環境で大きく変わり、クレートのダウンロードから始まる初回やコア数の少ないマシンでは、もっと長くかかります。インストール先は <code>~/.cargo/bin</code> で、<code>sqlx</code> と <code>cargo-sqlx</code> の 2 つのコマンドが入ります。</p>
+          <p>マイグレーションの操作は <code>sqlx migrate</code> の下にまとまっています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate --help</span><span class="terminal__line">Group of commands for creating and running migrations</span><span class="terminal__line"></span><span class="terminal__line">Usage: sqlx migrate &lt;COMMAND&gt;</span><span class="terminal__line"></span><span class="terminal__line">Commands:</span><span class="terminal__line">  add           Create a new migration with the given description</span><span class="terminal__line">  run           Run all pending migrations</span><span class="terminal__line">  override      Override migration state, potentially dangerous operations</span><span class="terminal__line">  revert        Revert the latest migration with a down file</span><span class="terminal__line">  info          List all available migrations</span><span class="terminal__line">  build-script  Generate a `build.rs` to trigger recompilation when a new migration is added</span><span class="terminal__line">  help          Print this message or the help of the given subcommand(s)</span><span class="terminal__line"></span><span class="terminal__line">Options:</span><span class="terminal__line">  -h, --help  Print help</span></pre>
+</div>
+          <p>sqlx-cli は、接続先の DB を環境変数 <code>DATABASE_URL</code> から読みます。カレントディレクトリに <code>.env</code> があれば、その中の値も自動で読みます（<code>--no-dotenv</code> で無効にできます）。07 で作った <code>.env</code> の <code>DATABASE_URL</code> を、サーバーと sqlx-cli の両方が使います。</p>
+          <p>まだ <code>app.db</code> が無い状態で、<code>sqlx migrate info</code> を実行して適用状況を見ます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls</span><span class="terminal__line">Cargo.lock</span><span class="terminal__line">Cargo.toml</span><span class="terminal__line">migrations</span><span class="terminal__line">src</span><span class="terminal__line">target</span><span class="terminal__line">tests</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate info</span><span class="terminal__line">1/pending create users</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls</span><span class="terminal__line">app.db</span><span class="terminal__line">Cargo.lock</span><span class="terminal__line">Cargo.toml</span><span class="terminal__line">migrations</span><span class="terminal__line">src</span><span class="terminal__line">target</span><span class="terminal__line">tests</span></pre>
+</div>
+          <ul>
+            <li><code>1/pending create users</code> は、バージョン 1（<code>0001_create_users.sql</code>）がまだ適用されていない（<code>pending</code>）という意味です。説明の <code>create users</code> は、ファイル名の <code>create_users</code> から作られます。</li>
+            <li>状況を見ただけですが、空の <code>app.db</code> ができました。この時点の <code>.env</code> の <code>DATABASE_URL</code> は、07 から使っている <code>sqlite://app.db?mode=rwc</code> です。</li>
+          </ul>
+          <p><code>sqlx migrate run</code> で未適用のマイグレーションを適用し、もう一度 <code>info</code> で確かめます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate run</span><span class="terminal__line">Applied 1/migrate create users (6.729834ms)</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate info</span><span class="terminal__line">1/installed create users</span></pre>
+</div>
+          <p><code>pending</code> が <code>installed</code>（適用済み）に変わりました。かっこ内の時間は実行ごとに変わります。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>sqlx --version</code> が <code>sqlx-cli 0.9.0</code> を表示し、<code>sqlx migrate info</code> が <code>1/installed create users</code> を表示すれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">posts テーブルのマイグレーションを追加し、接続オプションを置き換える</h3>
+        </div>
+        <div class="step__body">
+          <p><code>sqlx migrate add</code> で、新しいマイグレーションのファイルを作ります。引数はマイグレーションの説明で、ファイル名の一部になります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate add create_posts</span><span class="terminal__line">Creating migrations/0002_create_posts.sql</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls migrations</span><span class="terminal__line">0001_create_users.sql</span><span class="terminal__line">0002_create_posts.sql</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat migrations/0002_create_posts.sql</span><span class="terminal__line">-- Add migration script here</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate info</span><span class="terminal__line">1/installed create users</span><span class="terminal__line">2/pending create posts</span></pre>
+</div>
+          <p>ファイル名の先頭は <code>0002_</code> の連番になりました。<code>sqlx migrate add</code> は既存のファイルを見て、連番とタイムスタンプ（<code>YYYYMMDDHHMMSS</code>）のどちらで名前を付けるかを自動で決めます。ヘルプには、マイグレーションが 1 つだけでバージョンが 0 か 1 の場合は連番と判断する、と書かれています。<code>0001</code> だけがあるこのプロジェクトは、これに当てはまります。</p>
+          <p>できたファイルの中身はコメント 1 行だけです。このコメントを消し、次の内容で上書きします。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">SQL</span>
+    <span class="code-block__filename">migrations/0002_create_posts.sql</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-sql">CREATE TABLE posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    like_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+CREATE INDEX posts_author_id_id ON posts (author_id, id);</code></pre>
+</div>
+          <ul>
+            <li><code>author_id INTEGER NOT NULL REFERENCES users(id)</code>: 外部キーです。<code>author_id</code> には <code>users</code> テーブルに実在する <code>id</code> しか入れられません。存在しない id を入れようとすると、DB が外部キー違反のエラーを返します。</li>
+            <li><code>ON DELETE CASCADE</code>: 参照先の user が削除されると、その user の記事も一緒に削除されます（連鎖削除）。ステップ 6 で確かめます。</li>
+            <li><code>like_count</code> はいいねの数で、初期値は 0 です。</li>
+            <li><code>created_at</code>・<code>updated_at</code> は、SQLite の <code>strftime</code> で作った ISO 8601 形式（UTC）の文字列です。日時を扱うクレートは追加せず、Rust 側では <code>String</code> として扱います。秒までの精度です。</li>
+            <li><code>CREATE INDEX posts_author_id_id ON posts (author_id, id)</code>: 「ある著者の記事を id の順に取る」ための索引です。ステップ 5 の一覧の絞り込みで使う条件に合わせています。</li>
+          </ul>
+          <p>次に、サーバーの DB への接続方法を変えます。08 までは <code>SqlitePool::connect</code> に URL を渡すだけでした。ここでは <code>SqliteConnectOptions</code> で接続の設定を細かく指定し、<code>SqlitePoolOptions</code> でプールを作ります。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/main.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  use app::{build_app, config::Config, state::AppState};</span><span class="diff-line diff-line--remove">- use sqlx::SqlitePool;</span><span class="diff-line diff-line--add">+ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};</span><span class="diff-line diff-line--add">+ use std::str::FromStr;</span><span class="diff-line">  use std::sync::Arc;</span><span class="diff-line diff-line--add">+ use std::time::Duration;</span><span class="diff-line"> </span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  ...</span><span class="diff-line">      println!("config: {config:?}");</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     let pool = SqlitePool::connect(&amp;config.database_url).await?;</span><span class="diff-line diff-line--add">+     let options = SqliteConnectOptions::from_str(&amp;config.database_url)?</span><span class="diff-line diff-line--add">+         .create_if_missing(true)</span><span class="diff-line diff-line--add">+         .foreign_keys(true)</span><span class="diff-line diff-line--add">+         .journal_mode(SqliteJournalMode::Wal)</span><span class="diff-line diff-line--add">+         .busy_timeout(Duration::from_secs(5));</span><span class="diff-line diff-line--add">+     let pool = SqlitePoolOptions::new()</span><span class="diff-line diff-line--add">+         .max_connections(5)</span><span class="diff-line diff-line--add">+         .connect_with(options)</span><span class="diff-line diff-line--add">+         .await?;</span><span class="diff-line">      sqlx::migrate!().run(&amp;pool).await?;</span><span class="diff-line"> </span></pre>
+</div>
+          <ul>
+            <li><code>SqliteConnectOptions::from_str</code>: <code>DATABASE_URL</code> の文字列から接続の設定を作ります。<code>FromStr</code> トレイトのメソッドなので、<code>use std::str::FromStr;</code> が必要です。</li>
+            <li><code>create_if_missing(true)</code>: DB ファイルが無ければ作ります。URL の <code>?mode=rwc</code> の代わりになるので、このあと <code>DATABASE_URL</code> から <code>?mode=rwc</code> を外します。</li>
+            <li><code>foreign_keys(true)</code>: 外部キーの制約を有効にします。SQLite は接続ごとに外部キーを有効にする仕組みで、<code>sqlite3</code> コマンドでは既定で無効です。sqlx の接続では、何も指定しなくても有効でした（執筆時に確かめました）。それでも、このアプリが外部キーに頼っていることを読み手に示すため、あえて明示しています。</li>
+            <li><code>journal_mode(SqliteJournalMode::Wal)</code>: WAL（Write-Ahead Logging）モードにします。書き込み中でも読み取りを並行して行えます。DB ファイルの横に <code>app.db-wal</code> と <code>app.db-shm</code> ができます（どちらも <code>.gitignore</code> の <code>app.db*</code> で除外済みです）。</li>
+            <li><code>busy_timeout(Duration::from_secs(5))</code>: 別の接続が書き込み中で DB がロックされているとき、すぐにエラーにせず最大 5 秒待ちます。sqlx の既定も 5 秒で、ここでは明示しています。</li>
+            <li><code>SqlitePoolOptions::new().max_connections(5)</code>: プールが同時に持つ接続を最大 5 本にします。</li>
+          </ul>
+          <p><code>DATABASE_URL</code> の既定値から <code>?mode=rwc</code> を外します。<code>src/config.rs</code>・<code>.env.example</code>・<code>.env</code> の 3 か所です。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/config.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">          let database_url =</span><span class="diff-line diff-line--remove">-             env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://app.db?mode=rwc".to_string());</span><span class="diff-line diff-line--add">+             env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://app.db".to_string());</span></pre>
+</div>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">.env.example（.env も同じように変更する）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  APP_PORT=8080</span><span class="diff-line diff-line--remove">- DATABASE_URL=sqlite://app.db?mode=rwc</span><span class="diff-line diff-line--add">+ DATABASE_URL=sqlite://app.db</span><span class="diff-line">  # 開発用のダミー値。本番では十分に長いランダムな値を実環境変数で渡す</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n 'sqlite://' src/config.rs .env .env.example</span><span class="terminal__line">src/config.rs:44:            env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://app.db".to_string());</span><span class="terminal__line">.env:4:DATABASE_URL=sqlite://app.db</span><span class="terminal__line">.env.example:4:DATABASE_URL=sqlite://app.db</span></pre>
+</div>
+          <p>ビルドし、sqlx-cli で <code>0002</code> を適用します。<code>sqlite3</code> コマンドがあれば、テーブルの定義も確かめます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling migrations v0.1.0 (/path/to/09-migrations)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.73s</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate run</span><span class="terminal__line">Applied 2/migrate create posts (680.459µs)</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate info</span><span class="terminal__line">1/installed create users</span><span class="terminal__line">2/installed create posts</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 app.db '.schema posts'</span><span class="terminal__line">CREATE TABLE posts (</span><span class="terminal__line">    id INTEGER PRIMARY KEY AUTOINCREMENT,</span><span class="terminal__line">    author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,</span><span class="terminal__line">    title TEXT NOT NULL,</span><span class="terminal__line">    body TEXT NOT NULL,</span><span class="terminal__line">    like_count INTEGER NOT NULL DEFAULT 0,</span><span class="terminal__line">    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),</span><span class="terminal__line">    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))</span><span class="terminal__line">);</span><span class="terminal__line">CREATE INDEX posts_author_id_id ON posts (author_id, id);</span></pre>
+</div>
+          <p>サーバーの <code>main.rs</code> には、08 までと同じ <code>sqlx::migrate!().run(&amp;pool)</code> が残っています。起動時にも未適用のマイグレーションを適用しますが、今回は sqlx-cli で適用済みなので、起動時には何も適用されません。</p>
+          <p>1 つ目のターミナルでサーバーを起動し、2 つ目のターミナルで <code>/health</code> を呼びます。<code>curl</code> の <code>-s</code> は進捗表示を消し、<code>-i</code> はステータス行とヘッダーも表示します。<code>date</code> ヘッダーは実行した時刻になります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">config: Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", api_key: "***" }</span><span class="terminal__line">listening on 127.0.0.1:8080</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 15</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:32:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -A | grep app.db</span><span class="terminal__line">app.db</span><span class="terminal__line">app.db-shm</span><span class="terminal__line">app.db-wal</span></pre>
+</div>
+          <p>WAL モードにしたので、<code>app.db-shm</code> と <code>app.db-wal</code> ができています。確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">新しいマイグレーションを足したら、再ビルドを確かめる</p>
+              <p><code>sqlx::migrate!()</code> は、ビルドの時点で <code>migrations/</code> の SQL を実行ファイルに埋め込みます。ここでは <code>main.rs</code> も書き換えたので再ビルドされました。しかし、SQL のファイルを足しただけでは再ビルドされないことがあります。その場合、起動しても新しいマイグレーションは適用されません。対処はつまずきポイントにまとめています。</p>
+            </div>
+          </div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>sqlx migrate info</code> に 2 件とも <code>installed</code> と表示され、サーバーの起動ログの <code>database_url</code> が <code>sqlite://app.db</code> になっていれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">記事の作成・取得・更新・削除を実装する</h3>
+        </div>
+        <div class="step__body">
+          <p>まずエラー型を広げます。08 までの <code>AppError::NotFound</code> は、文言が <code>"user not found"</code> に固定されていました。記事では <code>"post not found"</code> を返したいので、文言を引数で受け取る形にします。あわせて、ステップ 5 で使うクエリ文字列の拒否（<code>QueryRejection</code>）を取り込む variant も足しておきます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/error.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  use axum::{</span><span class="diff-line">      Json,</span><span class="diff-line diff-line--remove">-     extract::rejection::JsonRejection,</span><span class="diff-line diff-line--add">+     extract::rejection::{JsonRejection, QueryRejection},</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line">      response::{IntoResponse, Response},</span><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">  pub enum AppError {</span><span class="diff-line diff-line--remove">-     NotFound,</span><span class="diff-line diff-line--add">+     NotFound(&amp;'static str),</span><span class="diff-line">      Validation(BTreeMap&lt;String, Vec&lt;String&gt;&gt;),</span><span class="diff-line">      Database(sqlx::Error),</span><span class="diff-line">      JsonRejection(JsonRejection),</span><span class="diff-line diff-line--add">+     QueryRejection(QueryRejection),</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">      fn into_response(self) -&gt; Response {</span><span class="diff-line">          match self {</span><span class="diff-line diff-line--remove">-             AppError::NotFound =&gt; {</span><span class="diff-line diff-line--remove">-                 error_response(StatusCode::NOT_FOUND, "not_found", "user not found")</span><span class="diff-line diff-line--add">+             AppError::NotFound(message) =&gt; {</span><span class="diff-line diff-line--add">+                 error_response(StatusCode::NOT_FOUND, "not_found", message)</span><span class="diff-line">              }</span><span class="diff-line">              AppError::Validation(fields) =&gt; {</span><span class="diff-line">  ...</span><span class="diff-line">                  error_response(status, code, rejection.body_text())</span><span class="diff-line">              }</span><span class="diff-line diff-line--add">+             AppError::QueryRejection(rejection) =&gt; {</span><span class="diff-line diff-line--add">+                 error_response(rejection.status(), "bad_request", rejection.body_text())</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ impl From&lt;QueryRejection&gt; for AppError {</span><span class="diff-line diff-line--add">+     fn from(rejection: QueryRejection) -&gt; Self {</span><span class="diff-line diff-line--add">+         AppError::QueryRejection(rejection)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <p><code>NotFound</code> に引数が増えたので、<code>src/routes/users.rs</code> の 3 か所を書き換えます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/users.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">-     user.map(Json).ok_or(AppError::NotFound)</span><span class="diff-line diff-line--add">+     user.map(Json).ok_or(AppError::NotFound("user not found"))</span><span class="diff-line">  ...</span><span class="diff-line diff-line--remove">-     user.map(Json).ok_or(AppError::NotFound)</span><span class="diff-line diff-line--add">+     user.map(Json).ok_or(AppError::NotFound("user not found"))</span><span class="diff-line">  ...</span><span class="diff-line">      if result.rows_affected() == 0 {</span><span class="diff-line diff-line--remove">-         Err(AppError::NotFound)</span><span class="diff-line diff-line--add">+         Err(AppError::NotFound("user not found"))</span><span class="diff-line">      } else {</span></pre>
+</div>
+          <p>記事のハンドラを <code>src/routes/posts.rs</code> に新しく作ります。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src/routes/posts.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">use axum::{
+    Json,
+    extract::{Path, State, rejection::JsonRejection},
+    http::StatusCode,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+use crate::error::AppError;
+use crate::state::AppState;
+
+#[derive(Clone, Serialize, sqlx::FromRow)]
+pub struct Post {
+    id: i64,
+    author_id: i64,
+    title: String,
+    body: String,
+    like_count: i64,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreatePost {
+    author_id: i64,
+    title: String,
+    body: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdatePost {
+    title: Option&lt;String&gt;,
+    body: Option&lt;String&gt;,
+}
+
+// 指定されたフィールドだけを検証し、不正なものは全部まとめて 1 回の 422 で返す
+fn validate(title: Option&lt;&amp;str&gt;, body: Option&lt;&amp;str&gt;) -&gt; Result&lt;(), AppError&gt; {
+    let mut fields = BTreeMap::new();
+    if let Some(title) = title
+        &amp;&amp; !(1..=100).contains(&amp;title.trim().chars().count())
+    {
+        fields.insert(
+            "title".to_string(),
+            vec!["title must be 1 to 100 characters".to_string()],
+        );
+    }
+    if let Some(body) = body
+        &amp;&amp; !(1..=5000).contains(&amp;body.trim().chars().count())
+    {
+        fields.insert(
+            "body".to_string(),
+            vec!["body must be 1 to 5000 characters".to_string()],
+        );
+    }
+    if fields.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::Validation(fields))
+    }
+}
+
+pub async fn create_post(
+    State(state): State&lt;AppState&gt;,
+    payload: Result&lt;Json&lt;CreatePost&gt;, JsonRejection&gt;,
+) -&gt; Result&lt;(StatusCode, Json&lt;Post&gt;), AppError&gt; {
+    let Json(payload) = payload?;
+    validate(Some(&amp;payload.title), Some(&amp;payload.body))?;
+    let result = sqlx::query_as::&lt;_, Post&gt;(
+        "INSERT INTO posts (author_id, title, body) VALUES (?, ?, ?) \
+         RETURNING id, author_id, title, body, like_count, created_at, updated_at",
+    )
+    .bind(payload.author_id)
+    .bind(payload.title.trim())
+    .bind(payload.body.trim())
+    .fetch_one(&amp;state.pool)
+    .await;
+    match result {
+        Ok(post) =&gt; Ok((StatusCode::CREATED, Json(post))),
+        // 外部キー制約に違反した = author_id の user がいない
+        Err(sqlx::Error::Database(error)) if error.is_foreign_key_violation() =&gt; {
+            Err(AppError::field("author_id", "author not found"))
+        }
+        Err(error) =&gt; Err(error.into()),
+    }
+}
+
+pub async fn get_post(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;Json&lt;Post&gt;, AppError&gt; {
+    let post = sqlx::query_as::&lt;_, Post&gt;(
+        "SELECT id, author_id, title, body, like_count, created_at, updated_at \
+         FROM posts WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&amp;state.pool)
+    .await?;
+    post.map(Json).ok_or(AppError::NotFound("post not found"))
+}
+
+pub async fn update_post(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+    payload: Result&lt;Json&lt;UpdatePost&gt;, JsonRejection&gt;,
+) -&gt; Result&lt;Json&lt;Post&gt;, AppError&gt; {
+    let Json(payload) = payload?;
+    validate(payload.title.as_deref(), payload.body.as_deref())?;
+    // 未指定（None → NULL）の項目は COALESCE で今の値のまま残す
+    let post = sqlx::query_as::&lt;_, Post&gt;(
+        "UPDATE posts SET title = COALESCE(?1, title), body = COALESCE(?2, body), \
+         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') \
+         WHERE id = ?3 RETURNING id, author_id, title, body, like_count, created_at, updated_at",
+    )
+    .bind(payload.title.as_deref().map(str::trim))
+    .bind(payload.body.as_deref().map(str::trim))
+    .bind(id)
+    .fetch_optional(&amp;state.pool)
+    .await?;
+    post.map(Json).ok_or(AppError::NotFound("post not found"))
+}
+
+pub async fn delete_post(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;StatusCode, AppError&gt; {
+    let result = sqlx::query("DELETE FROM posts WHERE id = ?")
+        .bind(id)
+        .execute(&amp;state.pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        Err(AppError::NotFound("post not found"))
+    } else {
+        Ok(StatusCode::NO_CONTENT)
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li><code>Post</code> は DB の行と応答の JSON を兼ねます。<code>sqlx::FromRow</code> で行から作り、<code>Serialize</code> で JSON にします。フィールド名はそのまま JSON のキー（snake_case）になります。</li>
+            <li><code>validate</code> は、渡された項目だけを検査し、不正な項目を全部 <code>fields</code> に集めてから 1 回の 422 で返します。<code>title</code> と <code>body</code> の両方が不正なら、両方を一度に知らせます。長さは前後の空白を除いた（<code>trim</code>）後の文字数で数え、保存するのも <code>trim</code> した値です。</li>
+            <li><code>if let Some(title) = title &amp;&amp; ...</code> は、edition 2024 で使える let チェーンです。「値があり、かつ長さが範囲外」を 1 つの <code>if</code> で書けます。</li>
+            <li><code>create_post</code> は、<code>author_id</code> の user がいるかを事前に <code>SELECT</code> で確かめません。そのまま <code>INSERT</code> し、外部キー違反になったら（<code>is_foreign_key_violation()</code>）422 の <code>fields.author_id</code> に変換します。存在の確認を DB の制約に任せるので、確認してから挿入するまでの間に user が消える、という競合も起きません。</li>
+            <li><code>RETURNING</code> は、<code>INSERT</code>・<code>UPDATE</code> した行をその場で返す SQL の句です。作った記事を取り直すための <code>SELECT</code> が要りません。</li>
+            <li><code>update_post</code> は <code>PATCH</code> 用で、<code>title</code> と <code>body</code> はどちらも省略できます（<code>Option</code>）。省略された項目は <code>None</code> で、SQL には <code>NULL</code> として渡ります。<code>COALESCE(?1, title)</code> は「<code>?1</code> が <code>NULL</code> なら今の <code>title</code> のまま」という意味です。空文字（<code>""</code>）は省略とは別扱いで、検証で 422 になります。<code>updated_at</code> は現在時刻にします。</li>
+            <li><code>?1</code>・<code>?2</code>・<code>?3</code> は番号付きのプレースホルダーで、<code>.bind</code> した順に 1, 2, 3 と対応します。値は全てプレースホルダーで渡し、SQL の文字列には埋め込みません。</li>
+            <li>この時点では、更新・削除する人が記事の著者かどうかを検査していません。冒頭の注意のとおり、11 で直します。</li>
+          </ul>
+          <p><code>src/routes/mod.rs</code> にルートを足します。作成・更新・削除は、users と同じように <code>route_layer</code> で API キーを必須にします。取得は公開です。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  mod health;</span><span class="diff-line diff-line--add">+ pub mod posts;</span><span class="diff-line">  pub mod users;</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">      middleware,</span><span class="diff-line">      response::Response,</span><span class="diff-line diff-line--remove">-     routing::{get, post, put},</span><span class="diff-line diff-line--add">+     routing::{get, patch, post, put},</span><span class="diff-line">  };</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">          ));</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+     let protected_posts = Router::new()</span><span class="diff-line diff-line--add">+         .route("/posts", post(posts::create_post))</span><span class="diff-line diff-line--add">+         .route(</span><span class="diff-line diff-line--add">+             "/posts/{id}",</span><span class="diff-line diff-line--add">+             patch(posts::update_post).delete(posts::delete_post),</span><span class="diff-line diff-line--add">+         )</span><span class="diff-line diff-line--add">+         .route_layer(middleware::from_fn_with_state(</span><span class="diff-line diff-line--add">+             state.clone(),</span><span class="diff-line diff-line--add">+             require_api_key,</span><span class="diff-line diff-line--add">+         ));</span><span class="diff-line diff-line--add">+</span><span class="diff-line">      Router::new()</span><span class="diff-line">          .route("/health", get(health::health))</span><span class="diff-line">          .route("/users", get(users::list_users))</span><span class="diff-line">          .route("/users/{id}", get(users::get_user))</span><span class="diff-line diff-line--add">+         .route("/posts/{id}", get(posts::get_post))</span><span class="diff-line">          .merge(protected_users)</span><span class="diff-line diff-line--add">+         .merge(protected_posts)</span><span class="diff-line">          .fallback(not_found)</span><span class="diff-line">          .layer(middleware::from_fn(log_request))</span></pre>
+</div>
+          <p>テストの共通部品 <code>tests/common/mod.rs</code> も直します。<code>DELETE</code> の応答は 204 で本文がありません。08 の <code>send</code> は本文を必ず JSON として読むので、空の本文で panic します。本文が空なら <code>Null</code> を返すようにします。<code>json_request</code> の本文は、<code>format!</code> で組み立てた文字列を渡せるよう <code>&amp;str</code> にします。記事のテスト用に、user と記事を 1 件ずつ作る関数も足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">tests/common/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">      let status = response.status();</span><span class="diff-line">      let bytes = response.into_body().collect().await.unwrap().to_bytes();</span><span class="diff-line diff-line--remove">-     let json = serde_json::from_slice(&amp;bytes).unwrap();</span><span class="diff-line diff-line--add">+     // 204 No Content のように本文が空の応答は Null として返す</span><span class="diff-line diff-line--add">+     let json = if bytes.is_empty() {</span><span class="diff-line diff-line--add">+         serde_json::Value::Null</span><span class="diff-line diff-line--add">+     } else {</span><span class="diff-line diff-line--add">+         serde_json::from_slice(&amp;bytes).unwrap()</span><span class="diff-line diff-line--add">+     };</span><span class="diff-line">      (status, json)</span><span class="diff-line">  }</span><span class="diff-line">  ...</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- pub fn json_request(</span><span class="diff-line diff-line--remove">-     method: &amp;str,</span><span class="diff-line diff-line--remove">-     uri: &amp;str,</span><span class="diff-line diff-line--remove">-     api_key: Option&lt;&amp;str&gt;,</span><span class="diff-line diff-line--remove">-     body: &amp;'static str,</span><span class="diff-line diff-line--remove">- ) -&gt; Request&lt;Body&gt; {</span><span class="diff-line diff-line--add">+ pub fn json_request(method: &amp;str, uri: &amp;str, api_key: Option&lt;&amp;str&gt;, body: &amp;str) -&gt; Request&lt;Body&gt; {</span><span class="diff-line">      let mut builder = Request::builder()</span><span class="diff-line">          .method(method)</span><span class="diff-line">  ...</span><span class="diff-line">          builder = builder.header("x-api-key", key);</span><span class="diff-line">      }</span><span class="diff-line diff-line--remove">-     builder.body(Body::from(body)).unwrap()</span><span class="diff-line diff-line--add">+     builder.body(Body::from(body.to_string())).unwrap()</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // 記事のテスト用に、API 経由で user を 1 人作って id を返す</span><span class="diff-line diff-line--add">+ pub async fn create_user(app: &amp;Router, name: &amp;str) -&gt; i64 {</span><span class="diff-line diff-line--add">+     let (status, user) = send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         json_request(</span><span class="diff-line diff-line--add">+             "POST",</span><span class="diff-line diff-line--add">+             "/users",</span><span class="diff-line diff-line--add">+             Some(TEST_API_KEY),</span><span class="diff-line diff-line--add">+             &amp;serde_json::json!({ "name": name }).to_string(),</span><span class="diff-line diff-line--add">+         ),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::CREATED);</span><span class="diff-line diff-line--add">+     user["id"].as_i64().unwrap()</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // 記事を API 経由で 1 件作って、応答の JSON を返す</span><span class="diff-line diff-line--add">+ pub async fn create_post(app: &amp;Router, author_id: i64, title: &amp;str) -&gt; serde_json::Value {</span><span class="diff-line diff-line--add">+     let (status, post) = send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         json_request(</span><span class="diff-line diff-line--add">+             "POST",</span><span class="diff-line diff-line--add">+             "/posts",</span><span class="diff-line diff-line--add">+             Some(TEST_API_KEY),</span><span class="diff-line diff-line--add">+             &amp;serde_json::json!({ "author_id": author_id, "title": title, "body": "body" })</span><span class="diff-line diff-line--add">+                 .to_string(),</span><span class="diff-line diff-line--add">+         ),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::CREATED);</span><span class="diff-line diff-line--add">+     post</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <p>記事のテストを <code>tests/posts.rs</code> に書きます。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tests/posts.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">mod common;
+
+use axum::http::StatusCode;
+use common::{TEST_API_KEY, create_post, create_user, get, json_request, send, test_app};
+use sqlx::SqlitePool;
+
+#[sqlx::test]
+async fn create_then_get_post(pool: SqlitePool) {
+    let app = test_app(pool);
+    let author_id = create_user(&amp;app, "alice").await;
+
+    let (status, created) = send(
+        app.clone(),
+        json_request(
+            "POST",
+            "/posts",
+            Some(TEST_API_KEY),
+            &amp;format!(r#"{{"author_id":{author_id},"title":"  Hello  ","body":"first post"}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["author_id"], author_id);
+    assert_eq!(created["title"], "Hello"); // 前後の空白は取り除いて保存する
+    assert_eq!(created["like_count"], 0);
+    assert!(created["created_at"].as_str().unwrap().ends_with('Z'));
+    let id = created["id"].as_i64().unwrap();
+
+    let (status, fetched) = send(app, get(&amp;format!("/posts/{id}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched, created);
+}
+
+#[sqlx::test]
+async fn create_without_api_key_is_unauthorized(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        json_request(
+            "POST",
+            "/posts",
+            None,
+            r#"{"author_id":1,"title":"t","body":"b"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], "unauthorized");
+}
+
+#[sqlx::test]
+async fn create_reports_every_invalid_field_at_once(pool: SqlitePool) {
+    let app = test_app(pool);
+    let author_id = create_user(&amp;app, "alice").await;
+    let long_body = "x".repeat(5001);
+
+    let (status, body) = send(
+        app,
+        json_request(
+            "POST",
+            "/posts",
+            Some(TEST_API_KEY),
+            &amp;format!(r#"{{"author_id":{author_id},"title":"   ","body":"{long_body}"}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["code"], "validation_failed");
+    assert!(body["error"]["fields"]["title"].is_array());
+    assert!(body["error"]["fields"]["body"].is_array());
+}
+
+#[sqlx::test]
+async fn create_with_unknown_author_is_unprocessable(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        json_request(
+            "POST",
+            "/posts",
+            Some(TEST_API_KEY),
+            r#"{"author_id":999,"title":"t","body":"b"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body["error"]["fields"]["author_id"],
+        serde_json::json!(["author not found"])
+    );
+}
+
+#[sqlx::test]
+async fn get_unknown_post_is_not_found(pool: SqlitePool) {
+    let (status, body) = send(test_app(pool), get("/posts/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "not_found");
+    assert_eq!(body["error"]["message"], "post not found");
+}
+
+#[sqlx::test]
+async fn patch_changes_only_the_given_fields(pool: SqlitePool) {
+    let app = test_app(pool);
+    let author_id = create_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, author_id, "before").await;
+    let id = post["id"].as_i64().unwrap();
+
+    let (status, updated) = send(
+        app,
+        json_request(
+            "PATCH",
+            &amp;format!("/posts/{id}"),
+            Some(TEST_API_KEY),
+            r#"{"title":"after"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["title"], "after");
+    assert_eq!(updated["body"], post["body"]); // 未指定の body はそのまま
+}
+
+#[sqlx::test]
+async fn patch_with_empty_title_is_unprocessable(pool: SqlitePool) {
+    let app = test_app(pool);
+    let author_id = create_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, author_id, "before").await;
+    let id = post["id"].as_i64().unwrap();
+
+    let (status, body) = send(
+        app,
+        json_request(
+            "PATCH",
+            &amp;format!("/posts/{id}"),
+            Some(TEST_API_KEY),
+            r#"{"title":""}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["error"]["fields"]["title"].is_array());
+}
+
+#[sqlx::test]
+async fn patch_unknown_post_is_not_found(pool: SqlitePool) {
+    let (status, _) = send(
+        test_app(pool),
+        json_request(
+            "PATCH",
+            "/posts/999",
+            Some(TEST_API_KEY),
+            r#"{"title":"x"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test]
+async fn delete_removes_the_post(pool: SqlitePool) {
+    let app = test_app(pool);
+    let author_id = create_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, author_id, "title").await;
+    let id = post["id"].as_i64().unwrap();
+
+    let (status, _) = send(
+        app.clone(),
+        json_request("DELETE", &amp;format!("/posts/{id}"), Some(TEST_API_KEY), ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _) = send(app, get(&amp;format!("/posts/{id}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}</code></pre>
+</div>
+          <p>テストを実行します。<code>grep</code> で、テスト名と、1 件以上成功した集計の行だけを抜き出しています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test 2&gt;&amp;1 | grep -E '^test [a-z_]+ \.\.\. |test result: .* [1-9][0-9]* passed|FAILED|panicked'</span><span class="terminal__line">test health_returns_ok ... ok</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span><span class="terminal__line">test create_without_api_key_is_unauthorized ... ok</span><span class="terminal__line">test patch_unknown_post_is_not_found ... ok</span><span class="terminal__line">test get_unknown_post_is_not_found ... ok</span><span class="terminal__line">test create_reports_every_invalid_field_at_once ... ok</span><span class="terminal__line">test create_with_unknown_author_is_unprocessable ... ok</span><span class="terminal__line">test create_then_get_post ... ok</span><span class="terminal__line">test patch_with_empty_title_is_unprocessable ... ok</span><span class="terminal__line">test patch_changes_only_the_given_fields ... ok</span><span class="terminal__line">test delete_removes_the_post ... ok</span><span class="terminal__line">test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span><span class="terminal__line">test create_with_broken_json_is_bad_request ... ok</span><span class="terminal__line">test create_without_api_key_is_unauthorized ... ok</span><span class="terminal__line">test create_with_empty_name_is_unprocessable ... ok</span><span class="terminal__line">test get_unknown_user_is_not_found ... ok</span><span class="terminal__line">test list_starts_empty ... ok</span><span class="terminal__line">test create_then_get_user ... ok</span><span class="terminal__line">test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s</span></pre>
+</div>
+          <p>health 1 件・posts 9 件・users 6 件の合計 16 件が成功します。<code>create_with_unknown_author_is_unprocessable</code> が通るので、<code>#[sqlx::test]</code> が用意する DB でも外部キーが有効だと分かります。</p>
+          <p>サーバーでも確かめます。<code>cargo build</code> してから 1 つ目のターミナルで <code>./target/debug/server</code> を起動し、2 つ目のターミナルで実行します。API キーは <code>.env</code> の <code>change-me-dev-only</code> です。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s</span></pre>
+</div>
+          <p>user を 2 人（alice と bob）作り、alice の記事を作って取得します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/users -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d '{"name":"alice"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/users -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d '{"name":"bob"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 21</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":2,"name":"bob"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d '{"author_id":1,"title":"Hello","body":"first post"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 145</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"author_id":1,"title":"Hello","body":"first post","like_count":0,"created_at":"2026-10-04T06:34:24Z","updated_at":"2026-10-04T06:34:24Z"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/posts/1</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 145</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"author_id":1,"title":"Hello","body":"first post","like_count":0,"created_at":"2026-10-04T06:34:24Z","updated_at":"2026-10-04T06:34:24Z"}</span></pre>
+</div>
+          <p>検証エラーと、存在しない <code>author_id</code>、API キーなしを試します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d '{"author_id":1,"title":"","body":""}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 168</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"validation_failed","message":"invalid request","fields":{"body":["body must be 1 to 5000 characters"],"title":["title must be 1 to 100 characters"]}}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d '{"author_id":999,"title":"x","body":"y"}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 110</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"validation_failed","message":"invalid request","fields":{"author_id":["author not found"]}}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H 'content-type: application/json' -d '{"author_id":1,"title":"x","body":"y"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 74</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:24 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"invalid or missing x-api-key"}}</span></pre>
+</div>
+          <ul>
+            <li><code>title</code> と <code>body</code> の両方が空なので、<code>fields</code> に両方が入っています。<code>fields</code> は <code>BTreeMap</code> なので、キーはアルファベット順（<code>body</code> が先）に並びます。</li>
+            <li>存在しない <code>author_id</code> は、<code>INSERT</code> の外部キー違反を変換した 422 です。</li>
+          </ul>
+          <p>1 秒以上待ってから、<code>PATCH</code> で <code>title</code> だけを変えます。<code>updated_at</code> は秒までしか持たないので、同じ秒のうちに更新すると値が変わったように見えません。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X PATCH localhost:8080/posts/1 -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d '{"title":"Hello v2"}'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 148</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:25 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"author_id":1,"title":"Hello v2","body":"first post","like_count":0,"created_at":"2026-10-04T06:34:24Z","updated_at":"2026-10-04T06:34:25Z"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X PATCH localhost:8080/posts/1 -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d '{"title":""}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 123</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:25 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"validation_failed","message":"invalid request","fields":{"title":["title must be 1 to 100 characters"]}}}</span></pre>
+</div>
+          <p><code>title</code> だけが変わり、<code>body</code> と <code>created_at</code> はそのままです。<code>updated_at</code> は 1 秒進みました。最後に、存在しない記事と削除を試します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/posts/999</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 57</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:25 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"post not found"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X DELETE localhost:8080/posts/1 -H 'x-api-key: change-me-dev-only'</span><span class="terminal__line">HTTP/1.1 204 No Content</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:25 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/posts/1</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 57</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:25 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"post not found"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/posts/abc</span><span class="terminal__line">HTTP/1.1 400 Bad Request</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 42</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:34:25 GMT</span><span class="terminal__line"></span><span class="terminal__line">Invalid URL: Cannot parse `abc` to a `i64`</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/users/abc</span><span class="terminal__line">HTTP/1.1 400 Bad Request</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 42</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:51:38 GMT</span><span class="terminal__line"></span><span class="terminal__line">Invalid URL: Cannot parse `abc` to a `i64`</span></pre>
+</div>
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">パスの型が合わないときの 400 は、まだ JSON ではない</p>
+              <p><code>/posts/abc</code> のように、パスの <code>{id}</code> が数値として読めない場合は、Axum が <code>text/plain</code> の 400 を返します。エラーの JSON 形式（<code>{"error": {...}}</code>）になっていません。<code>/users/abc</code> も同じです。これは 02 から変わっていない挙動です（06 で JSON に包んだのは <code>Json</code> の拒否だけです）。後の項目（12）で、ほかのエラーと同じ JSON の形に統一する予定です。</p>
+            </div>
+          </div>
+          <p>確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: 外部キーを無効にすると、存在しない author_id が通ってしまう</summary>
+            <div class="disclosure__body">
+              <p>外部キーが無効だとどうなるかを、執筆時に試した結果です。手元で実行する必要はありません。</p>
+              <p>SQLite 本体は、外部キーを既定で無効にしています。<code>sqlite3</code> コマンドで、DB のコピーに対して試しました。<code>PRAGMA foreign_keys</code> の <code>0</code> は無効、<code>1</code> は有効を表します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp app.db /tmp/axum09-fk.db</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 /tmp/axum09-fk.db "PRAGMA foreign_keys; INSERT INTO posts (author_id,title,body) VALUES (999,'orphan','x'); SELECT id, author_id FROM posts WHERE author_id=999;"</span><span class="terminal__line">0</span><span class="terminal__line">5|999</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 /tmp/axum09-fk.db "PRAGMA foreign_keys=ON; PRAGMA foreign_keys; INSERT INTO posts (author_id,title,body) VALUES (998,'orphan','x');"</span><span class="terminal__line">1</span><span class="terminal__line">Error: stepping, FOREIGN KEY constraint failed (19)</span></pre>
+</div>
+              <p>無効のままだと、存在しない user 999 の記事が作れてしまいました。<code>PRAGMA foreign_keys=ON</code> を実行した接続では、外部キー違反のエラーになります。</p>
+              <p>次に、<code>src/main.rs</code> の <code>.foreign_keys(true)</code> を一時的に <code>.foreign_keys(false)</code> に変えてサーバーを起動しました。そのうえで、存在しない <code>author_id</code> で記事を作りました。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d '{"author_id":999,"title":"orphan","body":"x"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 139</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:36:47 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":5,"author_id":999,"title":"orphan","body":"x","like_count":0,"created_at":"2026-10-04T06:36:47Z","updated_at":"2026-10-04T06:36:47Z"}</span></pre>
+</div>
+              <p>執筆時はステップ 5 のあとのデータで試したので、記事の id は 5 になっています。手元で試すと孤児の記事が残り、以降の id がずれるので、試した場合は最後にその記事を削除してください。</p>
+              <p>422 にならず、存在しない user の記事（孤児レコード）が 201 で作られました。<code>create_post</code> の 422 は外部キー違反に頼っているので、外部キーが無効だと検証そのものが働きません。<code>ON DELETE CASCADE</code> も効かなくなります。</p>
+              <p>一方、<code>.foreign_keys(true)</code> の行を消して（何も指定せずに）試すと、422 の <code>author not found</code> になりました。sqlx の SQLite 接続は、既定で外部キーを有効にしています。このレッスンでは、外部キーに頼っていることを読み手に示すため、<code>.foreign_keys(true)</code> を明示しています。</p>
+            </div>
+          </details>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo test</code> の 16 件が成功し、<code>curl</code> で 201・200・422・401・404・204 が上の出力と同じ形で返れば OK です（id と日時は環境で変わります）。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">記事の一覧をキーセット方式でページ分けする</h3>
+        </div>
+        <div class="step__body">
+          <p>記事の一覧 <code>GET /posts</code> を作ります。記事は増え続けるので、全件を一度に返さず、ページに分けて返します。クエリ文字列で次の 3 つを受け取ります。</p>
+          <table>
+            <thead>
+              <tr><th>パラメーター</th><th>意味</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>limit</code></td><td>1 ページの件数。既定は 20、1〜100 の範囲。範囲外は 422</td></tr>
+              <tr><td><code>cursor</code></td><td>前のページの応答にあった <code>next_cursor</code> の値。省略すると最初のページ</td></tr>
+              <tr><td><code>author_id</code></td><td>指定すると、その著者の記事だけに絞り込む</td></tr>
+            </tbody>
+          </table>
+          <p>並び順は新しい順（<code>id</code> の降順）です。ページの分け方には、「何件目から」を数で指定する OFFSET 方式ではなく、「前のページの最後の <code>id</code> より古いもの」を条件で指定するキーセット方式を使います。OFFSET 方式は、ページを読んでいる間に記事が追加されると、同じ記事が次のページにも出るなど、ページの境目がずれます。また、後ろのページほど読み飛ばす行が増えて遅くなります。キーセット方式は条件で絞るので、どちらも起きにくい方式です。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/posts.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  use axum::{</span><span class="diff-line">      Json,</span><span class="diff-line diff-line--remove">-     extract::{Path, State, rejection::JsonRejection},</span><span class="diff-line diff-line--add">+     extract::{</span><span class="diff-line diff-line--add">+         Path, Query, State,</span><span class="diff-line diff-line--add">+         rejection::{JsonRejection, QueryRejection},</span><span class="diff-line diff-line--add">+     },</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line">  };</span><span class="diff-line">  ...</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ #[derive(Deserialize)]</span><span class="diff-line diff-line--add">+ pub struct ListParams {</span><span class="diff-line diff-line--add">+     limit: Option&lt;i64&gt;,</span><span class="diff-line diff-line--add">+     cursor: Option&lt;i64&gt;,</span><span class="diff-line diff-line--add">+     author_id: Option&lt;i64&gt;,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[derive(Serialize)]</span><span class="diff-line diff-line--add">+ pub struct PostPage {</span><span class="diff-line diff-line--add">+     items: Vec&lt;Post&gt;,</span><span class="diff-line diff-line--add">+     next_cursor: Option&lt;i64&gt;,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ const DEFAULT_LIMIT: i64 = 20;</span><span class="diff-line diff-line--add">+ const MAX_LIMIT: i64 = 100;</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  // 指定されたフィールドだけを検証し、不正なものは全部まとめて 1 回の 422 で返す</span><span class="diff-line">  fn validate(title: Option&lt;&amp;str&gt;, body: Option&lt;&amp;str&gt;) -&gt; Result&lt;(), AppError&gt; {</span><span class="diff-line">  ...</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ pub async fn list_posts(</span><span class="diff-line diff-line--add">+     State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--add">+     query: Result&lt;Query&lt;ListParams&gt;, QueryRejection&gt;,</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;Json&lt;PostPage&gt;, AppError&gt; {</span><span class="diff-line diff-line--add">+     let Query(params) = query?;</span><span class="diff-line diff-line--add">+     let limit = params.limit.unwrap_or(DEFAULT_LIMIT);</span><span class="diff-line diff-line--add">+     if !(1..=MAX_LIMIT).contains(&amp;limit) {</span><span class="diff-line diff-line--add">+         return Err(AppError::field("limit", "limit must be 1 to 100"));</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+     // 次のページがあるか判定するため、limit より 1 件多く取る</span><span class="diff-line diff-line--add">+     // 新しい順（id 降順）なので、cursor より小さい id を取る</span><span class="diff-line diff-line--add">+     let mut items = sqlx::query_as::&lt;_, Post&gt;(</span><span class="diff-line diff-line--add">+         "SELECT id, author_id, title, body, like_count, created_at, updated_at \</span><span class="diff-line diff-line--add">+          FROM posts \</span><span class="diff-line diff-line--add">+          WHERE (?1 IS NULL OR id &lt; ?1) AND (?2 IS NULL OR author_id = ?2) \</span><span class="diff-line diff-line--add">+          ORDER BY id DESC LIMIT ?3",</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .bind(params.cursor)</span><span class="diff-line diff-line--add">+     .bind(params.author_id)</span><span class="diff-line diff-line--add">+     .bind(limit + 1)</span><span class="diff-line diff-line--add">+     .fetch_all(&amp;state.pool)</span><span class="diff-line diff-line--add">+     .await?;</span><span class="diff-line diff-line--add">+     let next_cursor = if items.len() as i64 &gt; limit {</span><span class="diff-line diff-line--add">+         items.truncate(limit as usize);</span><span class="diff-line diff-line--add">+         items.last().map(|post| post.id)</span><span class="diff-line diff-line--add">+     } else {</span><span class="diff-line diff-line--add">+         None</span><span class="diff-line diff-line--add">+     };</span><span class="diff-line diff-line--add">+     Ok(Json(PostPage { items, next_cursor }))</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  pub async fn get_post(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span></pre>
+</div>
+          <ul>
+            <li><code>query: Result&lt;Query&lt;ListParams&gt;, QueryRejection&gt;</code>: クエリ文字列を <code>ListParams</code> に変換します。<code>limit=abc</code> のように数値でない場合は変換に失敗します。その失敗を <code>Result</code> で受け取り、<code>?</code> で <code>AppError::QueryRejection</code>（JSON の 400 <code>bad_request</code>）に変えます。ステップ 4 で <code>error.rs</code> に足した variant です。</li>
+            <li><code>limit</code> は上限の 100 を超えたら 422 にします。上限が無いと、1 回のリクエストで全件を返させることができ、サーバーに大きな負荷を掛ける入口になります。</li>
+            <li>SQL は 1 本です。<code>(?1 IS NULL OR id &lt; ?1)</code> は「<code>cursor</code> が省略されていれば条件なし、あれば <code>id &lt; cursor</code>」という意味です。<code>author_id</code> の絞り込みも同じ書き方です。省略できる条件を、SQL の文字列を組み替えずに表せます。</li>
+            <li>新しい順（降順）なので、条件は <code>id &lt; cursor</code> です。昇順に並べる場合は <code>id &gt; cursor</code> になり、不等号の向きが逆になります。</li>
+            <li><code>LIMIT ?3</code> には <code>limit + 1</code> を渡します。1 件多く取れたら次のページがあるので、余分な 1 件を捨て、残りの最後の <code>id</code> を <code>next_cursor</code> にします。取れなければ次のページは無いので <code>null</code> です。</li>
+          </ul>
+          <p><code>src/routes/mod.rs</code> に、公開のルートとして 1 行足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">          .route("/users/{id}", get(users::get_user))</span><span class="diff-line diff-line--add">+         .route("/posts", get(posts::list_posts))</span><span class="diff-line">          .route("/posts/{id}", get(posts::get_post))</span></pre>
+</div>
+          <p><code>tests/posts.rs</code> の末尾に、一覧のテストを 5 件追加します。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tests/posts.rs（末尾に追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">#[sqlx::test]
+async fn list_pages_newest_first_with_next_cursor(pool: SqlitePool) {
+    let app = test_app(pool);
+    let author_id = create_user(&amp;app, "alice").await;
+    let first = create_post(&amp;app, author_id, "first").await;
+    let second = create_post(&amp;app, author_id, "second").await;
+    let third = create_post(&amp;app, author_id, "third").await;
+
+    // 1 ページ目: 新しい順に 2 件、続きがあるので next_cursor は最後の id
+    let (status, page1) = send(app.clone(), get("/posts?limit=2")).await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec&lt;_&gt; = page1["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|post| post["id"].clone())
+        .collect();
+    assert_eq!(ids, vec![third["id"].clone(), second["id"].clone()]);
+    assert_eq!(page1["next_cursor"], second["id"]);
+
+    // 2 ページ目: next_cursor をそのまま渡すと残り 1 件で、next_cursor は null
+    let cursor = page1["next_cursor"].as_i64().unwrap();
+    let (_, page2) = send(app, get(&amp;format!("/posts?limit=2&amp;cursor={cursor}"))).await;
+    assert_eq!(page2["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page2["items"][0]["id"], first["id"]);
+    assert_eq!(page2["next_cursor"], serde_json::Value::Null);
+}
+
+#[sqlx::test]
+async fn list_with_exactly_limit_items_has_no_next_cursor(pool: SqlitePool) {
+    let app = test_app(pool);
+    let author_id = create_user(&amp;app, "alice").await;
+    create_post(&amp;app, author_id, "a").await;
+    create_post(&amp;app, author_id, "b").await;
+
+    let (_, page) = send(app, get("/posts?limit=2")).await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 2);
+    assert_eq!(page["next_cursor"], serde_json::Value::Null);
+}
+
+#[sqlx::test]
+async fn list_filters_by_author(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = create_user(&amp;app, "alice").await;
+    let bob = create_user(&amp;app, "bob").await;
+    create_post(&amp;app, alice, "alice 1").await;
+    create_post(&amp;app, bob, "bob 1").await;
+    create_post(&amp;app, alice, "alice 2").await;
+
+    let (_, page) = send(app, get(&amp;format!("/posts?author_id={alice}"))).await;
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().all(|post| post["author_id"] == alice));
+}
+
+#[sqlx::test]
+async fn list_with_limit_out_of_range_is_unprocessable(pool: SqlitePool) {
+    let app = test_app(pool);
+    for uri in ["/posts?limit=0", "/posts?limit=101", "/posts?limit=-1"] {
+        let (status, body) = send(app.clone(), get(uri)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{uri}");
+        assert!(body["error"]["fields"]["limit"].is_array(), "{uri}");
+    }
+}
+
+#[sqlx::test]
+async fn list_with_malformed_query_is_bad_request(pool: SqlitePool) {
+    let app = test_app(pool);
+    for uri in [
+        "/posts?limit=abc",
+        "/posts?cursor=abc",
+        "/posts?author_id=x",
+    ] {
+        let (status, body) = send(app.clone(), get(uri)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(body["error"]["code"], "bad_request", "{uri}");
+    }
+}</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test 2&gt;&amp;1 | grep -E '^test list|test result: .* [1-9][0-9]* passed|FAILED|panicked'</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s</span><span class="terminal__line">test list_with_limit_out_of_range_is_unprocessable ... ok</span><span class="terminal__line">test list_with_malformed_query_is_bad_request ... ok</span><span class="terminal__line">test list_pages_newest_first_with_next_cursor ... ok</span><span class="terminal__line">test list_with_exactly_limit_items_has_no_next_cursor ... ok</span><span class="terminal__line">test list_filters_by_author ... ok</span><span class="terminal__line">test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s</span><span class="terminal__line">test list_starts_empty ... ok</span><span class="terminal__line">test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s</span></pre>
+</div>
+          <p>posts のテストが 14 件（ステップ 4 の 9 件と一覧の 5 件）になり、合計 21 件が成功します。</p>
+          <p>サーバーでも確かめます。<code>cargo build</code> してからサーバーを起動し直し、記事を 3 件作ります（alice が 2 件、bob が 1 件）。ステップ 4 で記事 1 を削除しましたが、<code>AUTOINCREMENT</code> は使った <code>id</code> を再利用しないので、<code>id</code> は 2 から続きます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> for t in "first:1" "second:2" "third:1"; do curl -s -X POST localhost:8080/posts -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d "{\"author_id\":${t#*:},\"title\":\"${t%:*}\",\"body\":\"b\"}"; echo; done</span><span class="terminal__line">{"id":2,"author_id":1,"title":"first","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:35:33Z"}</span><span class="terminal__line">{"id":3,"author_id":2,"title":"second","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:35:33Z"}</span><span class="terminal__line">{"id":4,"author_id":1,"title":"third","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:35:33Z"}</span></pre>
+</div>
+          <p><code>limit=2</code> で 1 ページ目を取り、応答の <code>next_cursor</code> の値（3）をそのまま <code>cursor</code> に渡して 2 ページ目を取ります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts?limit=2'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 302</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:35:33 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"items":[{"id":4,"author_id":1,"title":"third","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:35:33Z"},{"id":3,"author_id":2,"title":"second","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:35:33Z"}],"next_cursor":3}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts?limit=2&amp;cursor=3'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 167</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:35:40 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"items":[{"id":2,"author_id":1,"title":"first","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:35:33Z"}],"next_cursor":null}</span></pre>
+</div>
+          <p>1 ページ目は新しい順に id 4・3 の 2 件で、<code>next_cursor</code> は 3 です。2 ページ目は残りの 1 件で、続きが無いので <code>next_cursor</code> は <code>null</code> です。</p>
+          <p>絞り込みと、<code>limit</code> の範囲外・型違い、<code>cursor</code> と <code>author_id</code> の境界を試します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts?author_id=1'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 304</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:35:40 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"items":[{"id":4,"author_id":1,"title":"third","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:35:33Z"},{"id":2,"author_id":1,"title":"first","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:35:33Z"}],"next_cursor":null}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts?limit=101'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 112</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:35:40 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"validation_failed","message":"invalid request","fields":{"limit":["limit must be 1 to 100"]}}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts?limit=abc'</span><span class="terminal__line">HTTP/1.1 400 Bad Request</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 117</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:35:40 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"bad_request","message":"Failed to deserialize query string: limit: invalid digit found in string"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts?limit=0'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 112</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:52:04 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"validation_failed","message":"invalid request","fields":{"limit":["limit must be 1 to 100"]}}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts?limit='</span><span class="terminal__line">HTTP/1.1 400 Bad Request</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 126</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:52:04 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"bad_request","message":"Failed to deserialize query string: limit: cannot parse integer from empty string"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts?cursor=0'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 31</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:52:04 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"items":[],"next_cursor":null}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts?author_id=999'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 31</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:52:04 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"items":[],"next_cursor":null}</span></pre>
+</div>
+          <ul>
+            <li>範囲外（<code>limit=101</code>・<code>limit=0</code>）は 422 で、<code>fields.limit</code> が付きます。数値として読めない値（<code>limit=abc</code>、空の <code>limit=</code>）は 400 の <code>bad_request</code> で、<code>message</code> に読めなかった理由が入ります。「形は正しいが値が許されない」と「そもそも形が違う」でステータスを分けています。</li>
+            <li><code>cursor=0</code>（id が 0 より小さい記事は無い）や存在しない <code>author_id</code>（999）はエラーにならず、200 で空の <code>items</code>（<code>{"items":[],"next_cursor":null}</code>）が返ります。</li>
+          </ul>
+          <p>確認できたら、サーバーを止めておきます。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>21 件のテストが成功し、<code>next_cursor</code> の値をそのまま <code>cursor</code> に渡すと続きのページが取れれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">いいねを原子的に増やし、所有者を検査しない危うさを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>記事にいいねを付ける <code>POST /posts/{id}/like</code> を作ります。API キーは不要です。応答は記事の <code>id</code> と増えた後の <code>like_count</code> だけです。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/posts.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ #[derive(Serialize, sqlx::FromRow)]</span><span class="diff-line diff-line--add">+ pub struct LikeResponse {</span><span class="diff-line diff-line--add">+     id: i64,</span><span class="diff-line diff-line--add">+     like_count: i64,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  const DEFAULT_LIMIT: i64 = 20;</span><span class="diff-line">  const MAX_LIMIT: i64 = 100;</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ pub async fn like_post(</span><span class="diff-line diff-line--add">+     State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--add">+     Path(id): Path&lt;i64&gt;,</span><span class="diff-line diff-line--add">+ ) -&gt; Result&lt;Json&lt;LikeResponse&gt;, AppError&gt; {</span><span class="diff-line diff-line--add">+     // 「読んでから +1 して書く」のではなく、1 文の UPDATE で原子的に増やす</span><span class="diff-line diff-line--add">+     let liked = sqlx::query_as::&lt;_, LikeResponse&gt;(</span><span class="diff-line diff-line--add">+         "UPDATE posts SET like_count = like_count + 1 WHERE id = ? RETURNING id, like_count",</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .bind(id)</span><span class="diff-line diff-line--add">+     .fetch_optional(&amp;state.pool)</span><span class="diff-line diff-line--add">+     .await?;</span><span class="diff-line diff-line--add">+     liked.map(Json).ok_or(AppError::NotFound("post not found"))</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <ul>
+            <li><code>like_count = like_count + 1</code> は、今の値を読んで 1 足して書く、という処理を DB の中で 1 文で行います。同時にいいねが押されても、1 件ずつ確実に足されます（原子的な更新）。</li>
+            <li>記事が無ければ更新される行が無く、<code>RETURNING</code> も何も返しません。<code>fetch_optional</code> が <code>None</code> になるので 404 にします。</li>
+            <li>いいねは記事の編集ではないので、<code>updated_at</code> は変えません。</li>
+            <li>いいねは認証の要らないエンドポイントなので、この時点では誰でも何回でも押せます。回数の制限は 12 で扱います。</li>
+          </ul>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: 「読んでから +1 して書く」と、同時のいいねが失われる</summary>
+            <div class="disclosure__body">
+              <p>アプリ側で今の値を <code>SELECT</code> し、1 足してから <code>UPDATE</code> で書き戻す 2 文の書き方にすると、どうなるかを執筆時に試しました。次の実験用のテストで、同じ記事に 50 件のいいねを同時に押しています（このファイルは実験のあと削除しました。手元で書く必要はありません）。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tests/tmp_race.rs（実験用）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">mod common;
+
+use common::{create_post, create_user, test_app};
+use sqlx::SqlitePool;
+
+// 実験用（コミットしない）: 読んでから +1 して書く方式で 50 件を同時に押す
+#[sqlx::test]
+async fn read_then_write_loses_likes(pool: SqlitePool) {
+    let app = test_app(pool.clone());
+    let author_id = create_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, author_id, "title").await;
+    let id = post["id"].as_i64().unwrap();
+
+    let mut tasks = Vec::new();
+    for _ in 0..50 {
+        let pool = pool.clone();
+        tasks.push(tokio::spawn(async move {
+            let (count,): (i64,) = sqlx::query_as("SELECT like_count FROM posts WHERE id = ?")
+                .bind(id)
+                .fetch_one(&amp;pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE posts SET like_count = ? WHERE id = ?")
+                .bind(count + 1)
+                .bind(id)
+                .execute(&amp;pool)
+                .await
+                .unwrap();
+        }));
+    }
+    for task in tasks {
+        task.await.unwrap();
+    }
+    let (count,): (i64,) = sqlx::query_as("SELECT like_count FROM posts WHERE id = ?")
+        .bind(id)
+        .fetch_one(&amp;pool)
+        .await
+        .unwrap();
+    println!("like_count after 50 concurrent likes = {count}");
+}</code></pre>
+</div>
+              <p>3 回実行したところ、50 回の同時いいねのうち、どの回も数件しか反映されませんでした。反映された件数は実行のたびに変わりました。</p>
+              <p>原因は、複数のタスクが同じ値（例えば 0）を読み、それぞれが 1 を書き戻すためです。後から書いた値が先に書いた値を上書きし、その間のいいねが失われます。<code>like_count = like_count + 1</code> の 1 文にした実装では、次の <code>concurrent_likes_are_not_lost</code> のテストで 50 件が全て反映されます。</p>
+            </div>
+          </details>
+          <p><code>src/routes/mod.rs</code> に公開のルートを 1 行足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">          .route("/posts/{id}", get(posts::get_post))</span><span class="diff-line diff-line--add">+         .route("/posts/{id}/like", post(posts::like_post))</span><span class="diff-line">          .merge(protected_users)</span></pre>
+</div>
+          <p><code>tests/posts.rs</code> の末尾に、いいねと連鎖削除のテストを 4 件追加します。<code>concurrent_likes_are_not_lost</code> は、<code>tokio::spawn</code> で 50 件のいいねを同時に送り、<code>like_count</code> が 50 になることを確かめます。<code>deleting_a_user_deletes_their_posts</code> は、user を削除するとその user の記事だけが消えることを確かめます。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tests/posts.rs（末尾に追加）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">#[sqlx::test]
+async fn like_increments_the_count(pool: SqlitePool) {
+    let app = test_app(pool);
+    let author_id = create_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, author_id, "title").await;
+    let id = post["id"].as_i64().unwrap();
+
+    // 認証なしで 2 回押すと like_count は 2
+    for expected in [1, 2] {
+        let (status, liked) = send(
+            app.clone(),
+            json_request("POST", &amp;format!("/posts/{id}/like"), None, ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            liked,
+            serde_json::json!({ "id": id, "like_count": expected })
+        );
+    }
+}
+
+#[sqlx::test]
+async fn like_unknown_post_is_not_found(pool: SqlitePool) {
+    let (status, _) = send(
+        test_app(pool),
+        json_request("POST", "/posts/999/like", None, ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test]
+async fn concurrent_likes_are_not_lost(pool: SqlitePool) {
+    let app = test_app(pool);
+    let author_id = create_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, author_id, "title").await;
+    let id = post["id"].as_i64().unwrap();
+
+    // 50 件を同時に押しても、原子的な UPDATE なので 1 件も失われない
+    let mut tasks = Vec::new();
+    for _ in 0..50 {
+        let app = app.clone();
+        tasks.push(tokio::spawn(async move {
+            send(
+                app,
+                json_request("POST", &amp;format!("/posts/{id}/like"), None, ""),
+            )
+            .await
+        }));
+    }
+    for task in tasks {
+        let (status, _) = task.await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    let (_, fetched) = send(app, get(&amp;format!("/posts/{id}"))).await;
+    assert_eq!(fetched["like_count"], 50);
+}
+
+#[sqlx::test]
+async fn deleting_a_user_deletes_their_posts(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = create_user(&amp;app, "alice").await;
+    let bob = create_user(&amp;app, "bob").await;
+    let alice_post = create_post(&amp;app, alice, "alice's").await;
+    create_post(&amp;app, bob, "bob's").await;
+
+    let (status, _) = send(
+        app.clone(),
+        json_request("DELETE", &amp;format!("/users/{alice}"), Some(TEST_API_KEY), ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // ON DELETE CASCADE: alice の記事だけが消え、bob の記事は残る
+    let (status, _) = send(app.clone(), get(&amp;format!("/posts/{}", alice_post["id"]))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, page) = send(app, get("/posts")).await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+}</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test 2&gt;&amp;1 | grep -E '^test (like|concurrent|deleting)|test result: .* [1-9][0-9]* passed|FAILED|panicked'</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s</span><span class="terminal__line">test like_unknown_post_is_not_found ... ok</span><span class="terminal__line">test like_increments_the_count ... ok</span><span class="terminal__line">test deleting_a_user_deletes_their_posts ... ok</span><span class="terminal__line">test concurrent_likes_are_not_lost ... ok</span><span class="terminal__line">test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s</span><span class="terminal__line">test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span></pre>
+</div>
+          <p>health 1 件・posts 18 件・users 6 件の合計 25 件が成功します。</p>
+          <p><code>cargo build</code> してからサーバーを起動し直し、ステップ 5 の続きのデータ（alice の記事 2・4、bob の記事 3）で確かめます。まず、bob の記事 3 にいいねを 2 回押し、存在しない記事にも押します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts/3/like</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:37:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":3,"like_count":1}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts/3/like</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:37:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":3,"like_count":2}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts/999/like</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 57</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:37:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"post not found"}}</span></pre>
+</div>
+          <p>次に、冒頭の注意で触れた穴を確かめます。API キーさえあれば、bob の名前で投稿でき、alice の記事を書き換えたり削除したりできます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d '{"author_id":2,"title":"written as bob","body":"bob never wrote this"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 164</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:37:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":5,"author_id":2,"title":"written as bob","body":"bob never wrote this","like_count":0,"created_at":"2026-10-04T06:37:05Z","updated_at":"2026-10-04T06:37:05Z"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X PATCH localhost:8080/posts/2 -H 'x-api-key: change-me-dev-only' -H 'content-type: application/json' -d '{"title":"edited by someone else"}'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 153</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:37:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":2,"author_id":1,"title":"edited by someone else","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:37:05Z"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X DELETE localhost:8080/posts/4 -H 'x-api-key: change-me-dev-only'</span><span class="terminal__line">HTTP/1.1 204 No Content</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:37:05 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 487</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:37:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"items":[{"id":5,"author_id":2,"title":"written as bob","body":"bob never wrote this","like_count":0,"created_at":"2026-10-04T06:37:05Z","updated_at":"2026-10-04T06:37:05Z"},{"id":3,"author_id":2,"title":"second","body":"b","like_count":2,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:35:33Z"},{"id":2,"author_id":1,"title":"edited by someone else","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:37:05Z"}],"next_cursor":null}</span></pre>
+</div>
+          <ul>
+            <li>bob が書いていない記事が bob の名前（<code>author_id</code> 2）で作られました。サーバーは本文の <code>author_id</code> をそのまま信じています。</li>
+            <li>alice の記事 2 が書き換えられ、記事 4 は削除されました。記事の著者とリクエストを送った人が同じかを、どこでも確かめていないためです。このような穴を、なりすましや IDOR（Insecure Direct Object Reference、他人のデータを id の指定だけで操作できてしまう脆弱性）と呼びます。</li>
+            <li>記事 3 の <code>like_count</code> は 2 で、<code>updated_at</code> は作成時のままです。</li>
+          </ul>
+          <div class="callout callout--danger">
+            <span class="callout__icon" aria-hidden="true">🚫</span>
+            <div class="callout__body">
+              <p class="callout__title">この穴は 10・11 で直します</p>
+              <p>10 でパスワードによるログインとトークンの発行を作ります。11 では、トークンから利用者を取り出し、著者をトークンの持ち主にし、自分の記事だけを更新・削除できるようにします。それまでは、この API を外部に公開しないでください。</p>
+            </div>
+          </div>
+          <p>最後に、連鎖削除（<code>ON DELETE CASCADE</code>）を確かめます。bob（user 2）を削除し、記事の一覧を取ります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X DELETE localhost:8080/users/2 -H 'x-api-key: change-me-dev-only'</span><span class="terminal__line">HTTP/1.1 204 No Content</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:37:05 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si 'localhost:8080/posts'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 184</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:37:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"items":[{"id":2,"author_id":1,"title":"edited by someone else","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:37:05Z"}],"next_cursor":null}</span></pre>
+</div>
+          <p>bob の記事（3 と、なりすましで作った記事 5）が一緒に消え、alice の記事 2 だけが残りました。<code>users</code> の削除処理には手を加えていません。記事の削除は DB の外部キーの <code>ON DELETE CASCADE</code> が行っています。確認できたら、サーバーを止めておきます。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>25 件のテストが成功し、いいね 2 回で <code>like_count</code> が 2 になり、bob を削除すると bob の記事が一覧から消えれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">適用済みのマイグレーションを書き換えて失敗させる</h3>
+        </div>
+        <div class="step__body">
+          <p>適用済みのマイグレーションのファイルを後から書き換えると、どうなるかを確かめます。sqlx は、適用したマイグレーションの内容のチェックサムを DB の <code>_sqlx_migrations</code> テーブルに記録しています。サーバーが止まっていることを確かめてから、元に戻せるよう <code>0001_create_users.sql</code> を控え、末尾にコメントを 1 行だけ足します。SQL の意味は変わりません。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp migrations/0001_create_users.sql /tmp/axum09-0001.bak</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo "-- tampered" &gt;&gt; migrations/0001_create_users.sql</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat migrations/0001_create_users.sql</span><span class="terminal__line">CREATE TABLE users (</span><span class="terminal__line">    id INTEGER PRIMARY KEY AUTOINCREMENT,</span><span class="terminal__line">    name TEXT NOT NULL</span><span class="terminal__line">);</span><span class="terminal__line">-- tampered</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate info</span><span class="terminal__line">1/installed (different checksum) create users</span><span class="terminal__line">applied migration had checksum 868228918720118405cdaba515d4de22d200e3c1bd102a6d773b0b9d4645c3ba0672c5ce761b06d3060ac660487577b5</span><span class="terminal__line">local migration has checksum b6db16c51ac1205277b86e175d3b269cc031c321ce035db40177c1efefbd643197c8d217371a8b5d2e6d7c8c11147b9d</span><span class="terminal__line">2/installed create posts</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo $?</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate run</span><span class="terminal__line">error: migration 1 was previously applied but has been modified</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo $?</span><span class="terminal__line">1</span></pre>
+</div>
+          <ul>
+            <li><code>sqlx migrate info</code> は <code>(different checksum)</code> と、適用したときとファイルの今のチェックサムを並べて表示します。コメントを 1 行足しただけでもチェックサムは変わります。<code>info</code> 自体は成功（終了コード 0）します。</li>
+            <li><code>sqlx migrate run</code> は <code>migration 1 was previously applied but has been modified</code> で失敗します（終了コード 1）。</li>
+          </ul>
+          <p>サーバーでも試します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling migrations v0.1.0 (/path/to/09-migrations)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.49s</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">config: Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", api_key: "***" }</span><span class="terminal__line">Error: VersionMismatch(1)</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo $?</span><span class="terminal__line">1</span></pre>
+</div>
+          <p>ビルドは通ります。マイグレーションの検証は起動時に行われるので、起動した直後に <code>Error: VersionMismatch(1)</code> で終了し、ポートも開きません。文言が sqlx-cli と違うのは、<code>main</code> がエラーを <code>Debug</code> 形式で表示するためです。sqlx-cli は人が読む向けの文言を表示します。</p>
+          <p>適用済みのマイグレーションは、手元の開発用の DB でも書き換えないのが原則です。テーブルの構造を変えたいときは、<code>sqlx migrate add</code> で次の番号のマイグレーションを足します。控えておいたファイルで元に戻します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp /tmp/axum09-0001.bak migrations/0001_create_users.sql</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling migrations v0.1.0 (/path/to/09-migrations)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.38s</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate info</span><span class="terminal__line">1/installed create users</span><span class="terminal__line">2/installed create posts</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlx migrate run</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo $?</span><span class="terminal__line">0</span></pre>
+</div>
+          <p><code>sqlx migrate run</code> は、適用するものが無いと何も表示せずに終わります。</p>
+          <p>元に戻したら、サーバーが起動して応答することを確かめます。1 つ目のターミナルでサーバーを起動し、2 つ目のターミナルで記事の一覧を取ります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">config: Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", api_key: "***" }</span><span class="terminal__line">listening on 127.0.0.1:8080</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/posts</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 184</span><span class="terminal__line">date: Sun, 04 Oct 2026 06:52:35 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"items":[{"id":2,"author_id":1,"title":"edited by someone else","body":"b","like_count":0,"created_at":"2026-10-04T06:35:33Z","updated_at":"2026-10-04T06:37:05Z"}],"next_cursor":null}</span></pre>
+</div>
+          <p>起動時の検証を通り、<code>200 OK</code> が返れば元どおりです。確認できたら、サーバーを止めておきます。</p>
+          <p>仕上げに、書式・静的解析・テストを確かめます（出力の途中は「…」で省略し、<code>cargo test</code> はテストファイルごとの集計の行を中心に載せています）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check &amp;&amp; cargo clippy --all-targets -- -D warnings &amp;&amp; cargo test</span><span class="terminal__line">…</span><span class="terminal__line">    Checking sqlx v0.9.0</span><span class="terminal__line">    Checking migrations v0.1.0 (/path/to/09-migrations)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.90s</span><span class="terminal__line">…</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-ceb6a1c2ee269341)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-28fe40bac1d4dbfd)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-6371cd2ecf2ad68c)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span><span class="terminal__line">…</span></pre>
+</div>
+          <p>最終的なディレクトリ構成は次のとおりです（<code>target/</code> は省略）。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">09-migrations/
+  .env                 # ローカル専用（コミットしない）
+  .env.example         # DATABASE_URL から ?mode=rwc を外した
+  .gitignore
+  Cargo.toml           # name = "migrations"（クレートの追加は無し）
+  Cargo.lock
+  app.db               # 開発用の DB（WAL の app.db-shm・app.db-wal も。コミットしない）
+  migrations/
+    0001_create_users.sql
+    0002_create_posts.sql  # posts テーブル（外部キーと索引）
+  src/
+    main.rs              # SqliteConnectOptions で接続
+    lib.rs
+    config.rs            # DATABASE_URL の既定値を sqlite://app.db に
+    state.rs
+    error.rs             # NotFound に文言、QueryRejection を追加
+    middleware.rs
+    routes/
+      mod.rs             # /posts のルートを追加
+      health.rs
+      posts.rs           # 記事の一覧・作成・取得・更新・削除・いいね
+      users.rs
+  tests/
+    common/
+      mod.rs             # 空の本文に対応、create_user・create_post を追加
+    health.rs            # 1 件
+    posts.rs             # 18 件
+    users.rs             # 6 件</code></pre>
+</div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>書き換えると、CLI では <code>migration 1 was previously applied but has been modified</code> が出ます。サーバーでは <code>Error: VersionMismatch(1)</code> が出ます。元に戻すと <code>sqlx migrate info</code> が 2 件とも <code>installed</code> に戻ります。ここまで確かめれば OK です。<code>cargo clippy</code> が警告なしで終わり、25 件のテストが成功すれば完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">sqlx-cli を入れ、<code>sqlx migrate info</code> で <code>pending</code> と <code>installed</code> の違いを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>sqlx migrate add</code> で <code>0002_create_posts.sql</code> を作り、外部キーと索引を書いて <code>sqlx migrate run</code> で適用した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>SqliteConnectOptions</code> で外部キー・WAL・待ち時間を指定し、<code>app.db-wal</code> ができることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">存在しない <code>author_id</code> が、外部キー違反を変換した 422 になる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>next_cursor</code> をそのまま <code>cursor</code> に渡して 2 ページ目を取り、降順のキーセットが <code>id &lt; cursor</code> になる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">「読んでから +1 して書く」といいねが失われる理由と、<code>like_count = like_count + 1</code> で防げる理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">API キーだけで他人の名前の投稿や、他人の記事の書き換えができてしまうことを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">適用済みのマイグレーションを書き換えて失敗させ、元に戻した。<code>cargo test</code> の 25 件が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">新しいマイグレーションを足したのに、起動しても適用されない</p>
+          <p><code>sqlx::migrate!()</code> は、ビルドの時点で <code>migrations/</code> の SQL を埋め込みます。執筆時に試したところ、既存のファイルの内容を書き換えると再ビルドされましたが、新しいファイルを足しただけでは <code>cargo build</code> が再ビルドせず、起動しても新しいテーブルは作られませんでした。<code>touch src/main.rs</code> でソースの更新日時を変えてから <code>cargo build</code> すると、再ビルドされて適用されます。</p>
+          <p>毎回 <code>touch</code> するのを避けたい場合は、<code>sqlx migrate build-script</code> を使う方法もあります。<code>migrations/</code> が変わったら再ビルドするよう指示する <code>build.rs</code>（<code>println!("cargo:rerun-if-changed=migrations");</code>）を作ります。このレッスンの完成コードでは使っていません。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">別の場所に空の <code>app.db</code> ができる</p>
+          <p>sqlx-cli は、カレントディレクトリの <code>.env</code> を読みます。<code>sqlite://app.db</code> の <code>app.db</code> も、カレントディレクトリからの相対パスです。<code>sqlx migrate info</code>・<code>run</code> は、必ず <code>09-migrations</code> ディレクトリで実行してください。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Error: VersionMismatch(1)</code> でサーバーが起動しない</p>
+          <p>適用済みのマイグレーション（この場合は <code>0001</code>）のファイルが、適用したときと変わっています。コメントや空白の変更でも起きます。ファイルを元の内容に戻してください（ステップ 7 を参照）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>sqlite3</code> で入れた行は、外部キーの制約が効かない</p>
+          <p><code>sqlite3</code> コマンドは、外部キーを既定で無効にしています。<code>sqlite3</code> で行を入れて確かめるときは、先に <code>PRAGMA foreign_keys=ON;</code> を実行してください（ステップ 4 の読み物を参照）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">2 ページ目に、1 ページ目と同じ記事が出る</p>
+          <p><code>cursor</code> には、前のページの応答の <code>next_cursor</code> をそのまま渡します。<code>cursor</code> は「この id より古い記事から」という意味です。執筆時に <code>next_cursor</code> の 3 ではなく 1 ページ目の先頭の 4 を渡したところ、1 ページ目にあった id 3 がもう一度返りました。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>/posts/abc</code> の 400 が JSON ではない</p>
+          <p>パスの型が合わないときは、Axum が <code>text/plain</code> の 400 を返します。これは 02 から変わっていない挙動です（06 で JSON に包んだのは <code>Json</code> の拒否だけです）。後の項目（12）で、ほかのエラーと同じ JSON の形に統一する予定です。一方、クエリ文字列の型が合わないとき（<code>?limit=abc</code>）は、ステップ 5 で <code>QueryRejection</code> を取り込んだので JSON の 400 になります。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>PATCH</code> しても <code>updated_at</code> が変わらない</p>
+          <p><code>updated_at</code> は秒までしか持ちません。作成と同じ秒のうちに更新すると、<code>created_at</code> と同じ値になります。1 秒以上待ってから試してください。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        sqlx-cli でマイグレーションを追加・適用・確認し、外部キーを持つ <code>posts</code> テーブルを足しました。
+        その上に、記事の作成・一覧・取得・更新・削除といいねの API を作り、25 件のテストで確かめました。
+        一方で、API キーだけで誰の名前でも投稿でき、誰の記事でも書き換えられる穴を、わざと残しています。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>観点</th><th>このレッスンでの扱い</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>マイグレーション</td><td><code>sqlx migrate add</code> で連番のファイルを作り、<code>info</code> で確認、<code>run</code> で適用する。適用済みのファイルは書き換えない</td></tr>
+          <tr><td>外部キー</td><td><code>REFERENCES users(id) ON DELETE CASCADE</code>。存在しない <code>author_id</code> は外部キー違反を 422 に変換する。user を消すと記事も消える</td></tr>
+          <tr><td>接続</td><td><code>SqliteConnectOptions</code> で外部キー・WAL・待ち時間を指定し、<code>SqlitePoolOptions</code> でプールを作る</td></tr>
+          <tr><td>検証</td><td>不正な項目を <code>fields</code> に全部集め、1 回の 422 で返す。<code>PATCH</code> は指定された項目だけを検証する</td></tr>
+          <tr><td>ページネーション</td><td>新しい順のキーセット方式。<code>id &lt; cursor</code>、<code>limit + 1</code> 件取って <code>next_cursor</code> を決める。<code>limit</code> の上限は 100</td></tr>
+          <tr><td>同時実行</td><td>いいねは <code>like_count = like_count + 1</code> の 1 文で原子的に増やす</td></tr>
+          <tr><td>残している穴</td><td>著者のなりすましと、他人の記事の書き換え・削除。10・11 で直す</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/09-migrations</code> の <code>axum/09-migrations/</code> ディレクトリにあります。<code>.env</code> はコミットしていないので、<code>.env.example</code> をコピーして作ってください。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../08-integration-test/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">08: 結合テスト</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">10: パスワードハッシュとログイン</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
