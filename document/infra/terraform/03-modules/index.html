@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03: モジュール化 | Infra（Terraform）ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../../index.html">ハンズオン</a></li>
+          <li>Infra</li>
+          <li>Terraform</li>
+          <li aria-current="page">03</li>
+        </ol>
+        <h1 class="lesson-title">モジュール化</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 入力変数・出力値・ローカル値を使って Terraform の設定を書けるようになった人</li>
+          <li class="lesson-meta__item">📋 前提: 02 で作った <code>02-variables-outputs</code> ディレクトリ（<code>main.tf</code>・<code>variables.tf</code>・<code>outputs.tf</code>・<code>terraform.tfvars</code>・<code>.gitignore</code>）が手元にあること。クラウドのアカウントは不要</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../02-variables-outputs/index.html">02: 変数とアウトプット</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>設定の一部を子モジュール（<code>modules/greeting/</code>）に切り出し、<code>module</code> ブロックで呼び出す</li>
+          <li>モジュールを追加したら <code>init</code> が必要なこと、モジュールの中を編集しただけなら不要なことを確かめる</li>
+          <li>モジュールに移すとリソースのアドレスが変わることを知り、<code>moved</code> ブロックで作り直しを避ける</li>
+          <li>モジュールの出力値を <code>module.&lt;名前&gt;.&lt;出力名&gt;</code> で受け取る</li>
+          <li><code>for_each</code> で同じモジュールを複数回呼び出し、結果を <code>for</code> 式でまとめる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        02 では、入力変数で値を受け取り、出力値で結果を返せるようにしました。この項目では、その設定の一部を<strong>モジュール</strong>として切り出し、部品として呼び出せるようにします。
+        02 で作った入力変数と出力値は、そのままモジュールの「入口」と「出口」になります。
+      </p>
+      <p>
+        すでに <code>apply</code> 済みのリソースをモジュールへ移すと、Terraform はそのリソースを別物とみなし、作り直そうとします。これを <code>moved</code> ブロックで避ける方法も、実際に作り直しの計画を見ながら確かめます。
+        使うのはこれまでと同じく <code>hashicorp/local</code> と <code>hashicorp/random</code> だけで、クラウドのアカウントや料金の心配はありません。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Terraform v1.16.2（darwin_arm64）/ hashicorp/local v2.9.1 / hashicorp/random v3.9.1 で動作を確認しています。バージョンは執筆時点（2026年10月）のものです。
+            掲載している出力は色なし（<code>-no-color</code> 相当）で取得したものです。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">02 の完成コードを出発点にする</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  02 で作った <code>02-variables-outputs</code> の隣に、新しい作業ディレクトリ <code>03-modules</code> を作ります。<code>.gitignore</code>・<code>main.tf</code>・<code>variables.tf</code>・<code>outputs.tf</code>・<code>terraform.tfvars</code> の 5 つをコピーします。
+  02 と同じく、state（<code>terraform.tfstate</code>）や <code>.terraform/</code> はコピーせず、新しいディレクトリで一から作ります。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir 03-modules</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp 02-variables-outputs/{.gitignore,main.tf,variables.tf,outputs.tf,terraform.tfvars} 03-modules/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 03-modules</span></pre>
+</div>
+<p>コピーした <code>main.tf</code> は、02 の完成形そのままです。この項目では、ここに書かれた <code>random_pet.greeter</code> と <code>local_file.hello</code> をモジュールへ切り出します。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">terraform {
+  required_version = "&gt;= 1.9"
+
+  required_providers {
+    local = {
+      source  = "hashicorp/local"
+      version = "~&gt; 2.9"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~&gt; 3.9"
+    }
+  }
+}
+
+locals {
+  output_dir    = "${path.module}/output"
+  greeting_text = var.shout ? upper(var.greeting) : var.greeting
+  message       = "${local.greeting_text}, ${random_pet.greeter.id}! (by ${var.owner})\n"
+}
+
+resource "random_pet" "greeter" {
+  length = var.pet_length
+}
+
+resource "local_file" "hello" {
+  filename = "${local.output_dir}/hello.txt"
+  content  = local.message
+}
+
+resource "local_sensitive_file" "token" {
+  filename = "${local.output_dir}/token.txt"
+  content  = var.api_token
+}</code></pre>
+</div>
+<details class="disclosure">
+  <summary class="disclosure__summary">コピーした <code>variables.tf</code> と <code>outputs.tf</code> を見る</summary>
+  <div class="disclosure__body">
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">variables.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">variable "greeting" {
+  type        = string
+  description = "ファイルに書くあいさつ文"
+  default     = "Hello"
+}
+
+variable "owner" {
+  type        = string
+  description = "ファイルの作成者名（default なし。必ず値を渡す）"
+}
+
+variable "pet_length" {
+  type        = number
+  description = "random_pet の名前を構成する単語の数（1〜5）"
+  default     = 2
+
+  validation {
+    condition     = var.pet_length &gt;= 1 &amp;&amp; var.pet_length &lt;= 5
+    error_message = "pet_length は 1 以上 5 以下で指定してください。"
+  }
+}
+
+variable "shout" {
+  type        = bool
+  description = "true にするとあいさつ文を大文字にする"
+  default     = false
+}
+
+variable "api_token" {
+  type        = string
+  description = "ダミーの API トークン（機微な値の例）"
+  sensitive   = true
+  default     = "dummy-token-12345"
+}</code></pre>
+</div>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">outputs.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">output "hello_path" {
+  description = "生成したあいさつファイルのパス"
+  value       = local_file.hello.filename
+}
+
+output "pet_name" {
+  description = "random_pet が作った名前"
+  value       = random_pet.greeter.id
+}
+
+output "token" {
+  description = "ダミーの API トークン"
+  value       = var.api_token
+  sensitive   = true
+}</code></pre>
+</div>
+  </div>
+</details>
+<p><code>terraform.tfvars</code> は <code>owner = "Alice"</code> の 1 行だけです。新しいディレクトリなので、<code>init</code> からやり直します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform init</span><span class="terminal__line">Initializing the backend...</span><span class="terminal__line"></span><span class="terminal__line">Initializing provider plugins...</span><span class="terminal__line">- Finding hashicorp/local versions matching "~&gt; 2.9"...</span><span class="terminal__line">- Finding hashicorp/random versions matching "~&gt; 3.9"...</span><span class="terminal__line">- Installing hashicorp/local v2.9.1...</span><span class="terminal__line">- Installed hashicorp/local v2.9.1 (signed by HashiCorp)</span><span class="terminal__line">- Installing hashicorp/random v3.9.1...</span><span class="terminal__line">- Installed hashicorp/random v3.9.1 (signed by HashiCorp)</span><span class="terminal__line"></span><span class="terminal__line">Terraform has created a lock file .terraform.lock.hcl to record the provider</span><span class="terminal__line">selections it made above. Include this file in your version control repository</span><span class="terminal__line">so that Terraform can guarantee to make the same selections by default when</span><span class="terminal__line">you run "terraform init" in the future.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has been successfully initialized!</span><span class="terminal__line"></span><span class="terminal__line">You may now begin working with Terraform. Try running "terraform plan" to see</span><span class="terminal__line">any changes that are required for your infrastructure. All Terraform commands</span><span class="terminal__line">should now work.</span><span class="terminal__line"></span><span class="terminal__line">If you ever set or change modules or backend configuration for Terraform,</span><span class="terminal__line">rerun this command to reinitialize your working directory. If you forget, other</span><span class="terminal__line">commands will detect it and remind you to do so if necessary.</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello will be created</span><span class="terminal__line">  + resource "local_file" "hello" {</span><span class="terminal__line">      + content              = (known after apply)</span><span class="terminal__line">      + content_base64sha256 = (known after apply)</span><span class="terminal__line">      + content_base64sha512 = (known after apply)</span><span class="terminal__line">      + content_md5          = (known after apply)</span><span class="terminal__line">      + content_sha1         = (known after apply)</span><span class="terminal__line">      + content_sha256       = (known after apply)</span><span class="terminal__line">      + content_sha512       = (known after apply)</span><span class="terminal__line">      + directory_permission = "0777"</span><span class="terminal__line">      + file_permission      = "0777"</span><span class="terminal__line">      + filename             = "./output/hello.txt"</span><span class="terminal__line">      + id                   = (known after apply)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # local_sensitive_file.token will be created</span><span class="terminal__line">  + resource "local_sensitive_file" "token" {</span><span class="terminal__line">      + content              = (sensitive value)</span><span class="terminal__line">      + content_base64sha256 = (known after apply)</span><span class="terminal__line">      + content_base64sha512 = (known after apply)</span><span class="terminal__line">      + content_md5          = (known after apply)</span><span class="terminal__line">      + content_sha1         = (known after apply)</span><span class="terminal__line">      + content_sha256       = (known after apply)</span><span class="terminal__line">      + content_sha512       = (known after apply)</span><span class="terminal__line">      + directory_permission = "0700"</span><span class="terminal__line">      + file_permission      = "0700"</span><span class="terminal__line">      + filename             = "./output/token.txt"</span><span class="terminal__line">      + id                   = (known after apply)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # random_pet.greeter will be created</span><span class="terminal__line">  + resource "random_pet" "greeter" {</span><span class="terminal__line">      + id        = (known after apply)</span><span class="terminal__line">      + length    = 2</span><span class="terminal__line">      + separator = "-"</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 3 to add, 0 to change, 0 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  + hello_path = "./output/hello.txt"</span><span class="terminal__line">  + pet_name   = (known after apply)</span><span class="terminal__line">  + token      = (sensitive value)</span><span class="terminal__line">random_pet.greeter: Creating...</span><span class="terminal__line">random_pet.greeter: Creation complete after 0s [id=helped-killdeer]</span><span class="terminal__line">local_sensitive_file.token: Creating...</span><span class="terminal__line">local_sensitive_file.token: Creation complete after 0s [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">local_file.hello: Creating...</span><span class="terminal__line">local_file.hello: Creation complete after 0s [id=6f2a00ee2d12bea513fe143226cf88dd0d8dc347]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 3 added, 0 changed, 0 destroyed.</span><span class="terminal__line"></span><span class="terminal__line">Outputs:</span><span class="terminal__line"></span><span class="terminal__line">hello_path = "./output/hello.txt"</span><span class="terminal__line">pet_name = "helped-killdeer"</span><span class="terminal__line">token = &lt;sensitive&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">Hello, helped-killdeer! (by Alice)</span></pre>
+</div>
+<div class="callout callout--note">
+  <span class="callout__icon" aria-hidden="true">ℹ️</span>
+  <div class="callout__body">
+    <p class="callout__title">ペットの名前は実行ごとに変わる</p>
+    <p><code>helped-killdeer</code> は執筆時の出力例です。<code>random_pet</code> の値は作成のたびにランダムで決まるので、みなさんの環境では別の名前になります。<code>id</code> のハッシュ値も同様です。以降の出力に出てくる <code>helped-killdeer</code>（ステップ 6 で作る <code>splendid-seasnail</code> も）は、自分の環境の名前に読み替えてください。</p>
+  </div>
+</div>
+<p>
+  state の中でリソースを指す名前を「アドレス」と呼びます。いま state に入っているアドレスは、<code>random_pet.greeter</code>・<code>local_file.hello</code>・<code>local_sensitive_file.token</code> の 3 つです。この後、モジュールに移すとアドレスがどう変わるかに注目します。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>Apply complete! Resources: 3 added, 0 changed, 0 destroyed.</code> が表示されることを確認してください。また、<code>cat output/hello.txt</code> で <code>Hello, &lt;ペットの名前&gt;! (by Alice)</code> が表示されることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">あいさつ文の部分をモジュールに切り出す</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  Terraform の<strong>モジュール</strong>は、<code>.tf</code> ファイルを置いたディレクトリのことです。これまで作業してきた <code>03-modules</code> 自身も「ルートモジュール」と呼ばれるモジュールです。
+  ルートモジュールから別のディレクトリを <code>module</code> ブロックで呼び出すと、そのディレクトリの中身を部品として使えます。呼び出される側を「子モジュール」と呼びます。
+</p>
+<p>
+  あいさつ文を作る部分（<code>random_pet</code>・<code>local_file</code>・関連するローカル値）を、子モジュール <code>modules/greeting/</code> に移します。ダミーのトークン（<code>local_sensitive_file.token</code> と変数 <code>api_token</code>）はルートに残します。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p modules/greeting</span></pre>
+</div>
+<p>モジュールの中身は、ルートと同じく <code>main.tf</code>・<code>variables.tf</code>・<code>outputs.tf</code> に分けて書きます。まず <code>modules/greeting/main.tf</code> です。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">modules/greeting/main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">terraform {
+  required_providers {
+    local = {
+      source  = "hashicorp/local"
+      version = "&gt;= 2.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "&gt;= 3.0"
+    }
+  }
+}
+
+locals {
+  greeting_text = var.shout ? upper(var.greeting) : var.greeting
+  message       = "${local.greeting_text}, ${random_pet.greeter.id}! (by ${var.owner})\n"
+}
+
+resource "random_pet" "greeter" {
+  length = var.pet_length
+}
+
+resource "local_file" "hello" {
+  filename = "${var.output_dir}/hello.txt"
+  content  = local.message
+}</code></pre>
+</div>
+<p>
+  リソースとローカル値は、ルートの <code>main.tf</code> から移したものです。違いは <code>local_file</code> の <code>filename</code> です。02 ではルートで <code>"${path.module}/output"</code> と書いていました。
+  <code>path.module</code> は「その式が書かれているモジュールのディレクトリ」を表します。ルートでは <code>.</code> でしたが、子モジュールの中に書くと <code>modules/greeting</code> を指します。
+  そのままモジュールに移すと、ファイルの出力先が <code>modules/greeting/output/</code> に変わってしまいます。そこで、出力先のディレクトリは変数 <code>output_dir</code> として呼び出し側から受け取ります。
+</p>
+<p>
+  先頭の <code>terraform</code> ブロックでは、モジュールが使うプロバイダーを <code>required_providers</code> で宣言しています。モジュール側では <code>source</code> と緩い下限（<code>&gt;= 2.0</code> / <code>&gt;= 3.0</code>）だけを書きます。
+  実際に使うバージョンの範囲（<code>~&gt; 2.9</code> / <code>~&gt; 3.9</code>）を決めるのはルートです。ルートとモジュールの制約は、両方を満たすバージョンが選ばれます。モジュールには <code>provider</code> ブロックは書きません（プロバイダーの設定はルートから引き継がれます）。この項目では、モジュール側の <code>required_version</code> も省略しています。
+</p>
+<p>次に、モジュールの入力変数を <code>modules/greeting/variables.tf</code> に書きます。モジュールの変数は、呼び出し側から値を受け取る「入口」です。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">modules/greeting/variables.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">variable "greeting" {
+  type        = string
+  description = "ファイルに書くあいさつ文"
+  default     = "Hello"
+}
+
+variable "owner" {
+  type        = string
+  description = "ファイルの作成者名"
+}
+
+variable "pet_length" {
+  type        = number
+  description = "random_pet の名前を構成する単語の数（1〜5）"
+  default     = 2
+
+  validation {
+    condition     = var.pet_length &gt;= 1 &amp;&amp; var.pet_length &lt;= 5
+    error_message = "pet_length は 1 以上 5 以下で指定してください。"
+  }
+}
+
+variable "shout" {
+  type        = bool
+  description = "true にするとあいさつ文を大文字にする"
+  default     = false
+}
+
+variable "output_dir" {
+  type        = string
+  description = "あいさつファイルを書き出すディレクトリ"
+}</code></pre>
+</div>
+<p>
+  <code>greeting</code>・<code>owner</code>・<code>pet_length</code>・<code>shout</code> はルートの変数と同じ形です。<code>pet_length</code> の範囲を検査する <code>validation</code> も、値を実際に使うモジュール側へ移しました。最後の <code>output_dir</code> が新しく追加した変数です。
+</p>
+<p>モジュールの出力値は <code>modules/greeting/outputs.tf</code> に書きます。こちらは呼び出し側へ値を返す「出口」です。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">modules/greeting/outputs.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">output "hello_path" {
+  description = "生成したあいさつファイルのパス"
+  value       = local_file.hello.filename
+}
+
+output "pet_name" {
+  description = "random_pet が作った名前"
+  value       = random_pet.greeter.id
+}</code></pre>
+</div>
+<p>ルートの <code>main.tf</code> は、移したリソースとローカル値を消し、代わりに <code>module</code> ブロックでモジュールを呼び出します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> </span><span class="diff-line"> locals {</span><span class="diff-line diff-line--remove">-  output_dir    = "${path.module}/output"</span><span class="diff-line diff-line--remove">-  greeting_text = var.shout ? upper(var.greeting) : var.greeting</span><span class="diff-line diff-line--remove">-  message       = "${local.greeting_text}, ${random_pet.greeter.id}! (by ${var.owner})\n"</span><span class="diff-line diff-line--add">+  output_dir = "${path.module}/output"</span><span class="diff-line"> }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-resource "random_pet" "greeter" {</span><span class="diff-line diff-line--remove">-  length = var.pet_length</span><span class="diff-line diff-line--remove">-}</span><span class="diff-line diff-line--add">+module "greeting" {</span><span class="diff-line diff-line--add">+  source = "./modules/greeting"</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-resource "local_file" "hello" {</span><span class="diff-line diff-line--remove">-  filename = "${local.output_dir}/hello.txt"</span><span class="diff-line diff-line--remove">-  content  = local.message</span><span class="diff-line diff-line--add">+  greeting   = var.greeting</span><span class="diff-line diff-line--add">+  owner      = var.owner</span><span class="diff-line diff-line--add">+  pet_length = var.pet_length</span><span class="diff-line diff-line--add">+  shout      = var.shout</span><span class="diff-line diff-line--add">+  output_dir = local.output_dir</span><span class="diff-line"> }</span><span class="diff-line"> </span></pre>
+</div>
+<ul>
+  <li><code>module "greeting"</code>: <code>greeting</code> は、ルートの中でこの呼び出しを指す名前です</li>
+  <li><code>source</code>: モジュールの場所。<code>./</code> で始まるローカルパスを書きます</li>
+  <li>それ以外の引数: モジュールの入力変数に渡す値です。<code>output_dir = local.output_dir</code> で、ルートの <code>./output</code> を渡しています</li>
+</ul>
+<p>ルートの <code>variables.tf</code> からは、モジュールへ移した <code>validation</code> を外し、説明を変えます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">variables.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> variable "pet_length" {</span><span class="diff-line">   type        = number</span><span class="diff-line diff-line--remove">-  description = "random_pet の名前を構成する単語の数（1〜5）"</span><span class="diff-line diff-line--add">+  description = "random_pet の名前を構成する単語の数（1〜5。範囲の検証はモジュール側で行う）"</span><span class="diff-line">   default     = 2</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">-  validation {</span><span class="diff-line diff-line--remove">-    condition     = var.pet_length &gt;= 1 &amp;&amp; var.pet_length &lt;= 5</span><span class="diff-line diff-line--remove">-    error_message = "pet_length は 1 以上 5 以下で指定してください。"</span><span class="diff-line diff-line--remove">-  }</span><span class="diff-line"> }</span><span class="diff-line"> </span></pre>
+</div>
+<p>
+  ルートの <code>outputs.tf</code> の <code>hello_path</code> と <code>pet_name</code> は、移したリソースを直接参照していました。ルートからはもう参照できないので、いったん削除して <code>token</code> だけにします（ステップ 5 でモジュールの出力値を使って戻します）。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">outputs.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">-output "hello_path" {</span><span class="diff-line diff-line--remove">-  description = "生成したあいさつファイルのパス"</span><span class="diff-line diff-line--remove">-  value       = local_file.hello.filename</span><span class="diff-line diff-line--remove">-}</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">-output "pet_name" {</span><span class="diff-line diff-line--remove">-  description = "random_pet が作った名前"</span><span class="diff-line diff-line--remove">-  value       = random_pet.greeter.id</span><span class="diff-line diff-line--remove">-}</span><span class="diff-line diff-line--remove">-</span><span class="diff-line"> output "token" {</span><span class="diff-line">   description = "ダミーの API トークン"</span></pre>
+</div>
+<p>ここで <code>validate</code> してみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Error: Module not installed</span><span class="terminal__line"></span><span class="terminal__line">  on main.tf line 20:</span><span class="terminal__line">  20: module "greeting" {</span><span class="terminal__line"></span><span class="terminal__line">This module is not yet installed. Run "terraform init" to install all modules</span><span class="terminal__line">required by this configuration.</span></pre>
+</div>
+<p>
+  <code>Module not installed</code>（モジュールがインストールされていない）で失敗しました。<code>terraform plan</code> も同じ文面で止まります。
+  <code>module</code> ブロックを追加したら、<code>validate</code> の前にも <code>terraform init</code> が必要です。<code>validate</code> もモジュールの中身を読む必要があるためです。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>modules/greeting/</code> に <code>main.tf</code>・<code>variables.tf</code>・<code>outputs.tf</code> の 3 つがあることを確認してください。また、<code>terraform validate</code> が <code>Error: Module not installed</code> で失敗することを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>init</code> し直し、アドレスの変化を確かめる</h3>
+        </div>
+        <div class="step__body">
+
+<p>エラーの案内どおり、<code>terraform init</code> を実行します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform init</span><span class="terminal__line">Initializing the backend...</span><span class="terminal__line"></span><span class="terminal__line">Initializing modules...</span><span class="terminal__line">- greeting in modules/greeting</span><span class="terminal__line"></span><span class="terminal__line">Initializing provider plugins...</span><span class="terminal__line">- Reusing previous version of hashicorp/local from the dependency lock file</span><span class="terminal__line">- Reusing previous version of hashicorp/random from the dependency lock file</span><span class="terminal__line">- Using previously-installed hashicorp/local v2.9.1</span><span class="terminal__line">- Using previously-installed hashicorp/random v3.9.1</span><span class="terminal__line"></span><span class="terminal__line">Terraform has been successfully initialized!</span><span class="terminal__line"></span><span class="terminal__line">You may now begin working with Terraform. Try running "terraform plan" to see</span><span class="terminal__line">any changes that are required for your infrastructure. All Terraform commands</span><span class="terminal__line">should now work.</span><span class="terminal__line"></span><span class="terminal__line">If you ever set or change modules or backend configuration for Terraform,</span><span class="terminal__line">rerun this command to reinitialize your working directory. If you forget, other</span><span class="terminal__line">commands will detect it and remind you to do so if necessary.</span></pre>
+</div>
+<p>
+  01・02 の <code>init</code> には無かった <code>Initializing modules...</code> と <code>- greeting in modules/greeting</code> が出ました。プロバイダーは lock ファイルの版（<code>Reusing previous version</code>）をそのまま使っています。
+  <code>init</code> が記録したモジュールの一覧は、<code>.terraform/modules/modules.json</code> で見られます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cat .terraform/modules/modules.json</span><span class="terminal__line">{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"greeting","Source":"./modules/greeting","Dir":"modules/greeting"}]}</span></pre>
+</div>
+<p>
+  ローカルパスのモジュールはどこにもコピーされず、<code>Dir</code> が元のディレクトリ <code>modules/greeting</code> を指すだけです。<code>validate</code> と <code>plan</code> を実行します（<code>plan</code> の「…」はハッシュ値の行と、末尾の <code>Note:</code> の部分です）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=6f2a00ee2d12bea513fe143226cf88dd0d8dc347]</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=helped-killdeer]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line">  - destroy</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello will be destroyed</span><span class="terminal__line">  # (because local_file.hello is not in configuration)</span><span class="terminal__line">  - resource "local_file" "hello" {</span><span class="terminal__line">      - content              = &lt;&lt;-EOT</span><span class="terminal__line">            Hello, helped-killdeer! (by Alice)</span><span class="terminal__line">        EOT -&gt; null</span><span class="terminal__line">      …</span><span class="terminal__line">      - directory_permission = "0777" -&gt; null</span><span class="terminal__line">      - file_permission      = "0777" -&gt; null</span><span class="terminal__line">      - filename             = "./output/hello.txt" -&gt; null</span><span class="terminal__line">      - id                   = "6f2a00ee2d12bea513fe143226cf88dd0d8dc347" -&gt; null</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # random_pet.greeter will be destroyed</span><span class="terminal__line">  # (because random_pet.greeter is not in configuration)</span><span class="terminal__line">  - resource "random_pet" "greeter" {</span><span class="terminal__line">      - id        = "helped-killdeer" -&gt; null</span><span class="terminal__line">      - length    = 2 -&gt; null</span><span class="terminal__line">      - separator = "-" -&gt; null</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting.local_file.hello will be created</span><span class="terminal__line">  + resource "local_file" "hello" {</span><span class="terminal__line">      + content              = (known after apply)</span><span class="terminal__line">      + content_base64sha256 = (known after apply)</span><span class="terminal__line">      + content_base64sha512 = (known after apply)</span><span class="terminal__line">      + content_md5          = (known after apply)</span><span class="terminal__line">      + content_sha1         = (known after apply)</span><span class="terminal__line">      + content_sha256       = (known after apply)</span><span class="terminal__line">      + content_sha512       = (known after apply)</span><span class="terminal__line">      + directory_permission = "0777"</span><span class="terminal__line">      + file_permission      = "0777"</span><span class="terminal__line">      + filename             = "./output/hello.txt"</span><span class="terminal__line">      + id                   = (known after apply)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting.random_pet.greeter will be created</span><span class="terminal__line">  + resource "random_pet" "greeter" {</span><span class="terminal__line">      + id        = (known after apply)</span><span class="terminal__line">      + length    = 2</span><span class="terminal__line">      + separator = "-"</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 2 to add, 0 to change, 2 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  - hello_path = "./output/hello.txt" -&gt; null</span><span class="terminal__line">  - pet_name   = "helped-killdeer" -&gt; null</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  リソースの中身は何も変えていないのに、<code>Plan: 2 to add, 0 to change, 2 to destroy.</code> になりました。
+  モジュールの中のリソースは、<code>module.greeting.random_pet.greeter</code> のように <code>module.&lt;呼び出し名&gt;.</code> を先頭に付けたアドレスで管理されます。
+  Terraform から見ると、state にある <code>random_pet.greeter</code> が設定から消えました（<code>is not in configuration</code>）。そして、別のアドレス <code>module.greeting.random_pet.greeter</code> が新しく現れたことになります。
+  このまま <code>apply</code> すると、<code>helped-killdeer</code> は破棄され、別の名前で作り直されます。ここでは <code>apply</code> せず、次のステップで作り直しを避けます。
+</p>
+<p>その前に、モジュール側に移した <code>validation</code> が効いているかを確かめます。範囲外の <code>pet_length=9</code> を渡します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -var pet_length=9</span><span class="terminal__line">…</span><span class="terminal__line">Error: Invalid value for variable</span><span class="terminal__line"></span><span class="terminal__line">  on main.tf line 25, in module "greeting":</span><span class="terminal__line">  25:   pet_length = var.pet_length</span><span class="terminal__line">    ├────────────────</span><span class="terminal__line">    │ var.pet_length is 9</span><span class="terminal__line"></span><span class="terminal__line">pet_length は 1 以上 5 以下で指定してください。</span><span class="terminal__line"></span><span class="terminal__line">This was checked by the validation rule at</span><span class="terminal__line">modules/greeting/variables.tf:17,3-13.</span></pre>
+</div>
+<p>
+  エラーは、モジュールを呼び出している側（ルートの <code>main.tf</code> の <code>pet_length = var.pet_length</code>）を指しています。<code>validation</code> のルール自体の場所は、末尾に <code>modules/greeting/variables.tf:17,3-13</code> と表示されます。先頭の「…」は、エラーの前に出る <code>plan</code> 途中の表示です。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>init</code> の出力に <code>- greeting in modules/greeting</code> が出ることを確認してください。<code>plan</code> は <code>Plan: 2 to add, 0 to change, 2 to destroy.</code> になり、<code>module.greeting.</code> 付きのアドレスが <code>will be created</code> と表示されます。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>moved</code> ブロックで作り直しを避ける</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  リソースのアドレスが変わったことを Terraform に伝えるのが <code>moved</code> ブロックです。<code>from</code> に古いアドレス、<code>to</code> に新しいアドレスを書きます。
+  ルートに <code>moved.tf</code> を新しく作ります（ファイル名は自由です）。
+</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">moved.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">moved {
+  from = random_pet.greeter
+  to   = module.greeting.random_pet.greeter
+}
+
+moved {
+  from = local_file.hello
+  to   = module.greeting.local_file.hello
+}</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">module.greeting.random_pet.greeter: Refreshing state... [id=helped-killdeer]</span><span class="terminal__line">module.greeting.local_file.hello: Refreshing state... [id=6f2a00ee2d12bea513fe143226cf88dd0d8dc347]</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello has moved to module.greeting.local_file.hello</span><span class="terminal__line">    resource "local_file" "hello" {</span><span class="terminal__line">        id                   = "6f2a00ee2d12bea513fe143226cf88dd0d8dc347"</span><span class="terminal__line">        # (10 unchanged attributes hidden)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # random_pet.greeter has moved to module.greeting.random_pet.greeter</span><span class="terminal__line">    resource "random_pet" "greeter" {</span><span class="terminal__line">        id        = "helped-killdeer"</span><span class="terminal__line">        # (2 unchanged attributes hidden)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 0 to add, 0 to change, 0 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  - hello_path = "./output/hello.txt" -&gt; null</span><span class="terminal__line">  - pet_name   = "helped-killdeer" -&gt; null</span><span class="terminal__line"></span><span class="terminal__line">You can apply this plan to save these new output values to the Terraform</span><span class="terminal__line">state, without changing any real infrastructure.</span><span class="terminal__line"></span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>has moved to</code>（移動した）と表示され、<code>Plan: 0 to add, 0 to change, 0 to destroy.</code> になりました。ID もペットの名前（<code>helped-killdeer</code>）も変わっていません。
+  <code>Changes to Outputs:</code> で <code>hello_path</code> と <code>pet_name</code> が消えるのは、ステップ 2 でルートの出力値を削除したためです。
+</p>
+<p>
+  ただし、<code>plan</code> は state を書き換えないので、移動はまだ state に反映されていません。<code>apply</code> して初めて state のアドレスが書き換わります。以降、<code>apply</code> の出力は実行計画の部分を「…」で省略します。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">module.greeting.random_pet.greeter: Refreshing state... [id=helped-killdeer]</span><span class="terminal__line">module.greeting.local_file.hello: Refreshing state... [id=6f2a00ee2d12bea513fe143226cf88dd0d8dc347]</span><span class="terminal__line">…</span><span class="terminal__line">Plan: 0 to add, 0 to change, 0 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  - hello_path = "./output/hello.txt" -&gt; null</span><span class="terminal__line">  - pet_name   = "helped-killdeer" -&gt; null</span><span class="terminal__line"></span><span class="terminal__line">You can apply this plan to save these new output values to the Terraform</span><span class="terminal__line">state, without changing any real infrastructure.</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 0 added, 0 changed, 0 destroyed.</span><span class="terminal__line"></span><span class="terminal__line">Outputs:</span><span class="terminal__line"></span><span class="terminal__line">token = &lt;sensitive&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform state list</span><span class="terminal__line">local_sensitive_file.token</span><span class="terminal__line">module.greeting.local_file.hello</span><span class="terminal__line">module.greeting.random_pet.greeter</span></pre>
+</div>
+<p>state のアドレスが <code>module.greeting.</code> 付きに変わりました。もう一度 <code>plan</code> すると、差分はありません。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">module.greeting.random_pet.greeter: Refreshing state... [id=helped-killdeer]</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">module.greeting.local_file.hello: Refreshing state... [id=6f2a00ee2d12bea513fe143226cf88dd0d8dc347]</span><span class="terminal__line"></span><span class="terminal__line">No changes. Your infrastructure matches the configuration.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has compared your real infrastructure against your configuration</span><span class="terminal__line">and found no differences, so no changes are needed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">Hello, helped-killdeer! (by Alice)</span></pre>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>apply</code> が <code>Resources: 0 added, 0 changed, 0 destroyed.</code> で終わることを確認してください。<code>terraform state list</code> には <code>module.greeting.local_file.hello</code> と <code>module.greeting.random_pet.greeter</code> が並びます。<code>hello.txt</code> のペットの名前がステップ 1 と同じであれば、作り直されていません。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">モジュールの出力値を使う</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  ルートの出力値 <code>hello_path</code> と <code>pet_name</code> を元に戻します。モジュールの中の値は、モジュールが <code>output</code> で公開したものだけを <code>module.&lt;呼び出し名&gt;.&lt;出力名&gt;</code> の形で参照できます。
+</p>
+<p>まず、公開していない値を参照するとどうなるかを確かめます。モジュール内のローカル値 <code>message</code> を参照する出力値を、<code>outputs.tf</code> の末尾に一時的に追記します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cat &gt;&gt; outputs.tf &lt;&lt;'HCL'</span><span class="terminal__line"></span><span class="terminal__line">output "message" {</span><span class="terminal__line">  description = "モジュール内の locals を直接参照する（失敗する例）"</span><span class="terminal__line">  value       = module.greeting.message</span><span class="terminal__line">}</span><span class="terminal__line">HCL</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Error: Unsupported attribute</span><span class="terminal__line"></span><span class="terminal__line">  on outputs.tf line 9, in output "message":</span><span class="terminal__line">   9:   value       = module.greeting.message</span><span class="terminal__line">    ├────────────────</span><span class="terminal__line">    │ module.greeting is object with 2 attributes</span><span class="terminal__line"></span><span class="terminal__line">This object does not have an attribute named "message".</span></pre>
+</div>
+<p>
+  <code>Unsupported attribute</code>（その属性は無い）で失敗しました。<code>module.greeting is object with 2 attributes</code> の 2 つは、モジュールの出力値 <code>hello_path</code> と <code>pet_name</code> です。
+  モジュールの中のローカル値やリソースは外から見えません。呼び出し側に渡したい値は、モジュールの <code>outputs.tf</code> に <code>output</code> として書きます。
+</p>
+<p>失敗用の <code>message</code> を消し、<code>hello_path</code> と <code>pet_name</code> をモジュールの出力値から作ります。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">outputs.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+output "hello_path" {</span><span class="diff-line diff-line--add">+  description = "生成したあいさつファイルのパス"</span><span class="diff-line diff-line--add">+  value       = module.greeting.hello_path</span><span class="diff-line diff-line--add">+}</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+output "pet_name" {</span><span class="diff-line diff-line--add">+  description = "random_pet が作った名前"</span><span class="diff-line diff-line--add">+  value       = module.greeting.pet_name</span><span class="diff-line diff-line--add">+}</span><span class="diff-line diff-line--add">+</span><span class="diff-line"> output "token" {</span><span class="diff-line">   description = "ダミーの API トークン"</span><span class="diff-line">   value       = var.api_token</span><span class="diff-line">   sensitive   = true</span><span class="diff-line"> }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">-output "message" {</span><span class="diff-line diff-line--remove">-  description = "モジュール内の locals を直接参照する（失敗する例）"</span><span class="diff-line diff-line--remove">-  value       = module.greeting.message</span><span class="diff-line diff-line--remove">-}</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">module.greeting.random_pet.greeter: Refreshing state... [id=helped-killdeer]</span><span class="terminal__line">module.greeting.local_file.hello: Refreshing state... [id=6f2a00ee2d12bea513fe143226cf88dd0d8dc347]</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  + hello_path = "./output/hello.txt"</span><span class="terminal__line">  + pet_name   = "helped-killdeer"</span><span class="terminal__line"></span><span class="terminal__line">You can apply this plan to save these new output values to the Terraform</span><span class="terminal__line">state, without changing any real infrastructure.</span><span class="terminal__line"></span><span class="terminal__line">…</span></pre>
+</div>
+<p>リソースには変更がなく、出力値だけが増える計画です。<code>apply</code> して、<code>terraform output</code> で確かめます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">module.greeting.random_pet.greeter: Refreshing state... [id=helped-killdeer]</span><span class="terminal__line">module.greeting.local_file.hello: Refreshing state... [id=6f2a00ee2d12bea513fe143226cf88dd0d8dc347]</span><span class="terminal__line">…</span><span class="terminal__line">Apply complete! Resources: 0 added, 0 changed, 0 destroyed.</span><span class="terminal__line"></span><span class="terminal__line">Outputs:</span><span class="terminal__line"></span><span class="terminal__line">hello_path = "./output/hello.txt"</span><span class="terminal__line">pet_name = "helped-killdeer"</span><span class="terminal__line">token = &lt;sensitive&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform output</span><span class="terminal__line">hello_path = "./output/hello.txt"</span><span class="terminal__line">pet_name = "helped-killdeer"</span><span class="terminal__line">token = &lt;sensitive&gt;</span></pre>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>terraform output</code> に <code>hello_path</code>・<code>pet_name</code>・<code>token</code> の 3 つが表示されることを確認してください。値は 02 と同じ形で、<code>pet_name</code> はステップ 1 の名前のままです。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>for_each</code> で同じモジュールを複数回呼び出す</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  モジュールにした利点は、同じ部品を何度も呼び出せることです。<code>for_each</code> を使って、<code>hello.txt</code> と <code>goodbye.txt</code> の 2 つのファイルを同じモジュールで作ります。
+  2 回呼び出すと出力先のファイル名がぶつかるので、まずモジュールにファイル名の変数 <code>file_name</code> を追加します。default は今までと同じ <code>hello.txt</code> です。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">modules/greeting/main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> </span><span class="diff-line"> resource "local_file" "hello" {</span><span class="diff-line diff-line--remove">-  filename = "${var.output_dir}/hello.txt"</span><span class="diff-line diff-line--add">+  filename = "${var.output_dir}/${var.file_name}"</span><span class="diff-line">   content  = local.message</span><span class="diff-line"> }</span></pre>
+</div>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">modules/greeting/variables.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">   description = "あいさつファイルを書き出すディレクトリ"</span><span class="diff-line"> }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+variable "file_name" {</span><span class="diff-line diff-line--add">+  type        = string</span><span class="diff-line diff-line--add">+  description = "あいさつファイルの名前。同じモジュールを複数回呼ぶときは呼び出しごとに変える"</span><span class="diff-line diff-line--add">+  default     = "hello.txt"</span><span class="diff-line diff-line--add">+}</span></pre>
+</div>
+<p>モジュールの中の <code>.tf</code> を編集しただけなので、<code>init</code> はせずに実行してみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">…</span><span class="terminal__line">No changes. Your infrastructure matches the configuration.</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>init</code> し直さなくても動きました（<code>plan</code> は <code>Refreshing state</code> の行と末尾の説明を省略しています）。ステップ 3 で見たとおり、ローカルパスのモジュールは元のディレクトリを直接読むからです。
+  <code>init</code> が必要なのは、<code>module</code> ブロックを追加したときや、<code>source</code>（レジストリの場合は <code>version</code>）を変えたときです。
+</p>
+<p>
+  次に、ルートの <code>main.tf</code> で <code>for_each</code> を使います。ローカル値 <code>greetings</code> に「キー（ファイル名から <code>.txt</code> を除いたもの）→ あいさつ文」の map を用意し、<code>module</code> ブロックの <code>for_each</code> に渡します。
+  キーごとに 1 回ずつモジュールが呼び出され、<code>each.key</code> と <code>each.value</code> でそのキーと値を参照できます。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> locals {</span><span class="diff-line">   output_dir = "${path.module}/output"</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+  # キーがファイル名（.txt を除く）、値があいさつ文</span><span class="diff-line diff-line--add">+  greetings = {</span><span class="diff-line diff-line--add">+    hello   = var.greeting</span><span class="diff-line diff-line--add">+    goodbye = "Goodbye"</span><span class="diff-line diff-line--add">+  }</span><span class="diff-line"> }</span><span class="diff-line"> </span><span class="diff-line"> module "greeting" {</span><span class="diff-line diff-line--remove">-  source = "./modules/greeting"</span><span class="diff-line diff-line--add">+  source   = "./modules/greeting"</span><span class="diff-line diff-line--add">+  for_each = local.greetings</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-  greeting   = var.greeting</span><span class="diff-line diff-line--add">+  greeting   = each.value</span><span class="diff-line">   owner      = var.owner</span><span class="diff-line">   pet_length = var.pet_length</span><span class="diff-line">   shout      = var.shout</span><span class="diff-line">   output_dir = local.output_dir</span><span class="diff-line diff-line--add">+  file_name  = "${each.key}.txt"</span><span class="diff-line"> }</span><span class="diff-line"> </span></pre>
+</div>
+<p>
+  <code>for_each</code> を付けると、<code>module.greeting</code> は 1 つの呼び出しではなく、キーごとの呼び出しの集まり（map）になります。
+  そのため、ルートの出力値は <code>module.greeting.hello_path</code> とは書けません。<code>for</code> 式でキーごとの map にまとめます。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">outputs.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> output "hello_path" {</span><span class="diff-line diff-line--remove">-  description = "生成したあいさつファイルのパス"</span><span class="diff-line diff-line--remove">-  value       = module.greeting.hello_path</span><span class="diff-line diff-line--add">+  description = "生成したあいさつファイルのパス（キーごと）"</span><span class="diff-line diff-line--add">+  value       = { for name, m in module.greeting : name =&gt; m.hello_path }</span><span class="diff-line"> }</span><span class="diff-line"> </span><span class="diff-line"> output "pet_name" {</span><span class="diff-line diff-line--remove">-  description = "random_pet が作った名前"</span><span class="diff-line diff-line--remove">-  value       = module.greeting.pet_name</span><span class="diff-line diff-line--add">+  description = "random_pet が作った名前（キーごと）"</span><span class="diff-line diff-line--add">+  value       = { for name, m in module.greeting : name =&gt; m.pet_name }</span><span class="diff-line"> }</span><span class="diff-line"> </span></pre>
+</div>
+<p><code>{ for name, m in module.greeting : name =&gt; m.hello_path }</code> は、<code>module.greeting</code> の各要素から map を作る式です。キーは <code>name</code>、値はその呼び出し <code>m</code> の出力値 <code>hello_path</code> です。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform fmt -check -recursive</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">module.greeting.random_pet.greeter: Refreshing state... [id=helped-killdeer]</span><span class="terminal__line">module.greeting.local_file.hello: Refreshing state... [id=6f2a00ee2d12bea513fe143226cf88dd0d8dc347]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line">  - destroy</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting.local_file.hello will be destroyed</span><span class="terminal__line">  # (because module.greeting is not in configuration)</span><span class="terminal__line">…</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting.random_pet.greeter will be destroyed</span><span class="terminal__line">  # (because module.greeting is not in configuration)</span><span class="terminal__line">…</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting["goodbye"].local_file.hello will be created</span><span class="terminal__line">…</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting["goodbye"].random_pet.greeter will be created</span><span class="terminal__line">…</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting["hello"].local_file.hello will be created</span><span class="terminal__line">…</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting["hello"].random_pet.greeter will be created</span><span class="terminal__line">…</span><span class="terminal__line"></span><span class="terminal__line">Plan: 4 to add, 0 to change, 2 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  ~ hello_path = "./output/hello.txt" -&gt; {</span><span class="terminal__line">      + goodbye = "./output/goodbye.txt"</span><span class="terminal__line">      + hello   = "./output/hello.txt"</span><span class="terminal__line">    }</span><span class="terminal__line">  ~ pet_name   = "helped-killdeer" -&gt; {</span><span class="terminal__line">      + goodbye = (known after apply)</span><span class="terminal__line">      + hello   = (known after apply)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  リソースの本体は「…」で省略しています。また <code>destroy</code> と <code>create</code> が出ました（<code>Plan: 4 to add, 0 to change, 2 to destroy.</code>）。
+  <code>for_each</code> を付けたことで、アドレスが <code>module.greeting</code> から <code>module.greeting["hello"]</code> に変わったためです。ステップ 3 と同じ状況なので、ここでも <code>apply</code> せずに <code>moved</code> ブロックを追加します。今度はリソース単位ではなく、モジュールの呼び出し単位で移動を書けます。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">moved.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">   to   = module.greeting.local_file.hello</span><span class="diff-line"> }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+moved {</span><span class="diff-line diff-line--add">+  from = module.greeting</span><span class="diff-line diff-line--add">+  to   = module.greeting["hello"]</span><span class="diff-line diff-line--add">+}</span></pre>
+</div>
+<p>ステップ 4 で書いた 2 つの <code>moved</code> は残したままです。<code>plan</code> と <code>apply</code> を実行します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">…</span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting["goodbye"].local_file.hello will be created</span><span class="terminal__line">  + resource "local_file" "hello" {</span><span class="terminal__line">      + content              = (known after apply)</span><span class="terminal__line">      + content_base64sha256 = (known after apply)</span><span class="terminal__line">      + content_base64sha512 = (known after apply)</span><span class="terminal__line">      + content_md5          = (known after apply)</span><span class="terminal__line">      + content_sha1         = (known after apply)</span><span class="terminal__line">      + content_sha256       = (known after apply)</span><span class="terminal__line">      + content_sha512       = (known after apply)</span><span class="terminal__line">      + directory_permission = "0777"</span><span class="terminal__line">      + file_permission      = "0777"</span><span class="terminal__line">      + filename             = "./output/goodbye.txt"</span><span class="terminal__line">      + id                   = (known after apply)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting["goodbye"].random_pet.greeter will be created</span><span class="terminal__line">  + resource "random_pet" "greeter" {</span><span class="terminal__line">      + id        = (known after apply)</span><span class="terminal__line">      + length    = 2</span><span class="terminal__line">      + separator = "-"</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting.local_file.hello has moved to module.greeting["hello"].local_file.hello</span><span class="terminal__line">    resource "local_file" "hello" {</span><span class="terminal__line">        id                   = "6f2a00ee2d12bea513fe143226cf88dd0d8dc347"</span><span class="terminal__line">        # (10 unchanged attributes hidden)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # module.greeting.random_pet.greeter has moved to module.greeting["hello"].random_pet.greeter</span><span class="terminal__line">    resource "random_pet" "greeter" {</span><span class="terminal__line">        id        = "helped-killdeer"</span><span class="terminal__line">        # (2 unchanged attributes hidden)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 2 to add, 0 to change, 0 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  ~ hello_path = "./output/hello.txt" -&gt; {</span><span class="terminal__line">      + goodbye = "./output/goodbye.txt"</span><span class="terminal__line">      + hello   = "./output/hello.txt"</span><span class="terminal__line">    }</span><span class="terminal__line">  ~ pet_name   = "helped-killdeer" -&gt; {</span><span class="terminal__line">      + goodbye = (known after apply)</span><span class="terminal__line">      + hello   = "helped-killdeer"</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  （先頭の「…」は <code>Refreshing state</code> の 3 行です。）<code>module.greeting.random_pet.greeter has moved to module.greeting["hello"].random_pet.greeter</code> と表示されました。新しく作るのは <code>goodbye</code> 側の 2 つだけです。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line">…</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter: Creating...</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter: Creation complete after 0s [id=splendid-seasnail]</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello: Creating...</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello: Creation complete after 0s [id=f52c38291f4462063c88ed6e2338c0dd948e4629]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 2 added, 0 changed, 0 destroyed.</span><span class="terminal__line"></span><span class="terminal__line">Outputs:</span><span class="terminal__line"></span><span class="terminal__line">hello_path = {</span><span class="terminal__line">  "goodbye" = "./output/goodbye.txt"</span><span class="terminal__line">  "hello" = "./output/hello.txt"</span><span class="terminal__line">}</span><span class="terminal__line">pet_name = {</span><span class="terminal__line">  "goodbye" = "splendid-seasnail"</span><span class="terminal__line">  "hello" = "helped-killdeer"</span><span class="terminal__line">}</span><span class="terminal__line">token = &lt;sensitive&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform state list</span><span class="terminal__line">local_sensitive_file.token</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter</span><span class="terminal__line">module.greeting["hello"].local_file.hello</span><span class="terminal__line">module.greeting["hello"].random_pet.greeter</span><span class="terminal__line"><span class="terminal__prompt">$</span> for f in output/*.txt; do echo "$f: $(cat $f)"; done</span><span class="terminal__line">output/goodbye.txt: Goodbye, splendid-seasnail! (by Alice)</span><span class="terminal__line">output/hello.txt: Hello, helped-killdeer! (by Alice)</span><span class="terminal__line">output/token.txt: dummy-token-12345</span></pre>
+</div>
+<p>
+  <code>module.greeting["hello"]</code> と <code>module.greeting["goodbye"]</code> の 2 つの呼び出しができ、出力値はキーごとの map になりました。<code>random_pet</code> は呼び出しごとに別のリソースなので、ペットの名前もそれぞれ違います。
+  <code>hello</code> 側の名前は <code>helped-killdeer</code> のままです。
+</p>
+<p>
+  <code>moved.tf</code> には、<code>random_pet.greeter</code> → <code>module.greeting.random_pet.greeter</code> → <code>module.greeting["hello"].random_pet.greeter</code> という 2 段階の移動を書いています。
+  state はすでに 1 段階目の移動が済んだアドレスでしたが、問題なく 2 段階目が適用されました。適用済みの古い <code>moved</code> は何もしません。最後にもう一度 <code>plan</code> して、差分が無いことを確かめます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">…</span><span class="terminal__line">No changes. Your infrastructure matches the configuration.</span><span class="terminal__line">…</span></pre>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>apply</code> が <code>Resources: 2 added, 0 changed, 0 destroyed.</code> で終わることを確認してください。<code>output/</code> には <code>hello.txt</code>・<code>goodbye.txt</code>・<code>token.txt</code> の 3 つができています。<code>hello.txt</code> のペットの名前は、ステップ 1 から変わっていないはずです。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>moved</code> の扱いを決め、<code>destroy</code> で片付ける</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  すべての <code>moved</code> を適用し終えた今、<code>moved.tf</code> は必要でしょうか。試しに <code>moved.tf</code> を一時的に <code>moved.tf.bak</code> へ改名して <code>plan</code> し、元に戻します。拡張子が <code>.tf</code> でないファイルは Terraform に読み込まれないので、改名するだけで設定から外れます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mv moved.tf moved.tf.bak</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">…</span><span class="terminal__line">module.greeting["hello"].local_file.hello: Refreshing state... [id=6f2a00ee2d12bea513fe143226cf88dd0d8dc347]</span><span class="terminal__line"></span><span class="terminal__line">No changes. Your infrastructure matches the configuration.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has compared your real infrastructure against your configuration</span><span class="terminal__line">and found no differences, so no changes are needed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> mv moved.tf.bak moved.tf</span></pre>
+</div>
+<p>
+  （<code>plan</code> は末尾だけを載せています。）  移動がすべて適用済みの state に対しては、<code>moved.tf</code> を外しても <code>No changes.</code> でした。とはいえ、<code>moved</code> は古いアドレスのままの state を新しいアドレスへ移すための記録です。
+  同じ設定を使う別の環境や別の人の state がまだ古いアドレスのままなら、<code>moved</code> を消すとそちらでは作り直しの計画になります。
+</p>
+<div class="callout callout--tip">
+  <span class="callout__icon" aria-hidden="true">💡</span>
+  <div class="callout__body">
+    <p class="callout__title"><code>moved</code> ブロックは残すのが基本</p>
+    <p>公式ドキュメント（<a href="https://developer.hashicorp.com/terraform/language/modules/develop/refactoring#remove-a-move-block">Refactor modules の Remove a move block</a>）では、<code>moved</code> の削除を破壊的な変更としています。そのうえで、過去の <code>moved</code> をすべて残すことを強く推奨しています。削除してよいのは、組織内の非公開モジュールで、全利用者が新しい版で <code>terraform apply</code> を済ませたと確信できる場合です。同じリソースを 2 回移動するときは、この項目のように <code>moved</code> を連鎖させて履歴を残す書き方が推奨されています。ここでも <code>moved.tf</code> は残します。</p>
+  </div>
+</div>
+<p>最後に、書式と構文を確かめてから片付けます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform fmt -recursive; echo "fmt rc=$?"</span><span class="terminal__line">fmt rc=0</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform fmt -check -recursive; echo "check rc=$?"</span><span class="terminal__line">check rc=0</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span></pre>
+</div>
+<p>
+  <code>fmt -recursive</code> は、整形したファイルがあればその名前を表示します。何も表示されないので、整形の必要はありませんでした。<code>-recursive</code> を付けると、<code>modules/greeting/</code> の中も対象になります。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform destroy -auto-approve</span><span class="terminal__line">…</span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  - hello_path = {</span><span class="terminal__line">      - goodbye = "./output/goodbye.txt"</span><span class="terminal__line">      - hello   = "./output/hello.txt"</span><span class="terminal__line">    } -&gt; null</span><span class="terminal__line">  - pet_name   = {</span><span class="terminal__line">      - goodbye = "splendid-seasnail"</span><span class="terminal__line">      - hello   = "helped-killdeer"</span><span class="terminal__line">    } -&gt; null</span><span class="terminal__line">  - token      = (sensitive value) -&gt; null</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello: Destroying... [id=f52c38291f4462063c88ed6e2338c0dd948e4629]</span><span class="terminal__line">local_sensitive_file.token: Destroying... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">module.greeting["hello"].local_file.hello: Destroying... [id=6f2a00ee2d12bea513fe143226cf88dd0d8dc347]</span><span class="terminal__line">module.greeting["goodbye"].local_file.hello: Destruction complete after 0s</span><span class="terminal__line">local_sensitive_file.token: Destruction complete after 0s</span><span class="terminal__line">module.greeting["hello"].local_file.hello: Destruction complete after 0s</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter: Destroying... [id=splendid-seasnail]</span><span class="terminal__line">module.greeting["goodbye"].random_pet.greeter: Destruction complete after 0s</span><span class="terminal__line">module.greeting["hello"].random_pet.greeter: Destroying... [id=helped-killdeer]</span><span class="terminal__line">module.greeting["hello"].random_pet.greeter: Destruction complete after 0s</span><span class="terminal__line"></span><span class="terminal__line">Destroy complete! Resources: 5 destroyed.</span></pre>
+</div>
+<p>
+  <code>module.greeting["hello"]</code>・<code>module.greeting["goodbye"]</code> の中のリソースとトークンの、合わせて 5 つが削除されました。先頭の「…」は、<code>Refreshing state</code> の行と実行計画です。最終的なディレクトリ構成は次のとおりです。
+</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">ディレクトリ構成</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">03-modules/
+├── .gitignore
+├── .terraform/              （init が作る作業ディレクトリ）
+├── .terraform.lock.hcl      （init が作る lock ファイル）
+├── main.tf
+├── modules/
+│   └── greeting/
+│       ├── main.tf
+│       ├── outputs.tf
+│       └── variables.tf
+├── moved.tf
+├── output/                  （destroy 後は空ディレクトリが残る）
+├── outputs.tf
+├── terraform.tfstate        （生成物）
+├── terraform.tfstate.backup （生成物）
+├── terraform.tfvars
+└── variables.tf</code></pre>
+</div>
+<p>
+  コミットするのは、ルートの <code>main.tf</code>・<code>variables.tf</code>・<code>outputs.tf</code>・<code>moved.tf</code>・<code>terraform.tfvars</code>・<code>.gitignore</code> です。加えて、<code>modules/greeting/</code> の 3 ファイルと、01・02 と同じく <code>.terraform.lock.hcl</code> もコミットします。
+  <code>.gitignore</code> は 02 から変更していません。<code>modules/</code> の中には生成物が作られないので、追加の設定は不要です。空になった <code>output/</code> ディレクトリが気になる場合は、<code>rmdir output</code> で削除してください。
+</p>
+<div class="callout callout--note">
+  <span class="callout__icon" aria-hidden="true">ℹ️</span>
+  <div class="callout__body">
+    <p class="callout__title">この教材リポジトリの完成コードについて</p>
+    <p>完成コードを置いているブランチ <code>infra/terraform/03-modules</code> には、lock ファイルは含まれていません。01・02 と同じく、リポジトリのルートの <code>.gitignore</code> が <code>**/.terraform.lock.hcl</code> を無視する設定になっているためです。自分のプロジェクトでは lock ファイルをコミットしてください。</p>
+  </div>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>terraform destroy</code> が <code>Destroy complete! Resources: 5 destroyed.</code> で終わることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>module</code> ブロックの <code>source</code> にローカルパスを書き、子モジュールを呼び出した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>module</code> ブロックを追加した直後は <code>validate</code> と <code>plan</code> が <code>Module not installed</code> で止まり、<code>init</code> が必要なことを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">モジュール内の <code>.tf</code> を編集しただけなら、<code>init</code> し直さなくてよいことを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>path.module</code> がモジュールごとに変わるため、出力先を変数で受け取った理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">モジュールに移すとアドレスが <code>module.&lt;名前&gt;.</code> 付きに変わり、そのままでは作り直しになることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>moved</code> ブロックで作り直しを避け、<code>apply</code> 後に <code>terraform state list</code> でアドレスの変化を確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">モジュールの値は <code>output</code> で公開したものだけを <code>module.&lt;名前&gt;.&lt;出力名&gt;</code> で参照できることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>for_each</code> でモジュールを複数回呼び出し、出力値を <code>for</code> 式で map にまとめた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Error: Module not installed</code> で止まる</p>
+          <p><code>module</code> ブロックを追加したのに、<code>terraform init</code> を実行していません。<code>validate</code> と <code>plan</code> の両方が同じエラーになります。<code>terraform init</code> を実行してから、もう一度試してください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">モジュールに移しただけなのに <code>destroy</code> と <code>create</code> が出る</p>
+          <p>リソースのアドレスが <code>module.&lt;名前&gt;.</code> 付き（<code>for_each</code> を付けた場合は <code>module.&lt;名前&gt;["キー"]</code>）に変わったためです。そのまま <code>apply</code> せず、古いアドレスから新しいアドレスへの <code>moved</code> ブロックを書いてから <code>plan</code> し直してください。<code>has moved to</code> と表示され、作り直しが消えれば成功です。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Error: Unsupported attribute</code> で止まる</p>
+          <p>モジュールが <code>output</code> で公開していない値を、<code>module.&lt;名前&gt;.xxx</code> で参照しています。エラー文の <code>object with 2 attributes</code> の数が、モジュールの出力値の数です。必要な値は、モジュールの <code>outputs.tf</code> に <code>output</code> として追加してください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Error: Invalid value for variable</code> がモジュールを呼び出す行を指す</p>
+          <p>モジュールの入力変数の <code>validation</code> に違反しています。エラーの位置は呼び出し側（ルートの <code>main.tf</code>）の行ですが、ルールの場所はエラー文の末尾（<code>This was checked by the validation rule at modules/greeting/variables.tf:17,3-13.</code>）に表示されます。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ファイルが <code>modules/greeting/output/</code> にできてしまう</p>
+          <p>モジュールの中で <code>path.module</code> を使うと、モジュールのディレクトリ（<code>modules/greeting</code>）を指します。出力先はこの項目のように変数で受け取り、ルートから <code>"${path.module}/output"</code> を渡してください。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        設定の一部を子モジュールに切り出し、<code>module</code> ブロックで呼び出せるようになりました。モジュールの入力変数が「入口」、出力値が「出口」で、モジュールの中のローカル値やリソースは外から見えません。
+        既存のリソースをモジュールへ移したり <code>for_each</code> を付けたりするとアドレスが変わり、そのままでは作り直しになります。<code>moved</code> ブロックで移動を伝えれば、リソースを保ったまま構成を変えられます。
+      </p>
+      <p>
+        この項目ではローカルパスのモジュールだけを扱いました。<code>source</code> には、Terraform Registry で公開されているモジュールや Git リポジトリなども指定できます。詳しくは参考資料の module block reference（source）を参照してください。
+        次の項目では、これまで手元のファイルに置いていた state を、リモートのバックエンドで共有管理します。
+      </p>
+
+      <h2 id="references">参考資料</h2>
+      <ul>
+        <li><a href="https://developer.hashicorp.com/terraform/language/modules/develop">Creating Modules</a>（モジュールの作り方）</li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/block/module">module block reference</a></li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/block/module#source">module block reference の source</a>（ローカルパス・Terraform Registry・Git などの指定方法）</li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/modules/develop/refactoring">Refactor modules</a>（<code>moved</code> ブロック）</li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/meta-arguments/for_each">for_each reference</a></li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>infra/terraform/03-modules</code> の <code>infra/terraform/03-modules/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../02-variables-outputs/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">02: 変数とアウトプット</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">04: リモートステート管理</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../../assets/js/main.js"></script>
+</body>
+</html>
