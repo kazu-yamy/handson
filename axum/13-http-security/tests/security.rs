@@ -227,3 +227,13 @@ async fn a_header_set_by_the_handler_is_not_overwritten() {
     assert_eq!(headers["cache-control"], "max-age=60"); // if_not_present なので、ハンドラの値が残る
     assert_eq!(headers["x-content-type-options"], "nosniff"); // 付いていないものだけが補われる
 }
+
+#[sqlx::test]
+async fn security_headers_are_also_on_the_cors_preflight_response(pool: SqlitePool) {
+    // プリフライトは CorsLayer が内側を呼ばずに返す。セキュリティヘッダーの層が CORS の外側にないと付かない
+    let (status, headers, _) = send_raw(cors_app(pool), preflight(ALLOWED)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["access-control-allow-origin"], ALLOWED);
+    assert_security_headers(&headers, "CORS preflight");
+}

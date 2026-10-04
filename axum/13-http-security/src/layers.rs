@@ -37,10 +37,6 @@ pub fn apply(router: Router, config: &Config) -> Router {
         // 本文の無いエラー応答を契約の JSON に補う。TimeoutLayer より外側に置かないと 408 が素通りする
         .layer(middleware::map_response(fill_empty_error_body));
 
-    // セキュリティヘッダーは全応答に付ける。fill_empty_error_body の外側に置くので、
-    // 本文を補った 408 や、ルーターが返す 404・405 にも付く
-    let router = security_headers(router);
-
     // CORS は設定があるときだけ掛ける。ログの内側、エラー補完の外側に置くので、
     // 429・413・408 などのエラー応答にも access-control-* ヘッダーが付く
     // （ブラウザは access-control-allow-origin の無いエラー応答を JavaScript に渡さない）
@@ -49,6 +45,10 @@ pub fn apply(router: Router, config: &Config) -> Router {
     } else {
         router.layer(cors(config))
     };
+
+    // セキュリティヘッダーは全応答に付ける。CORS の外側に置くので、
+    // 内側を呼ばずに返す CORS のプリフライト応答や、本文を補った 408、ルーターが返す 404・405 にも付く
+    let router = security_headers(router);
 
     // 一番外側: タイムアウトで捨てられたリクエストもログに残す
     router.layer(middleware::from_fn(log_request))
