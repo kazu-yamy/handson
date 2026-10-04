@@ -1,0 +1,1846 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>11: 認証エクストラクタと認可 | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">11</li>
+        </ol>
+        <h1 class="lesson-title">認証エクストラクタと認可</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: 10 で発行したトークンを使って、記事の API を「本人だけが書き換えられる」状態にしたい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法、SQL の基本、02・03 のエクストラクタ（ハンドラの引数。<code>Json</code> は最後に置く）、08 の結合テスト（<code>#[sqlx::test]</code>）の構成</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../10-authentication/index.html">10: パスワードハッシュとログイン</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>認証（誰であるか）と認可（その人に許された操作か）の違いを説明できる</li>
+          <li><code>FromRequestParts</code> を実装した <code>AuthUser</code> で、<code>Authorization: Bearer</code> のトークンから利用者を取り出す</li>
+          <li><code>GET /auth/me</code> とログアウト（<code>POST /auth/logout</code>）を作り、期限切れのセッションを掃除する</li>
+          <li>記事の著者をリクエストの本文ではなくトークンの持ち主で決め、更新・削除を所有者だけに限る</li>
+          <li>他人の記事への操作を、403 ではなく存在しない記事と同じ 404 で返す</li>
+          <li>07 から使ってきた API キーと、<code>/users</code> の書き込み系のルートを廃止する</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        09 では、記事の作成・更新・削除を API キーだけで保護していました。API キーを持っていれば、本文の <code>author_id</code> に他人の id を書いて他人の名義で投稿でき、他人の記事も書き換え・削除できます。09 で意図的に残していた穴です。
+      </p>
+      <p>
+        10 では、利用者の登録とログインを作り、ログインに成功するとトークンを発行するところまで進めました。ただし、発行したトークンを受け取って確かめる処理はまだありません。
+      </p>
+      <p>このレッスンでは、10 のトークンを使って、次の 2 つの検査を入れます。</p>
+      <ol>
+        <li><strong>認証</strong>: リクエストの <code>Authorization: Bearer &lt;トークン&gt;</code> から、送り手が「誰であるか」を確かめる。</li>
+        <li><strong>認可</strong>: その人に「許された操作か」を確かめる。この API では、記事を更新・削除できるのは、その記事の著者だけです。</li>
+      </ol>
+      <p>あわせて、07 から使ってきた API キー（<code>x-api-key</code> ヘッダー）を廃止します。<code>/users</code> の書き込み系（<code>POST /users</code>・<code>PUT|DELETE /users/{id}</code>）も削除し、利用者の登録は <code>/auth/register</code> に一本化します。このレッスンで変わるエンドポイントは次のとおりです。</p>
+
+      <table>
+        <thead>
+          <tr><th>メソッド</th><th>パス</th><th>10 まで</th><th>11 から</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>GET</td><td><code>/auth/me</code></td><td>無し</td><td><strong>追加</strong>。トークンが必要。200 <code>{"id", "name", "email"}</code></td></tr>
+          <tr><td>POST</td><td><code>/auth/logout</code></td><td>無し</td><td><strong>追加</strong>。トークンが必要。204（そのトークンのセッションだけを削除）</td></tr>
+          <tr><td>POST</td><td><code>/posts</code></td><td>API キー。著者は本文の <code>author_id</code></td><td>トークンが必要。著者はトークンの持ち主（本文の <code>author_id</code> は無視）</td></tr>
+          <tr><td>PATCH / DELETE</td><td><code>/posts/{id}</code></td><td>API キー。誰の記事でも変更できる</td><td>トークンが必要。所有者だけ。他人の記事は 404</td></tr>
+          <tr><td>POST / PUT / DELETE</td><td><code>/users</code>、<code>/users/{id}</code></td><td>API キー</td><td><strong>削除</strong>（405 になる）</td></tr>
+        </tbody>
+      </table>
+      <p>読み取り（<code>GET /posts</code>・<code>GET /posts/{id}</code>・<code>GET /users</code>・<code>GET /users/{id}</code>）は、これまでどおりトークン無しで呼べます。いいね（<code>POST /posts/{id}/like</code>）も同じです。</p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>Rust（rustc）1.99.0 / cargo 1.99.0（Rust edition 2024）で動作を確認しています。</p>
+          <p>このレッスンでは、クレートを追加しません。10 と同じ axum 0.8.9・sqlx 0.9.0・argon2 0.6.0・sha2 0.11.0 などをそのまま使います。バージョンは執筆時点（2026年10月）のものです。</p>
+          <p>10 と同じく、DB の中身を見るために <code>sqlite3</code> コマンドを、トークンの SHA-256 を求めるために macOS の <code>shasum</code> を使う箇所があります。手元に無い場合、その確認は読むだけで構いません。</p>
+        </div>
+      </div>
+
+      <h2 id="security">セキュリティの考え方</h2>
+      <p>このレッスンは、09 から残してきた穴を塞ぐ項目です。コードが何を防ごうとしているかを、先に一覧表でまとめます。詳しくは各ステップで説明します。</p>
+      <table>
+        <thead>
+          <tr><th>論点</th><th>このレッスンでの扱い</th><th>ステップ</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>認証と認可</td><td>認証（トークンから利用者を特定する）は <code>AuthUser</code> が、認可（自分の記事か）は記事の SQL が受け持つ。認証に失敗すると 401、認可に失敗すると 404</td><td>2・4</td></tr>
+          <tr><td>トークンの照合</td><td>受け取ったトークンの SHA-256 を計算し、<code>sessions</code> の <code>token_hash</code> で引く。DB にはトークンそのものが無い（10 のとおり）</td><td>2</td></tr>
+          <tr><td>期限とログアウト</td><td>期限は DB の時計（<code>unixepoch()</code>）で判定する。ログアウトは、そのトークンのセッション行を削除する。期限切れの行は、ログインのたびに掃除する（簡易版）</td><td>2・3</td></tr>
+          <tr><td>401 の文言</td><td>ヘッダーが無い・形式が違う・見つからない・期限切れのどれでも、同じ 401（<code>missing or invalid bearer token</code>）。理由を区別して教えない</td><td>2・6</td></tr>
+          <tr><td>著者の決め方</td><td>リクエストの本文ではなく、トークンの持ち主で決める。本文に <code>author_id</code> を入れても無視され、他人になりすました投稿はできない</td><td>4・6</td></tr>
+          <tr><td>他人の記事への操作</td><td>所有者の検査を <code>UPDATE</code>・<code>DELETE</code> の <code>WHERE</code> に入れる。他人の記事は、存在しない記事と同じ 404 になる</td><td>4・6</td></tr>
+          <tr><td>検査の入れ忘れ</td><td>他人の記事が 404 になることをテストで確かめる。所有者の検査を消すと、テストが落ちる</td><td>4・つまずき</td></tr>
+          <tr><td>エクストラクタ方式の注意点</td><td>認証が要るかどうかは、ハンドラの引数に <code>AuthUser</code> があるかどうかで決まる。引数に書き忘れたハンドラは守られない</td><td>2</td></tr>
+          <tr><td>ログ</td><td><code>AuthUser</code> に <code>Debug</code> を付けない。リクエストログに <code>Authorization</code> ヘッダーの値が出ていないことを確かめる</td><td>2・6</td></tr>
+          <tr><td>通信</td><td>トークンはヘッダーにそのまま入るので、本番では HTTPS が前提。このレッスンでは、ローカルの HTTP で試す</td><td>6</td></tr>
+        </tbody>
+      </table>
+      <p>このレッスンを終えても、まだ残っている課題があります（レート制限や CORS など）。最後の「<a href="#remaining">まだ残っていること</a>」にまとめます。</p>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">10 のプロジェクトをコピーする</h3>
+        </div>
+        <div class="step__body">
+          <p>10 の完成コードを出発点としてコピーします。<code>10-authentication</code> ディレクトリがある場所で、次のコマンドを実行してください。<code>target/</code>・<code>app.db*</code>・<code>.env</code> はコピーせず、<code>.env</code> は <code>.env.example</code> から作り直します。コマンドは何も表示せずに終わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p 11-authorization</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 10-authentication</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp Cargo.toml Cargo.lock .gitignore .env.example ../11-authorization/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R src migrations tests ../11-authorization/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ../11-authorization</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp .env.example .env</span></pre>
+</div>
+          <p><code>Cargo.toml</code> の <code>name</code> を <code>authorization</code> に変えます。<code>[lib]</code> の <code>name = "app"</code> と <code>[[bin]]</code> の <code>name = "server"</code> は 10 のままにします。このレッスンでは、ほかに <code>Cargo.toml</code> を変えません。<code>Cargo.lock</code> の中のパッケージ名は、最初の <code>cargo build</code> が自動で書き換えます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "authentication"</span><span class="diff-line diff-line--add">+ name = "authorization"</span><span class="diff-line">  version = "0.1.0"</span><span class="diff-line">  edition = "2024"</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>変更を確かめます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n "^name" Cargo.toml</span><span class="terminal__line">2:name = "authorization"</span><span class="terminal__line">7:name = "app"</span><span class="terminal__line">11:name = "server"</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -A</span><span class="terminal__line">.env</span><span class="terminal__line">.env.example</span><span class="terminal__line">.gitignore</span><span class="terminal__line">Cargo.lock</span><span class="terminal__line">Cargo.toml</span><span class="terminal__line">migrations</span><span class="terminal__line">src</span><span class="terminal__line">tests</span></pre>
+</div>
+          <p>ビルドとテストが 10 と同じように通ることを確かめます。<code>cargo build</code> の出力は一部を省略しています。<code>cargo test</code> の出力は、テストバイナリーごとに、<code>Running</code> の行と集計（<code>test result</code>）の行だけを残し、テスト名の行を「…」で省略しています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   …</span><span class="terminal__line">   Compiling sqlx-macros-core v0.9.0</span><span class="terminal__line">   Compiling sqlx-macros v0.9.0</span><span class="terminal__line">   Compiling sqlx v0.9.0</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.52s</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.74s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-cad66d21e9b4411f)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.10s</span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-2ad4bff17ee2f310)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-ea49422c10e1fec9)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-31d0a2c096f7477f)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-b7c64ddda6ee098c)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-0fb0d3f152375bd6)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s</span><span class="terminal__line">   Doc-tests app</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+          <p>10 と同じ 40 件（lib 5・auth 10・health 1・posts 18・users 6）が成功し、計測用の <code>#[ignore]</code> のテストが 1 件あります。<code>target/debug/deps/</code> の後ろのハッシュと時間は、環境ごとに変わります。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>grep</code> の 1 行目が <code>name = "authorization"</code> になり、40 件のテストが成功すれば OK です。以降のコマンドは全て <code>11-authorization</code> ディレクトリで実行します。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>AuthUser</code> エクストラクタと <code>GET /auth/me</code> を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>リクエストからトークンを取り出し、その持ち主を特定する処理を、エクストラクタとして作ります。02・03 で見たとおり、エクストラクタはハンドラの引数に置く型で、Axum がハンドラを呼ぶ前にリクエストから値を作ります。<code>Path</code> や <code>Json</code> と同じように、自分で作った型もエクストラクタにできます。</p>
+          <p>エクストラクタには 2 種類のトレイトがあります。</p>
+          <ul>
+            <li><code>FromRequestParts</code>: リクエストの本文以外（<code>Parts</code>。メソッド・URI・ヘッダーなど）だけを読む。本文を消費しないので、1 つのハンドラに何個でも置ける。</li>
+            <li><code>FromRequest</code>: 本文を読む（消費する）。<code>Json</code> がこちらで、03 で確かめたとおり、ハンドラの引数の最後に 1 つだけ置ける。</li>
+          </ul>
+          <p>トークンは <code>Authorization</code> ヘッダーにあるので、<code>FromRequestParts</code> で作ります。新しいファイル <code>src/auth_user.rs</code> を作ってください。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src/auth_user.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">use axum::{
+    extract::FromRequestParts,
+    http::{header::AUTHORIZATION, request::Parts},
+};
+
+use crate::error::AppError;
+use crate::state::AppState;
+use crate::token::hash_token;
+
+// ハンドラの引数に置くだけで「ログイン済みであること」を要求する型。
+// 認証に失敗すると、ハンドラの本体は呼ばれずに 401 が返る。
+// Debug は付けない（token_hash をログに出す事故を防ぐ）
+pub struct AuthUser {
+    pub user_id: i64,
+    pub name: String,
+    // ログアウトで「このトークンのセッションだけ」を消すために持つ（トークンそのものは持たない）
+    pub token_hash: Vec&lt;u8&gt;,
+}
+
+// 無い・形式が違う・見つからない・期限切れのどれでも同じ文言にする（理由を区別して教えない）
+const UNAUTHORIZED: &amp;str = "missing or invalid bearer token";
+
+// `Authorization: Bearer &lt;token&gt;` からトークンを取り出す。スキーム名の大文字小文字は区別しない（RFC 9110）
+fn bearer_token(parts: &amp;Parts) -&gt; Option&lt;&amp;str&gt; {
+    let value = parts.headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, token) = value.split_once(' ')?;
+    if scheme.eq_ignore_ascii_case("bearer") &amp;&amp; !token.is_empty() {
+        Some(token)
+    } else {
+        None
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct SessionUser {
+    user_id: i64,
+    name: String,
+}
+
+// Rejection に AppError を使うので、失敗は他のハンドラと同じ形式の 401 になる
+impl FromRequestParts&lt;AppState&gt; for AuthUser {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &amp;mut Parts,
+        state: &amp;AppState,
+    ) -&gt; Result&lt;Self, Self::Rejection&gt; {
+        let token = bearer_token(parts).ok_or(AppError::Unauthorized(UNAUTHORIZED))?;
+        let token_hash = hash_token(token);
+
+        // 期限の判定は DB の時計（unixepoch()）で行う。アプリ側の時刻とずれる心配がない
+        let session = sqlx::query_as::&lt;_, SessionUser&gt;(
+            "SELECT u.id AS user_id, u.name \
+             FROM sessions s JOIN users u ON u.id = s.user_id \
+             WHERE s.token_hash = ? AND s.expires_at &gt; unixepoch()",
+        )
+        .bind(&amp;token_hash)
+        .fetch_optional(&amp;state.pool)
+        .await?
+        .ok_or(AppError::Unauthorized(UNAUTHORIZED))?;
+
+        Ok(AuthUser {
+            user_id: session.user_id,
+            name: session.name,
+            token_hash,
+        })
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li><code>impl FromRequestParts&lt;AppState&gt; for AuthUser</code> と、<code>AppState</code> 専用として実装します。<code>from_request_parts</code> の引数 <code>state</code> から DB のプール（<code>state.pool</code>）を使えます。</li>
+            <li><code>type Rejection = AppError;</code> が、取り出しに失敗したときの応答の型です。<code>AppError::Unauthorized</code> は 10 で作ったもので、ほかのエラーと同じ JSON 形式の 401 に、<code>WWW-Authenticate: Bearer</code> ヘッダーを付けて返します。エクストラクタが失敗すると、ハンドラの本体は呼ばれません。</li>
+            <li><code>bearer_token</code> は、<code>Authorization</code> の値を最初の空白で「スキーム名」と「トークン」に分けます。スキーム名の大文字と小文字は区別しません（コメントにあるとおり RFC 9110 の決まりで、<code>bearer</code> でも通します）。トークンが空の場合や、スキーム名が <code>Bearer</code> 以外（<code>Basic</code> など）の場合は <code>None</code> です。</li>
+            <li>照合は、10 と同じ <code>hash_token</code>（SHA-256）で計算したハッシュで、<code>sessions</code> の <code>token_hash</code> を引きます。DB にはトークンそのものが無いので、トークンのまま引くことはできません。</li>
+            <li>期限の判定は、SQL の <code>s.expires_at &gt; unixepoch()</code> で、DB の時計を使います。10 で期限（<code>expires_at</code>）を決めたときも DB の <code>unixepoch()</code> を使ったので、アプリ側の時刻とずれる心配がありません。</li>
+            <li>失敗の文言は <code>UNAUTHORIZED</code> の 1 つだけです。ヘッダーが無い・形式が違う・見つからない・期限切れのどれでも、同じ 401 を返し、理由を区別して教えません。10 のログイン失敗と同じ考え方です。</li>
+            <li>照合の SQL そのものが失敗したとき（DB に届かないなど）は、401 ではなく 500（<code>code: internal</code>）になります。認証の失敗とは区別し、詳細はサーバーのログにだけ出します。</li>
+            <li><code>AuthUser</code> には <code>Debug</code> を付けません。<code>{:?}</code> でログに出せないようにして、<code>token_hash</code> をうっかり出す事故を防ぎます。</li>
+            <li><code>token_hash</code> を持たせているのは、ステップ 3 のログアウトで「今使っているトークンのセッションだけ」を消すためです。トークンそのもの（平文）は持ちません。</li>
+          </ul>
+          <p><code>src/lib.rs</code> にモジュールを足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+ pub mod auth_user;</span><span class="diff-line">  pub mod config;</span><span class="diff-line">  pub mod error;</span><span class="diff-line">  pub mod middleware;</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>src/routes/auth.rs</code> に、自分の情報を返す <code>me</code> を足します。引数に <code>AuthUser</code> を置くだけで、このハンドラは「ログイン済みであること」を要求するようになります。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/auth.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  use sqlx::SqliteConnection;</span><span class="diff-line">  use std::collections::BTreeMap;</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ use crate::auth_user::AuthUser;</span><span class="diff-line">  use crate::error::AppError;</span><span class="diff-line">  use crate::password::{hash_password_blocking, verify_password_blocking};</span><span class="diff-line">  use crate::routes::users::User;</span><span class="diff-line">  ...</span><span class="diff-line">          expires_at,</span><span class="diff-line">      }))</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[derive(Serialize)]</span><span class="diff-line diff-line--add">+ pub struct Me {</span><span class="diff-line diff-line--add">+     id: i64,</span><span class="diff-line diff-line--add">+     name: String,</span><span class="diff-line diff-line--add">+     email: String,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // 認証が要るかどうかは、引数に AuthUser があるかどうかだけで決まる</span><span class="diff-line diff-line--add">+ pub async fn me(State(state): State&lt;AppState&gt;, user: AuthUser) -&gt; Result&lt;Json&lt;Me&gt;, AppError&gt; {</span><span class="diff-line diff-line--add">+     let email: String = sqlx::query_scalar("SELECT email FROM credentials WHERE user_id = ?")</span><span class="diff-line diff-line--add">+         .bind(user.user_id)</span><span class="diff-line diff-line--add">+         .fetch_one(&amp;state.pool)</span><span class="diff-line diff-line--add">+         .await?;</span><span class="diff-line diff-line--add">+     Ok(Json(Me {</span><span class="diff-line diff-line--add">+         id: user.user_id,</span><span class="diff-line diff-line--add">+         name: user.name,</span><span class="diff-line diff-line--add">+         email,</span><span class="diff-line diff-line--add">+     }))</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <p><code>email</code> は <code>/auth/me</code> でしか使わないので、<code>AuthUser</code> の SQL（<code>JOIN</code>）には入れず、このハンドラで <code>credentials</code> から引きます。<code>AuthUser</code> は、記事のハンドラなどでも毎回作られるので、軽く保ちます。</p>
+          <p><code>src/routes/mod.rs</code> にルートを足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          .route("/health", get(health::health))</span><span class="diff-line">          .route("/auth/register", post(auth::register))</span><span class="diff-line">          .route("/auth/login", post(auth::login))</span><span class="diff-line diff-line--add">+         .route("/auth/me", get(auth::me))</span><span class="diff-line">          .route("/users", get(users::list_users))</span><span class="diff-line">          .route("/users/{id}", get(users::get_user))</span><span class="diff-line">          .route("/posts", get(posts::list_posts))</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>テストを足します。まず <code>tests/common/mod.rs</code> に、2 つの関数を足します。<code>authed_json</code> は Bearer トークン付きのリクエストを作り、<code>register_user</code> は <code>/auth/register</code> で利用者を 1 人作ってトークンを受け取ります。ステップ 4 以降の記事のテストでも使います。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">tests/common/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      assert_eq!(status, StatusCode::CREATED);</span><span class="diff-line">      post</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // Bearer トークン付きのリクエスト。本文が要らないときは body に "" を渡す</span><span class="diff-line diff-line--add">+ pub fn authed_json(method: &amp;str, uri: &amp;str, token: &amp;str, body: &amp;str) -&gt; Request&lt;Body&gt; {</span><span class="diff-line diff-line--add">+     Request::builder()</span><span class="diff-line diff-line--add">+         .method(method)</span><span class="diff-line diff-line--add">+         .uri(uri)</span><span class="diff-line diff-line--add">+         .header("content-type", "application/json")</span><span class="diff-line diff-line--add">+         .header("authorization", format!("Bearer {token}"))</span><span class="diff-line diff-line--add">+         .body(Body::from(body.to_string()))</span><span class="diff-line diff-line--add">+         .unwrap()</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // /auth/register で利用者を 1 人作る</span><span class="diff-line diff-line--add">+ pub struct TestUser {</span><span class="diff-line diff-line--add">+     pub id: i64,</span><span class="diff-line diff-line--add">+     pub token: String,</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ pub async fn register_user(app: &amp;Router, name: &amp;str) -&gt; TestUser {</span><span class="diff-line diff-line--add">+     let (status, body) = send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         json_request(</span><span class="diff-line diff-line--add">+             "POST",</span><span class="diff-line diff-line--add">+             "/auth/register",</span><span class="diff-line diff-line--add">+             None,</span><span class="diff-line diff-line--add">+             &amp;serde_json::json!({</span><span class="diff-line diff-line--add">+                 "name": name,</span><span class="diff-line diff-line--add">+                 "email": format!("{name}@example.com"),</span><span class="diff-line diff-line--add">+                 "password": "password-123456",</span><span class="diff-line diff-line--add">+             })</span><span class="diff-line diff-line--add">+             .to_string(),</span><span class="diff-line diff-line--add">+         ),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::CREATED);</span><span class="diff-line diff-line--add">+     TestUser {</span><span class="diff-line diff-line--add">+         id: body["user"]["id"].as_i64().unwrap(),</span><span class="diff-line diff-line--add">+         token: body["token"].as_str().unwrap().to_string(),</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <p><code>tests/auth.rs</code> に 2 件を足します。2 件目は、401 になるヘッダーの形を 6 通り試し、最後に小文字の <code>bearer</code> が通ることを確かめます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">tests/auth.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">  use app::token::hash_token;</span><span class="diff-line">  use axum::http::StatusCode;</span><span class="diff-line diff-line--remove">- use common::{TEST_SESSION_TTL_SECS, get, json_request, send, test_app};</span><span class="diff-line diff-line--add">+ use common::{</span><span class="diff-line diff-line--add">+     TEST_SESSION_TTL_SECS, authed_json, get, json_request, register_user, send, test_app,</span><span class="diff-line diff-line--add">+ };</span><span class="diff-line">  use sqlx::SqlitePool;</span><span class="diff-line"> </span><span class="diff-line">  fn register_body(name: &amp;str, email: &amp;str, password: &amp;str) -&gt; String {</span><span class="diff-line">  ...</span><span class="diff-line">      assert_eq!(status, StatusCode::UNAUTHORIZED);</span><span class="diff-line">      assert_eq!(body["error"]["message"], "invalid email or password");</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn me_returns_the_owner_of_the_token(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let app = test_app(pool);</span><span class="diff-line diff-line--add">+     let alice = register_user(&amp;app, "alice").await;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let (status, body) = send(app, authed_json("GET", "/auth/me", &amp;alice.token, "")).await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::OK);</span><span class="diff-line diff-line--add">+     assert_eq!(</span><span class="diff-line diff-line--add">+         body,</span><span class="diff-line diff-line--add">+         serde_json::json!({ "id": alice.id, "name": "alice", "email": "alice@example.com" })</span><span class="diff-line diff-line--add">+     );</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn me_without_a_valid_token_is_unauthorized(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     use axum::{body::Body, http::Request};</span><span class="diff-line diff-line--add">+     use tower::ServiceExt;</span><span class="diff-line diff-line--add">+     let app = test_app(pool);</span><span class="diff-line diff-line--add">+     let alice = register_user(&amp;app, "alice").await;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let with_header = |value: Option&lt;String&gt;| {</span><span class="diff-line diff-line--add">+         let mut builder = Request::get("/auth/me");</span><span class="diff-line diff-line--add">+         if let Some(value) = value {</span><span class="diff-line diff-line--add">+             builder = builder.header("authorization", value);</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+         builder.body(Body::empty()).unwrap()</span><span class="diff-line diff-line--add">+     };</span><span class="diff-line diff-line--add">+     let cases = [</span><span class="diff-line diff-line--add">+         None,                                        // ヘッダー無し</span><span class="diff-line diff-line--add">+         Some("Bearer".to_string()),                  // トークン無し</span><span class="diff-line diff-line--add">+         Some("Bearer ".to_string()),                 // トークンが空</span><span class="diff-line diff-line--add">+         Some(format!("Basic {}", alice.token)),      // スキームが違う</span><span class="diff-line diff-line--add">+         Some(alice.token.clone()),                   // スキームが無い</span><span class="diff-line diff-line--add">+         Some("Bearer not-a-real-token".to_string()), // 存在しないトークン</span><span class="diff-line diff-line--add">+     ];</span><span class="diff-line diff-line--add">+     for value in cases {</span><span class="diff-line diff-line--add">+         let response = app</span><span class="diff-line diff-line--add">+             .clone()</span><span class="diff-line diff-line--add">+             .oneshot(with_header(value.clone()))</span><span class="diff-line diff-line--add">+             .await</span><span class="diff-line diff-line--add">+             .unwrap();</span><span class="diff-line diff-line--add">+         assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{value:?}");</span><span class="diff-line diff-line--add">+         assert_eq!(</span><span class="diff-line diff-line--add">+             response.headers()["www-authenticate"],</span><span class="diff-line diff-line--add">+             "Bearer",</span><span class="diff-line diff-line--add">+             "{value:?}"</span><span class="diff-line diff-line--add">+         );</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // スキーム名の大文字小文字は区別しない</span><span class="diff-line diff-line--add">+     let response = app</span><span class="diff-line diff-line--add">+         .oneshot(with_header(Some(format!("bearer {}", alice.token))))</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+     assert_eq!(response.status(), StatusCode::OK);</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.31s</span><span class="terminal__line">…</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-ea49422c10e1fec9)</span><span class="terminal__line"></span><span class="terminal__line">running 12 tests</span><span class="terminal__line">test register_reports_every_invalid_field_at_once ... ok</span><span class="terminal__line">test register_rejects_a_password_over_128_characters ... ok</span><span class="terminal__line">test login_with_a_huge_password_is_unauthorized ... ok</span><span class="terminal__line">test me_without_a_valid_token_is_unauthorized ... ok</span><span class="terminal__line">test register_trims_and_lowercases_the_email ... ok</span><span class="terminal__line">test register_returns_a_token_and_stores_only_its_hash ... ok</span><span class="terminal__line">test register_creates_user_and_stores_only_the_hash ... ok</span><span class="terminal__line">test me_returns_the_owner_of_the_token ... ok</span><span class="terminal__line">test login_failure_has_www_authenticate_header ... ok</span><span class="terminal__line">test login_with_right_password_returns_a_new_token ... ok</span><span class="terminal__line">test register_with_duplicate_email_is_conflict_and_rolls_back ... ok</span><span class="terminal__line">test login_failures_look_the_same ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s</span><span class="terminal__line">…</span></pre>
+</div>
+          <p><code>tests/auth.rs</code> が 12 件になりました（全体では 42 件）。記事と <code>/users</code> のルートは、まだ API キーのままです。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: エクストラクタ方式とミドルウェア方式</summary>
+            <div class="disclosure__body">
+          <p>10 までの API キーは、ルーターに <code>route_layer</code> でミドルウェアを掛け、そのルーターの全ルートを保護していました。このレッスンでは、ハンドラの引数に <code>AuthUser</code> を置くエクストラクタ方式に切り替えます。</p>
+          <ul>
+            <li>エクストラクタ方式では、認証が要るハンドラだけに引数を書きます。ハンドラは、認証済みの利用者（<code>user.user_id</code>）を型として受け取れます。</li>
+            <li>その代わり、新しく足したハンドラで <code>AuthUser</code> を書き忘れると、そのルートは公開になります。コンパイルエラーにはなりません。ステップ 4 で記事のテストに「トークン無しは 401」を入れているのは、このためです。</li>
+            <li>ミドルウェア方式なら「このルーターの全ルートが保護される」ので書き忘れは起きにくい一方、ハンドラ側から利用者の id を型で受け取れません。</li>
+          </ul>
+          <p>このレッスンでは「ハンドラの型が <code>AuthUser</code> を要求している」ことを優先して、エクストラクタ方式にしました。ミドルウェア方式との比較は説明だけで、この教材では実験していません。ミドルウェアの書き方は、axum の公式ドキュメント（<a href="https://docs.rs/axum/0.8.9/axum/middleware/index.html">axum::middleware</a>）を参照してください。</p>
+            </div>
+          </details>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: <code>FromRequestParts&lt;AppState&gt;</code> ではなくジェネリクスで書くと</summary>
+            <div class="disclosure__body">
+          <p>エクストラクタを、どんなステートにも使えるように <code>impl&lt;S&gt; FromRequestParts&lt;S&gt;</code> とジェネリクスで書き、<code>state.pool</code> を直接使うとどうなるかを、執筆時に試した結果です。シグネチャは <code>fn from_request_parts(parts: &amp;mut Parts, state: &amp;S)</code> と 1 行で書いた状態です。手元で実行する必要はありません。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">warning: unused import: `crate::state::AppState`</span><span class="terminal__line"> --&gt; src/auth_user.rs:7:5</span><span class="terminal__line">  |</span><span class="terminal__line">7 | use crate::state::AppState;</span><span class="terminal__line">  |     ^^^^^^^^^^^^^^^^^^^^^^</span><span class="terminal__line">  |</span><span class="terminal__line">  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default</span><span class="terminal__line"></span><span class="terminal__line">error[E0609]: no field `pool` on type `&amp;S`</span><span class="terminal__line">  --&gt; src/auth_user.rs:55:32</span><span class="terminal__line">   |</span><span class="terminal__line">41 | impl&lt;S: Send + Sync&gt; FromRequestParts&lt;S&gt; for AuthUser {</span><span class="terminal__line">   |      - type parameter 'S' declared here</span><span class="terminal__line">...</span><span class="terminal__line">55 |         .fetch_optional(&amp;state.pool)</span><span class="terminal__line">   |                                ^^^^ unknown field</span><span class="terminal__line"></span><span class="terminal__line">warning: method call on a diverging inference variable</span><span class="terminal__line">  --&gt; src/auth_user.rs:57:10</span><span class="terminal__line">   |</span><span class="terminal__line">57 |         .ok_or(AppError::Unauthorized(UNAUTHORIZED))?;</span><span class="terminal__line">   |          ^^^^^</span><span class="terminal__line">   |</span><span class="terminal__line">   = help: consider providing a type annotation</span><span class="terminal__line">   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!</span><span class="terminal__line">   = note: for more information, see issue #156047 &lt;https://github.com/rust-lang/rust/issues/156047&gt;</span><span class="terminal__line">   = note: `#[warn(method_call_on_diverging_infer_var)]` (part of `#[warn(future_incompatible)]`) on by default</span><span class="terminal__line"></span><span class="terminal__line">error[E0599]: no method named `ok_or` found for type `_` in the current scope</span><span class="terminal__line">  --&gt; src/auth_user.rs:57:10</span><span class="terminal__line">   |</span><span class="terminal__line">49 |           let session = sqlx::query_as::&lt;_, SessionUser&gt;(</span><span class="terminal__line">   |  _______________________-</span><span class="terminal__line">50 | |             "SELECT u.id AS user_id, u.name \</span><span class="terminal__line">51 | |              FROM sessions s JOIN users u ON u.id = s.user_id \</span><span class="terminal__line">52 | |              WHERE s.token_hash = ? AND s.expires_at &gt; unixepoch()",</span><span class="terminal__line">...  |</span><span class="terminal__line">56 | |         .await?</span><span class="terminal__line">57 | |         .ok_or(AppError::Unauthorized(UNAUTHORIZED))?;</span><span class="terminal__line">   | |         -^^^^^ method not found in `_`</span><span class="terminal__line">   | |_________|</span><span class="terminal__line">   |</span><span class="terminal__line"></span><span class="terminal__line">Some errors have detailed explanations: E0599, E0609.</span><span class="terminal__line">For more information about an error, try `rustc --explain E0599`.</span><span class="terminal__line">warning: `authorization` (lib) generated 2 warnings</span><span class="terminal__line">error: could not compile `authorization` (lib) due to 2 previous errors; 3 warnings emitted</span></pre>
+</div>
+          <p>型 <code>S</code> が何であるかが分からないので、<code>state.pool</code> というフィールドを使えません（<code>no field `pool` on type `&amp;S`</code>）。後ろの <code>ok_or</code> のエラーは、その巻き添えです。直し方は 2 通りあります。</p>
+          <ol>
+            <li>このレッスンで採用した <code>impl FromRequestParts&lt;AppState&gt;</code>（<code>AppState</code> 専用と宣言する）。</li>
+            <li>ジェネリクスのまま <code>where AppState: FromRef&lt;S&gt;</code> を足し、先頭で <code>let state = AppState::from_ref(state);</code> と取り出す（<code>axum::extract::FromRef</code>）。<code>AppState</code> から一部だけを取り出したいときの定番の書き方です。</li>
+          </ol>
+          <p>2 の書き方も試し、記事と認証のテストが通ることを確かめました（完成時点のテストで試した結果です）。宣言は <code>impl&lt;S&gt; FromRequestParts&lt;S&gt; for AuthUser where S: Send + Sync, AppState: FromRef&lt;S&gt;</code> です。<code>AppState</code> は <code>Clone</code> なので、複製して使えます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build &amp;&amp; cargo test --test posts --test auth 2&gt;&amp;1 | grep "test result"</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.18s</span><span class="terminal__line">test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s</span><span class="terminal__line">test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s</span></pre>
+</div>
+          <p>このレッスンでは、単純さを優先して 1 にしています。</p>
+            </div>
+          </details>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>tests/auth.rs</code> の 12 件が成功すれば OK です。新しい 2 件は <code>me_returns_the_owner_of_the_token</code> と <code>me_without_a_valid_token_is_unauthorized</code> です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">ログアウトと期限切れセッションの掃除</h3>
+        </div>
+        <div class="step__body">
+          <p>ログアウト（<code>POST /auth/logout</code>）と、ログイン時の期限切れセッションの掃除を <code>src/routes/auth.rs</code> に足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/auth.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      };</span><span class="diff-line"> </span><span class="diff-line">      let mut conn = state.pool.acquire().await?;</span><span class="diff-line diff-line--add">+     // 期限切れのセッションを掃除する簡易版。ログインのたびに全利用者ぶんをまとめて消す</span><span class="diff-line diff-line--add">+     // （本番では定期ジョブにすることが多い）</span><span class="diff-line diff-line--add">+     sqlx::query("DELETE FROM sessions WHERE expires_at &lt;= unixepoch()")</span><span class="diff-line diff-line--add">+         .execute(&amp;mut *conn)</span><span class="diff-line diff-line--add">+         .await?;</span><span class="diff-line">      let (token, expires_at) =</span><span class="diff-line">          issue_session(&amp;mut conn, credential.user_id, state.config.session_ttl_secs).await?;</span><span class="diff-line">      Ok(Json(AuthResponse {</span><span class="diff-line">  ...</span><span class="diff-line">          email,</span><span class="diff-line">      }))</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // 今使っているトークンのセッションだけを消す（他の端末のセッションは残る）。</span><span class="diff-line diff-line--add">+ // 消した後は同じトークンで AuthUser の照合に失敗し、401 になる</span><span class="diff-line diff-line--add">+ pub async fn logout(State(state): State&lt;AppState&gt;, user: AuthUser) -&gt; Result&lt;StatusCode, AppError&gt; {</span><span class="diff-line diff-line--add">+     sqlx::query("DELETE FROM sessions WHERE token_hash = ?")</span><span class="diff-line diff-line--add">+         .bind(&amp;user.token_hash)</span><span class="diff-line diff-line--add">+         .execute(&amp;state.pool)</span><span class="diff-line diff-line--add">+         .await?;</span><span class="diff-line diff-line--add">+     Ok(StatusCode::NO_CONTENT)</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <ul>
+            <li><code>logout</code> は、<code>AuthUser</code> の <code>token_hash</code> の行だけを削除して 204 を返します。同じ利用者が別の端末でログインしていても、そちらのセッションは残ります。削除した後は、同じトークンが <code>AuthUser</code> の照合で見つからなくなり、401 になります。</li>
+            <li>トークンは乱数の文字列で、サーバーが「有効なトークン」を覚えているのは <code>sessions</code> の行だけです。そのため、行を消せば、そのトークンはその場で使えなくなります。</li>
+            <li>期限切れの行の掃除は、<strong>ログインのたびに全利用者ぶんをまとめて消す簡易版</strong>です。登録（<code>register</code>）のときには掃除しません。コメントにあるとおり、本番では定期ジョブにすることが多い処理です。掃除しなくても、期限切れのトークンは <code>AuthUser</code> の <code>expires_at &gt; unixepoch()</code> で弾かれるので、掃除は DB の行を溜めないためのものです。</li>
+          </ul>
+          <p>ルートを足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          .route("/health", get(health::health))</span><span class="diff-line">          .route("/auth/register", post(auth::register))</span><span class="diff-line">          .route("/auth/login", post(auth::login))</span><span class="diff-line diff-line--add">+         .route("/auth/logout", post(auth::logout))</span><span class="diff-line">          .route("/auth/me", get(auth::me))</span><span class="diff-line">          .route("/users", get(users::list_users))</span><span class="diff-line">          .route("/users/{id}", get(users::get_user))</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>tests/auth.rs</code> の末尾に 4 件を足します。期限切れは、テストの中で DB の <code>expires_at</code> を 1 秒前に書き換えて作ります。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">tests/auth.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          .unwrap();</span><span class="diff-line">      assert_eq!(response.status(), StatusCode::OK);</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn logout_invalidates_only_that_token(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let app = test_app(pool.clone());</span><span class="diff-line diff-line--add">+     let alice = register_user(&amp;app, "alice").await;</span><span class="diff-line diff-line--add">+     // 同じ利用者が別の端末でもログインしている状態</span><span class="diff-line diff-line--add">+     let (_, second) = send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         login_request("alice@example.com", "password-123456"),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     let second_token = second["token"].as_str().unwrap().to_string();</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let (status, body) = send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         authed_json("POST", "/auth/logout", &amp;alice.token, ""),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::NO_CONTENT);</span><span class="diff-line diff-line--add">+     assert_eq!(body, serde_json::Value::Null);</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // ログアウトしたトークンは 401。sessions の行も消えている</span><span class="diff-line diff-line--add">+     let (status, _) = send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         authed_json("GET", "/auth/me", &amp;alice.token, ""),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::UNAUTHORIZED);</span><span class="diff-line diff-line--add">+     let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions")</span><span class="diff-line diff-line--add">+         .fetch_one(&amp;pool)</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+     assert_eq!(remaining, 1);</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // 別のトークンはそのまま使える</span><span class="diff-line diff-line--add">+     let (status, _) = send(</span><span class="diff-line diff-line--add">+         app.clone(),</span><span class="diff-line diff-line--add">+         authed_json("GET", "/auth/me", &amp;second_token, ""),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::OK);</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // ログアウト済みのトークンでもう一度ログアウトすると 401（2 回目は認証で弾かれる）</span><span class="diff-line diff-line--add">+     let (status, _) = send(app, authed_json("POST", "/auth/logout", &amp;alice.token, "")).await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::UNAUTHORIZED);</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn logout_without_a_token_is_unauthorized(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let (status, body) = send(</span><span class="diff-line diff-line--add">+         test_app(pool),</span><span class="diff-line diff-line--add">+         json_request("POST", "/auth/logout", None, ""),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::UNAUTHORIZED);</span><span class="diff-line diff-line--add">+     assert_eq!(body["error"]["code"], "unauthorized");</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn an_expired_token_is_unauthorized(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let app = test_app(pool.clone());</span><span class="diff-line diff-line--add">+     let alice = register_user(&amp;app, "alice").await;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // 期限を 1 秒前に書き換える（DB の時計で判定するので、過去の UNIX 秒にすれば期限切れ）</span><span class="diff-line diff-line--add">+     sqlx::query("UPDATE sessions SET expires_at = unixepoch() - 1")</span><span class="diff-line diff-line--add">+         .execute(&amp;pool)</span><span class="diff-line diff-line--add">+         .await</span><span class="diff-line diff-line--add">+         .unwrap();</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let (status, body) = send(app, authed_json("GET", "/auth/me", &amp;alice.token, "")).await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::UNAUTHORIZED);</span><span class="diff-line diff-line--add">+     assert_eq!(body["error"]["code"], "unauthorized");</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn login_deletes_expired_sessions(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let app = test_app(pool.clone());</span><span class="diff-line diff-line--add">+     register_user(&amp;app, "alice").await;</span><span class="diff-line diff-line--add">+     register_user(&amp;app, "bob").await;</span><span class="diff-line diff-line--add">+     // alice のセッションだけを期限切れにする</span><span class="diff-line diff-line--add">+     sqlx::query(</span><span class="diff-line diff-line--add">+         "UPDATE sessions SET expires_at = unixepoch() - 1 \</span><span class="diff-line diff-line--add">+          WHERE user_id = (SELECT user_id FROM credentials WHERE email = 'alice@example.com')",</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .execute(&amp;pool)</span><span class="diff-line diff-line--add">+     .await</span><span class="diff-line diff-line--add">+     .unwrap();</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // bob のログインで、alice の期限切れセッションが掃除される（bob の 2 件は残る）</span><span class="diff-line diff-line--add">+     send(app, login_request("bob@example.com", "password-123456")).await;</span><span class="diff-line diff-line--add">+     let remaining: Vec&lt;String&gt; = sqlx::query_scalar(</span><span class="diff-line diff-line--add">+         "SELECT c.email FROM sessions s JOIN credentials c ON c.user_id = s.user_id ORDER BY s.created_at, c.email",</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+     .fetch_all(&amp;pool)</span><span class="diff-line diff-line--add">+     .await</span><span class="diff-line diff-line--add">+     .unwrap();</span><span class="diff-line diff-line--add">+     assert_eq!(remaining, vec!["bob@example.com", "bob@example.com"]);</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.19s</span><span class="terminal__line">…</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-ea49422c10e1fec9)</span><span class="terminal__line"></span><span class="terminal__line">running 16 tests</span><span class="terminal__line">test logout_without_a_token_is_unauthorized ... ok</span><span class="terminal__line">test login_with_a_huge_password_is_unauthorized ... ok</span><span class="terminal__line">test register_rejects_a_password_over_128_characters ... ok</span><span class="terminal__line">test an_expired_token_is_unauthorized ... ok</span><span class="terminal__line">test me_returns_the_owner_of_the_token ... ok</span><span class="terminal__line">test register_creates_user_and_stores_only_the_hash ... ok</span><span class="terminal__line">test register_reports_every_invalid_field_at_once ... ok</span><span class="terminal__line">test me_without_a_valid_token_is_unauthorized ... ok</span><span class="terminal__line">test login_failure_has_www_authenticate_header ... ok</span><span class="terminal__line">test login_with_right_password_returns_a_new_token ... ok</span><span class="terminal__line">test logout_invalidates_only_that_token ... ok</span><span class="terminal__line">test register_returns_a_token_and_stores_only_its_hash ... ok</span><span class="terminal__line">test register_trims_and_lowercases_the_email ... ok</span><span class="terminal__line">test login_deletes_expired_sessions ... ok</span><span class="terminal__line">test register_with_duplicate_email_is_conflict_and_rolls_back ... ok</span><span class="terminal__line">test login_failures_look_the_same ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s</span><span class="terminal__line">…</span></pre>
+</div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>tests/auth.rs</code> が 16 件（全体では 46 件）になり、全て成功すれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">記事の書き込みを認可する</h3>
+        </div>
+        <div class="step__body">
+          <p>ここが、このレッスンの中心です。09 の記事の API には、次の 2 つの穴がありました。</p>
+          <ul>
+            <li>作成: 著者を本文の <code>author_id</code> で決めていたので、他人の id を書けば、他人になりすまして投稿できる。</li>
+            <li>更新・削除: <code>WHERE id = ?</code> だけで、誰の記事でも変更できる。</li>
+          </ul>
+          <p>どちらも、クライアントが送ってきた id を信用していることが原因です。<code>src/routes/posts.rs</code> を次のように変えます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/posts.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  use serde::{Deserialize, Serialize};</span><span class="diff-line">  use std::collections::BTreeMap;</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ use crate::auth_user::AuthUser;</span><span class="diff-line">  use crate::error::AppError;</span><span class="diff-line">  use crate::state::AppState;</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">  #[derive(Deserialize)]</span><span class="diff-line">  pub struct CreatePost {</span><span class="diff-line diff-line--remove">-     author_id: i64,</span><span class="diff-line">      title: String,</span><span class="diff-line">      body: String,</span><span class="diff-line">  }</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ // 著者はリクエストの本文ではなく、トークンの持ち主（AuthUser）で決める。</span><span class="diff-line diff-line--add">+ // 本文に author_id が付いていても、CreatePost に無いフィールドなので読み捨てられる。</span><span class="diff-line diff-line--add">+ // Json は本文を消費するので引数の最後。AuthUser はその前に置く（認証が先に走る）</span><span class="diff-line">  pub async fn create_post(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--add">+     user: AuthUser,</span><span class="diff-line">      payload: Result&lt;Json&lt;CreatePost&gt;, JsonRejection&gt;,</span><span class="diff-line">  ) -&gt; Result&lt;(StatusCode, Json&lt;Post&gt;), AppError&gt; {</span><span class="diff-line">      let Json(payload) = payload?;</span><span class="diff-line">      validate(Some(&amp;payload.title), Some(&amp;payload.body))?;</span><span class="diff-line diff-line--remove">-     let result = sqlx::query_as::&lt;_, Post&gt;(</span><span class="diff-line diff-line--add">+     let post = sqlx::query_as::&lt;_, Post&gt;(</span><span class="diff-line">          "INSERT INTO posts (author_id, title, body) VALUES (?, ?, ?) \</span><span class="diff-line">           RETURNING id, author_id, title, body, like_count, created_at, updated_at",</span><span class="diff-line">      )</span><span class="diff-line diff-line--remove">-     .bind(payload.author_id)</span><span class="diff-line diff-line--add">+     .bind(user.user_id)</span><span class="diff-line">      .bind(payload.title.trim())</span><span class="diff-line">      .bind(payload.body.trim())</span><span class="diff-line">      .fetch_one(&amp;state.pool)</span><span class="diff-line diff-line--remove">-     .await;</span><span class="diff-line diff-line--remove">-     match result {</span><span class="diff-line diff-line--remove">-         Ok(post) =&gt; Ok((StatusCode::CREATED, Json(post))),</span><span class="diff-line diff-line--remove">-         // 外部キー制約に違反した = author_id の user がいない</span><span class="diff-line diff-line--remove">-         Err(sqlx::Error::Database(error)) if error.is_foreign_key_violation() =&gt; {</span><span class="diff-line diff-line--remove">-             Err(AppError::field("author_id", "author not found"))</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--remove">-         Err(error) =&gt; Err(error.into()),</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--add">+     .await?;</span><span class="diff-line diff-line--add">+     Ok((StatusCode::CREATED, Json(post)))</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  pub async fn list_posts(</span><span class="diff-line">  ...</span><span class="diff-line">      post.map(Json).ok_or(AppError::NotFound("post not found"))</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ // 所有者だけが更新できる。「id が一致する」だけでなく「author_id がトークンの持ち主と一致する」</span><span class="diff-line diff-line--add">+ // を WHERE に入れるので、他人の記事は「存在しない記事」と区別がつかず、どちらも 404 になる</span><span class="diff-line">  pub async fn update_post(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--add">+     user: AuthUser,</span><span class="diff-line">      Path(id): Path&lt;i64&gt;,</span><span class="diff-line">      payload: Result&lt;Json&lt;UpdatePost&gt;, JsonRejection&gt;,</span><span class="diff-line">  ) -&gt; Result&lt;Json&lt;Post&gt;, AppError&gt; {</span><span class="diff-line">  ...</span><span class="diff-line">      let post = sqlx::query_as::&lt;_, Post&gt;(</span><span class="diff-line">          "UPDATE posts SET title = COALESCE(?1, title), body = COALESCE(?2, body), \</span><span class="diff-line">           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') \</span><span class="diff-line diff-line--remove">-          WHERE id = ?3 RETURNING id, author_id, title, body, like_count, created_at, updated_at",</span><span class="diff-line diff-line--add">+          WHERE id = ?3 AND author_id = ?4 \</span><span class="diff-line diff-line--add">+          RETURNING id, author_id, title, body, like_count, created_at, updated_at",</span><span class="diff-line">      )</span><span class="diff-line">      .bind(payload.title.as_deref().map(str::trim))</span><span class="diff-line">      .bind(payload.body.as_deref().map(str::trim))</span><span class="diff-line">      .bind(id)</span><span class="diff-line diff-line--add">+     .bind(user.user_id)</span><span class="diff-line">      .fetch_optional(&amp;state.pool)</span><span class="diff-line">      .await?;</span><span class="diff-line">      post.map(Json).ok_or(AppError::NotFound("post not found"))</span><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">  pub async fn delete_post(</span><span class="diff-line">      State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--add">+     user: AuthUser,</span><span class="diff-line">      Path(id): Path&lt;i64&gt;,</span><span class="diff-line">  ) -&gt; Result&lt;StatusCode, AppError&gt; {</span><span class="diff-line diff-line--remove">-     let result = sqlx::query("DELETE FROM posts WHERE id = ?")</span><span class="diff-line diff-line--add">+     let result = sqlx::query("DELETE FROM posts WHERE id = ? AND author_id = ?")</span><span class="diff-line">          .bind(id)</span><span class="diff-line diff-line--add">+         .bind(user.user_id)</span><span class="diff-line">          .execute(&amp;state.pool)</span><span class="diff-line">          .await?;</span><span class="diff-line">      if result.rows_affected() == 0 {</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><strong>作成</strong>: <code>CreatePost</code> から <code>author_id</code> を消し、<code>INSERT</code> に束ねる著者を <code>user.user_id</code>（トークンの持ち主）にします。著者は <code>AuthUser</code> で見つかった利用者なので、09 の「<code>author_id</code> の user がいない」（外部キー違反）の分岐は消しました。</li>
+            <li><strong>本文の <code>author_id</code></strong>: serde は、構造体に無いフィールドを既定で読み捨てます。本文に <code>author_id</code> が付いていても 400 や 422 にはならず、黙って無視されます。著者を決める値は <code>AuthUser</code> の <code>user_id</code> だけなので、本文から著者を変える経路はありません（ステップ 6 で確かめます）。</li>
+            <li><strong>更新・削除</strong>: <code>WHERE</code> に <code>AND author_id = ?</code> を足し、<code>user.user_id</code> を束ねます。<code>update_post</code> の SQL は <code>?1</code>〜<code>?4</code> の番号付きのプレースホルダーなので、4 つ目の <code>.bind(user.user_id)</code> が <code>?4</code> に入ります。</li>
+            <li>引数の順: <code>AuthUser</code> は <code>Json</code> より前に置きます。<code>Json</code> は本文を消費するので、最後の引数でなければなりません（逆にしたときのエラーは「<a href="#troubleshooting">つまずきポイント</a>」）。エクストラクタは引数の順に評価されるので、認証が本文の解析より先に走ります。</li>
+          </ul>
+          <p>所有者の検査を <code>WHERE</code> に入れると、他人の記事は「条件に合う行が無い」ことになり、存在しない記事と全く同じ経路で 404（<code>post not found</code>）になります。記事を取得してから <code>author_id</code> を比べる書き方もできますが、ここでは 1 つの SQL で「自分の記事であれば変更する」にしています。</p>
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">他人の記事を 403 ではなく 404 にする理由</p>
+              <p>他人の記事への更新・削除は、存在しない記事と同じ 404 で返します。HTTP の仕様（RFC 9110 の 15.5.4）でも、リソースの存在を隠したいときは、403 の代わりに 404 を返してよいとされています。ただし、この API の記事は全て公開で、<code>GET /posts/{id}</code> で誰でも存在を確かめられるので、ここでの 404 は存在を隠すためではありません。所有者の検査を <code>WHERE</code> に入れると、他人の記事と存在しない記事は同じ「0 行」になり、区別するにはもう 1 回 SELECT が要ります。加えて、下書きのような非公開の記事を足したときにも、そのまま存在を隠せます。この 2 つの理由で 404 に揃えています。ステップ 6 で、ステータスと本文が同じになることを確かめます。</p>
+            </div>
+          </div>
+          <p><code>src/routes/mod.rs</code> では、記事のルートから API キーのミドルウェアを外し、記事の読み取りと書き込みを同じルートにまとめます。<code>/users</code> の書き込み系は、まだ API キーのまま残します（ステップ 5 で削除します）。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line">      middleware,</span><span class="diff-line">      response::Response,</span><span class="diff-line diff-line--remove">-     routing::{get, patch, post, put},</span><span class="diff-line diff-line--add">+     routing::{get, post, put},</span><span class="diff-line">  };</span><span class="diff-line"> </span><span class="diff-line">  use crate::error::error_response;</span><span class="diff-line">  ...</span><span class="diff-line">              require_api_key,</span><span class="diff-line">          ));</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     let protected_posts = Router::new()</span><span class="diff-line diff-line--remove">-         .route("/posts", post(posts::create_post))</span><span class="diff-line diff-line--remove">-         .route(</span><span class="diff-line diff-line--remove">-             "/posts/{id}",</span><span class="diff-line diff-line--remove">-             patch(posts::update_post).delete(posts::delete_post),</span><span class="diff-line diff-line--remove">-         )</span><span class="diff-line diff-line--remove">-         .route_layer(middleware::from_fn_with_state(</span><span class="diff-line diff-line--remove">-             state.clone(),</span><span class="diff-line diff-line--remove">-             require_api_key,</span><span class="diff-line diff-line--remove">-         ));</span><span class="diff-line diff-line--remove">-</span><span class="diff-line">      Router::new()</span><span class="diff-line">          .route("/health", get(health::health))</span><span class="diff-line">          .route("/auth/register", post(auth::register))</span><span class="diff-line">  ...</span><span class="diff-line">          .route("/auth/me", get(auth::me))</span><span class="diff-line">          .route("/users", get(users::list_users))</span><span class="diff-line">          .route("/users/{id}", get(users::get_user))</span><span class="diff-line diff-line--remove">-         .route("/posts", get(posts::list_posts))</span><span class="diff-line diff-line--remove">-         .route("/posts/{id}", get(posts::get_post))</span><span class="diff-line diff-line--add">+         .route("/posts", get(posts::list_posts).post(posts::create_post))</span><span class="diff-line diff-line--add">+         .route(</span><span class="diff-line diff-line--add">+             "/posts/{id}",</span><span class="diff-line diff-line--add">+             get(posts::get_post)</span><span class="diff-line diff-line--add">+                 .patch(posts::update_post)</span><span class="diff-line diff-line--add">+                 .delete(posts::delete_post),</span><span class="diff-line diff-line--add">+         )</span><span class="diff-line">          .route("/posts/{id}/like", post(posts::like_post))</span><span class="diff-line">          .merge(protected_users)</span><span class="diff-line diff-line--remove">-         .merge(protected_posts)</span><span class="diff-line">          .fallback(not_found)</span><span class="diff-line">          .layer(middleware::from_fn(log_request))</span><span class="diff-line">          .with_state(state)</span><span class="diff-line">  ...</span></pre>
+</div>
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">API キーのミドルウェアを外し忘れると、記事のテストが 401 で落ちる</p>
+              <p>ミドルウェアは、ハンドラ（と <code>AuthUser</code>）より先に走ります。記事のルートに <code>require_api_key</code> が残っているとします。<code>Authorization: Bearer</code> だけのリクエストは <code>x-api-key</code> が無いとして 401 になり、ハンドラまで届きません。エラーの出力は「<a href="#troubleshooting">つまずきポイント</a>」を参照してください。</p>
+            </div>
+          </div>
+          <p>テストを書き換えます。まず共通部分です。<code>tests/common/mod.rs</code> の <code>create_post</code> を、API キーと <code>author_id</code> ではなく、トークンで記事を作るように変えます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">tests/common/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      user["id"].as_i64().unwrap()</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- // 記事を API 経由で 1 件作って、応答の JSON を返す</span><span class="diff-line diff-line--remove">- pub async fn create_post(app: &amp;Router, author_id: i64, title: &amp;str) -&gt; serde_json::Value {</span><span class="diff-line diff-line--add">+ // 記事を API 経由で 1 件作って、応答の JSON を返す（著者は token の持ち主）</span><span class="diff-line diff-line--add">+ pub async fn create_post(app: &amp;Router, token: &amp;str, title: &amp;str) -&gt; serde_json::Value {</span><span class="diff-line">      let (status, post) = send(</span><span class="diff-line">          app.clone(),</span><span class="diff-line diff-line--remove">-         json_request(</span><span class="diff-line diff-line--add">+         authed_json(</span><span class="diff-line">              "POST",</span><span class="diff-line">              "/posts",</span><span class="diff-line diff-line--remove">-             Some(TEST_API_KEY),</span><span class="diff-line diff-line--remove">-             &amp;serde_json::json!({ "author_id": author_id, "title": title, "body": "body" })</span><span class="diff-line diff-line--remove">-                 .to_string(),</span><span class="diff-line diff-line--add">+             token,</span><span class="diff-line diff-line--add">+             &amp;serde_json::json!({ "title": title, "body": "body" }).to_string(),</span><span class="diff-line">          ),</span><span class="diff-line">      )</span><span class="diff-line">      .await;</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>tests/posts.rs</code> は書き換える箇所が多いので、ファイル全体を置き換えます。各テストに共通する変更は次の 3 つです。</p>
+          <ul>
+            <li>利用者を <code>create_user</code>（<code>POST /users</code>）ではなく <code>register_user</code>（<code>/auth/register</code>）で作り、トークンを受け取る。</li>
+            <li>書き込みのリクエストを <code>json_request(..., Some(TEST_API_KEY), ...)</code> から <code>authed_json(..., &amp;alice.token, ...)</code> に替え、本文から <code>author_id</code> を消す。</li>
+            <li><code>create_post(&amp;app, author_id, ...)</code> を <code>create_post(&amp;app, &amp;alice.token, ...)</code> に替える。</li>
+          </ul>
+          <p>09 の 18 件のうち、<code>create_with_unknown_author_is_unprocessable</code> は不要になったので削除します。<code>create_without_api_key_is_unauthorized</code> は <code>create_without_a_token_is_unauthorized</code> に名前を変えます。<code>deleting_a_user_deletes_their_posts</code> は、利用者を削除する API が無くなるので、DB を直接操作して利用者を消します。新しく足すテストは 5 件です。代表的なものを抜き出します。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tests/posts.rs（抜粋: 作成。コピー不要: 全文は下の折りたたみ）</span>
+    <span class="code-block__spacer"></span>
+  </div>
+  <pre><code class="language-rust">#[sqlx::test]
+async fn create_without_a_token_is_unauthorized(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        json_request("POST", "/posts", None, r#"{"title":"t","body":"b"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], "unauthorized");
+}
+
+#[sqlx::test]
+async fn authentication_runs_before_the_body_is_parsed(pool: SqlitePool) {
+    // トークンが無ければ、壊れた JSON でも 400 ではなく 401（AuthUser が Json より前に評価される）
+    let (status, _) = send(
+        test_app(pool),
+        json_request("POST", "/posts", None, r#"{"title":"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test]
+async fn author_id_in_the_body_is_ignored(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let bob = register_user(&amp;app, "bob").await;
+
+    // alice のトークンで bob 名義の投稿を試みても、著者は alice になる（なりすましはできない）
+    let (status, created) = send(
+        app,
+        authed_json(
+            "POST",
+            "/posts",
+            &amp;alice.token,
+            &amp;format!(r#"{{"author_id":{},"title":"t","body":"b"}}"#, bob.id),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["author_id"], alice.id);
+}</code></pre>
+</div>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tests/posts.rs（抜粋: 更新。コピー不要: 全文は下の折りたたみ）</span>
+    <span class="code-block__spacer"></span>
+  </div>
+  <pre><code class="language-rust">#[sqlx::test]
+async fn patch_changes_only_the_given_fields(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, &amp;alice.token, "before").await;
+    let id = post["id"].as_i64().unwrap();
+
+    let (status, updated) = send(
+        app,
+        authed_json(
+            "PATCH",
+            &amp;format!("/posts/{id}"),
+            &amp;alice.token,
+            r#"{"title":"after"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["title"], "after");
+    assert_eq!(updated["body"], post["body"]); // 未指定の body はそのまま
+    assert_eq!(updated["author_id"], alice.id);
+}
+
+#[sqlx::test]
+async fn someone_elses_post_cannot_be_patched_and_looks_missing(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let bob = register_user(&amp;app, "bob").await;
+    let post = create_post(&amp;app, &amp;alice.token, "alice's").await;
+    let id = post["id"].as_i64().unwrap();
+
+    // bob が alice の記事を PATCH する。403 ではなく 404（存在しない記事と同じ応答）
+    let (status, body) = send(
+        app.clone(),
+        authed_json(
+            "PATCH",
+            &amp;format!("/posts/{id}"),
+            &amp;bob.token,
+            r#"{"title":"hacked"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, missing) = send(
+        app.clone(),
+        authed_json("PATCH", "/posts/999", &amp;bob.token, r#"{"title":"hacked"}"#),
+    )
+    .await;
+    assert_eq!(body, missing);
+
+    // 記事は変わっていない
+    let (_, fetched) = send(app, get(&amp;format!("/posts/{id}"))).await;
+    assert_eq!(fetched, post);
+}</code></pre>
+</div>
+          <ul>
+            <li><code>authentication_runs_before_the_body_is_parsed</code>: トークンが無ければ、壊れた JSON でも 400 ではなく 401 になります。<code>AuthUser</code> が <code>Json</code> より先に評価されるためです。</li>
+            <li><code>author_id_in_the_body_is_ignored</code>: alice のトークンで、本文に bob の id を入れて投稿しても、著者は alice になります。</li>
+            <li><code>someone_elses_post_cannot_be_patched_and_looks_missing</code>: bob が alice の記事を更新すると 404 で、存在しない記事（id 999）への更新と本文まで同じです。最後に、記事が変わっていないことも確かめます。削除にも同じ形のテスト（<code>someone_elses_post_cannot_be_deleted_and_looks_missing</code>）があります。</li>
+          </ul>
+          <p><code>tests/posts.rs</code> を、次の折りたたみの中の内容に置き換えてください。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">tests/posts.rs の全文（このファイルは次の内容に置き換えます）</summary>
+            <div class="disclosure__body">
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tests/posts.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">mod common;
+
+use axum::http::StatusCode;
+use common::{authed_json, create_post, get, json_request, register_user, send, test_app};
+use sqlx::SqlitePool;
+
+#[sqlx::test]
+async fn create_then_get_post(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+
+    let (status, created) = send(
+        app.clone(),
+        authed_json(
+            "POST",
+            "/posts",
+            &amp;alice.token,
+            r#"{"title":"  Hello  ","body":"first post"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["author_id"], alice.id); // 著者はトークンの持ち主
+    assert_eq!(created["title"], "Hello"); // 前後の空白は取り除いて保存する
+    assert_eq!(created["like_count"], 0);
+    assert!(created["created_at"].as_str().unwrap().ends_with('Z'));
+    let id = created["id"].as_i64().unwrap();
+
+    let (status, fetched) = send(app, get(&amp;format!("/posts/{id}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched, created);
+}
+
+#[sqlx::test]
+async fn create_without_a_token_is_unauthorized(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        json_request("POST", "/posts", None, r#"{"title":"t","body":"b"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], "unauthorized");
+}
+
+#[sqlx::test]
+async fn authentication_runs_before_the_body_is_parsed(pool: SqlitePool) {
+    // トークンが無ければ、壊れた JSON でも 400 ではなく 401（AuthUser が Json より前に評価される）
+    let (status, _) = send(
+        test_app(pool),
+        json_request("POST", "/posts", None, r#"{"title":"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test]
+async fn author_id_in_the_body_is_ignored(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let bob = register_user(&amp;app, "bob").await;
+
+    // alice のトークンで bob 名義の投稿を試みても、著者は alice になる（なりすましはできない）
+    let (status, created) = send(
+        app,
+        authed_json(
+            "POST",
+            "/posts",
+            &amp;alice.token,
+            &amp;format!(r#"{{"author_id":{},"title":"t","body":"b"}}"#, bob.id),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["author_id"], alice.id);
+}
+
+#[sqlx::test]
+async fn create_reports_every_invalid_field_at_once(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let long_body = "x".repeat(5001);
+
+    let (status, body) = send(
+        app,
+        authed_json(
+            "POST",
+            "/posts",
+            &amp;alice.token,
+            &amp;format!(r#"{{"title":"   ","body":"{long_body}"}}"#),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["code"], "validation_failed");
+    assert!(body["error"]["fields"]["title"].is_array());
+    assert!(body["error"]["fields"]["body"].is_array());
+}
+
+#[sqlx::test]
+async fn get_unknown_post_is_not_found(pool: SqlitePool) {
+    let (status, body) = send(test_app(pool), get("/posts/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "not_found");
+    assert_eq!(body["error"]["message"], "post not found");
+}
+
+#[sqlx::test]
+async fn patch_changes_only_the_given_fields(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, &amp;alice.token, "before").await;
+    let id = post["id"].as_i64().unwrap();
+
+    let (status, updated) = send(
+        app,
+        authed_json(
+            "PATCH",
+            &amp;format!("/posts/{id}"),
+            &amp;alice.token,
+            r#"{"title":"after"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["title"], "after");
+    assert_eq!(updated["body"], post["body"]); // 未指定の body はそのまま
+    assert_eq!(updated["author_id"], alice.id);
+}
+
+#[sqlx::test]
+async fn patch_with_empty_title_is_unprocessable(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, &amp;alice.token, "before").await;
+    let id = post["id"].as_i64().unwrap();
+
+    let (status, body) = send(
+        app,
+        authed_json(
+            "PATCH",
+            &amp;format!("/posts/{id}"),
+            &amp;alice.token,
+            r#"{"title":""}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(body["error"]["fields"]["title"].is_array());
+}
+
+#[sqlx::test]
+async fn patch_unknown_post_is_not_found(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let (status, _) = send(
+        app,
+        authed_json("PATCH", "/posts/999", &amp;alice.token, r#"{"title":"x"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test]
+async fn patch_and_delete_without_a_token_are_unauthorized(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, &amp;alice.token, "title").await;
+    let id = post["id"].as_i64().unwrap();
+
+    let (status, _) = send(
+        app.clone(),
+        json_request("PATCH", &amp;format!("/posts/{id}"), None, r#"{"title":"x"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = send(
+        app.clone(),
+        json_request("DELETE", &amp;format!("/posts/{id}"), None, ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // 記事は変わっていない
+    let (_, fetched) = send(app, get(&amp;format!("/posts/{id}"))).await;
+    assert_eq!(fetched, post);
+}
+
+#[sqlx::test]
+async fn someone_elses_post_cannot_be_patched_and_looks_missing(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let bob = register_user(&amp;app, "bob").await;
+    let post = create_post(&amp;app, &amp;alice.token, "alice's").await;
+    let id = post["id"].as_i64().unwrap();
+
+    // bob が alice の記事を PATCH する。403 ではなく 404（存在しない記事と同じ応答）
+    let (status, body) = send(
+        app.clone(),
+        authed_json(
+            "PATCH",
+            &amp;format!("/posts/{id}"),
+            &amp;bob.token,
+            r#"{"title":"hacked"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, missing) = send(
+        app.clone(),
+        authed_json("PATCH", "/posts/999", &amp;bob.token, r#"{"title":"hacked"}"#),
+    )
+    .await;
+    assert_eq!(body, missing);
+
+    // 記事は変わっていない
+    let (_, fetched) = send(app, get(&amp;format!("/posts/{id}"))).await;
+    assert_eq!(fetched, post);
+}
+
+#[sqlx::test]
+async fn someone_elses_post_cannot_be_deleted_and_looks_missing(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let bob = register_user(&amp;app, "bob").await;
+    let post = create_post(&amp;app, &amp;alice.token, "alice's").await;
+    let id = post["id"].as_i64().unwrap();
+
+    let (status, body) = send(
+        app.clone(),
+        authed_json("DELETE", &amp;format!("/posts/{id}"), &amp;bob.token, ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, missing) = send(
+        app.clone(),
+        authed_json("DELETE", "/posts/999", &amp;bob.token, ""),
+    )
+    .await;
+    assert_eq!(body, missing);
+
+    // 記事は残っている
+    let (status, fetched) = send(app, get(&amp;format!("/posts/{id}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched, post);
+}
+
+#[sqlx::test]
+async fn delete_removes_the_post(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, &amp;alice.token, "title").await;
+    let id = post["id"].as_i64().unwrap();
+
+    let (status, _) = send(
+        app.clone(),
+        authed_json("DELETE", &amp;format!("/posts/{id}"), &amp;alice.token, ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _) = send(app, get(&amp;format!("/posts/{id}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test]
+async fn list_pages_newest_first_with_next_cursor(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let first = create_post(&amp;app, &amp;alice.token, "first").await;
+    let second = create_post(&amp;app, &amp;alice.token, "second").await;
+    let third = create_post(&amp;app, &amp;alice.token, "third").await;
+
+    // 1 ページ目: 新しい順に 2 件、続きがあるので next_cursor は最後の id
+    let (status, page1) = send(app.clone(), get("/posts?limit=2")).await;
+    assert_eq!(status, StatusCode::OK);
+    let ids: Vec&lt;_&gt; = page1["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|post| post["id"].clone())
+        .collect();
+    assert_eq!(ids, vec![third["id"].clone(), second["id"].clone()]);
+    assert_eq!(page1["next_cursor"], second["id"]);
+
+    // 2 ページ目: next_cursor をそのまま渡すと残り 1 件で、next_cursor は null
+    let cursor = page1["next_cursor"].as_i64().unwrap();
+    let (_, page2) = send(app, get(&amp;format!("/posts?limit=2&amp;cursor={cursor}"))).await;
+    assert_eq!(page2["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page2["items"][0]["id"], first["id"]);
+    assert_eq!(page2["next_cursor"], serde_json::Value::Null);
+}
+
+#[sqlx::test]
+async fn list_with_exactly_limit_items_has_no_next_cursor(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    create_post(&amp;app, &amp;alice.token, "a").await;
+    create_post(&amp;app, &amp;alice.token, "b").await;
+
+    let (_, page) = send(app, get("/posts?limit=2")).await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 2);
+    assert_eq!(page["next_cursor"], serde_json::Value::Null);
+}
+
+#[sqlx::test]
+async fn list_filters_by_author(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let bob = register_user(&amp;app, "bob").await;
+    create_post(&amp;app, &amp;alice.token, "alice 1").await;
+    create_post(&amp;app, &amp;bob.token, "bob 1").await;
+    create_post(&amp;app, &amp;alice.token, "alice 2").await;
+
+    // 読み取りはトークン無しで呼べる
+    let (_, page) = send(app, get(&amp;format!("/posts?author_id={}", alice.id))).await;
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().all(|post| post["author_id"] == alice.id));
+}
+
+#[sqlx::test]
+async fn list_with_limit_out_of_range_is_unprocessable(pool: SqlitePool) {
+    let app = test_app(pool);
+    for uri in ["/posts?limit=0", "/posts?limit=101", "/posts?limit=-1"] {
+        let (status, body) = send(app.clone(), get(uri)).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{uri}");
+        assert!(body["error"]["fields"]["limit"].is_array(), "{uri}");
+    }
+}
+
+#[sqlx::test]
+async fn list_with_malformed_query_is_bad_request(pool: SqlitePool) {
+    let app = test_app(pool);
+    for uri in [
+        "/posts?limit=abc",
+        "/posts?cursor=abc",
+        "/posts?author_id=x",
+    ] {
+        let (status, body) = send(app.clone(), get(uri)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(body["error"]["code"], "bad_request", "{uri}");
+    }
+}
+
+#[sqlx::test]
+async fn like_increments_the_count(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, &amp;alice.token, "title").await;
+    let id = post["id"].as_i64().unwrap();
+
+    // いいねは認証なしで 2 回押すと like_count は 2
+    for expected in [1, 2] {
+        let (status, liked) = send(
+            app.clone(),
+            json_request("POST", &amp;format!("/posts/{id}/like"), None, ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            liked,
+            serde_json::json!({ "id": id, "like_count": expected })
+        );
+    }
+}
+
+#[sqlx::test]
+async fn like_unknown_post_is_not_found(pool: SqlitePool) {
+    let (status, _) = send(
+        test_app(pool),
+        json_request("POST", "/posts/999/like", None, ""),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test]
+async fn concurrent_likes_are_not_lost(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+    let post = create_post(&amp;app, &amp;alice.token, "title").await;
+    let id = post["id"].as_i64().unwrap();
+
+    // 50 件を同時に押しても、原子的な UPDATE なので 1 件も失われない
+    let mut tasks = Vec::new();
+    for _ in 0..50 {
+        let app = app.clone();
+        tasks.push(tokio::spawn(async move {
+            send(
+                app,
+                json_request("POST", &amp;format!("/posts/{id}/like"), None, ""),
+            )
+            .await
+        }));
+    }
+    for task in tasks {
+        let (status, _) = task.await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    let (_, fetched) = send(app, get(&amp;format!("/posts/{id}"))).await;
+    assert_eq!(fetched["like_count"], 50);
+}
+
+#[sqlx::test]
+async fn deleting_a_user_deletes_their_posts(pool: SqlitePool) {
+    let app = test_app(pool.clone());
+    let alice = register_user(&amp;app, "alice").await;
+    let bob = register_user(&amp;app, "bob").await;
+    let alice_post = create_post(&amp;app, &amp;alice.token, "alice's").await;
+    create_post(&amp;app, &amp;bob.token, "bob's").await;
+
+    // 利用者の削除 API は無いので、DB を直接操作する
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(alice.id)
+        .execute(&amp;pool)
+        .await
+        .unwrap();
+
+    // ON DELETE CASCADE: alice の記事だけが消え、bob の記事は残る
+    let (status, _) = send(app.clone(), get(&amp;format!("/posts/{}", alice_post["id"]))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, page) = send(app, get("/posts")).await;
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+}</code></pre>
+</div>
+            </div>
+          </details>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s</span><span class="terminal__line">…</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-b7c64ddda6ee098c)</span><span class="terminal__line"></span><span class="terminal__line">running 22 tests</span><span class="terminal__line">test create_without_a_token_is_unauthorized ... ok</span><span class="terminal__line">test like_unknown_post_is_not_found ... ok</span><span class="terminal__line">test authentication_runs_before_the_body_is_parsed ... ok</span><span class="terminal__line">test get_unknown_post_is_not_found ... ok</span><span class="terminal__line">test list_with_limit_out_of_range_is_unprocessable ... ok</span><span class="terminal__line">test create_reports_every_invalid_field_at_once ... ok</span><span class="terminal__line">test delete_removes_the_post ... ok</span><span class="terminal__line">test create_then_get_post ... ok</span><span class="terminal__line">test like_increments_the_count ... ok</span><span class="terminal__line">test author_id_in_the_body_is_ignored ... ok</span><span class="terminal__line">test deleting_a_user_deletes_their_posts ... ok</span><span class="terminal__line">test list_with_malformed_query_is_bad_request ... ok</span><span class="terminal__line">test list_with_exactly_limit_items_has_no_next_cursor ... ok</span><span class="terminal__line">test list_pages_newest_first_with_next_cursor ... ok</span><span class="terminal__line">test list_filters_by_author ... ok</span><span class="terminal__line">test patch_unknown_post_is_not_found ... ok</span><span class="terminal__line">test patch_with_empty_title_is_unprocessable ... ok</span><span class="terminal__line">test patch_changes_only_the_given_fields ... ok</span><span class="terminal__line">test patch_and_delete_without_a_token_are_unauthorized ... ok</span><span class="terminal__line">test someone_elses_post_cannot_be_deleted_and_looks_missing ... ok</span><span class="terminal__line">test someone_elses_post_cannot_be_patched_and_looks_missing ... ok</span><span class="terminal__line">test concurrent_likes_are_not_lost ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s</span><span class="terminal__line">…</span></pre>
+</div>
+          <p><code>tests/posts.rs</code> が 22 件（全体では 50 件）になりました。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: 本文の <code>author_id</code> を拒否せず無視にした理由</summary>
+            <div class="disclosure__body">
+          <p><code>CreatePost</code> に <code>#[serde(deny_unknown_fields)]</code> を付けると、構造体に無いフィールドを含む本文を拒否できます。執筆時に付けて、<code>author_id</code> を入れたテストだけを実行した結果です。手元で実行する必要はありません。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test posts author_id_in_the_body_is_ignored</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.23s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-b7c64ddda6ee098c)</span><span class="terminal__line"></span><span class="terminal__line">running 1 test</span><span class="terminal__line">test author_id_in_the_body_is_ignored ... FAILED</span><span class="terminal__line"></span><span class="terminal__line">failures:</span><span class="terminal__line"></span><span class="terminal__line">---- author_id_in_the_body_is_ignored stdout ----</span><span class="terminal__line">POST /auth/register -&gt; 201 Created (27.450083ms)</span><span class="terminal__line">POST /auth/register -&gt; 201 Created (19.221125ms)</span><span class="terminal__line">POST /posts -&gt; 422 Unprocessable Entity (552.458µs)</span><span class="terminal__line"></span><span class="terminal__line">thread 'author_id_in_the_body_is_ignored' (10394609) panicked at tests/posts.rs:73:5:</span><span class="terminal__line">assertion `left == right` failed</span><span class="terminal__line">  left: 422</span><span class="terminal__line"> right: 201</span><span class="terminal__line">note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line">failures:</span><span class="terminal__line">    author_id_in_the_body_is_ignored</span><span class="terminal__line"></span><span class="terminal__line">test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 21 filtered out; finished in 0.07s</span><span class="terminal__line"></span><span class="terminal__line">error: test failed, to rerun pass `--test posts`</span></pre>
+</div>
+          <p>拒否すると、<code>code: validation_failed</code> の 422 になります（テストは 201 を期待しているので失敗します）。このレッスンでは、次の理由で付けていません。</p>
+          <ul>
+            <li>API の契約では、<code>CreatePost</code> は <code>{title, body}</code> と決めているだけで、それ以外のフィールドの拒否までは求めていない。クライアントが将来フィールドを足したときに、422 で壊れるのを避けたい。</li>
+            <li>本文の <code>author_id</code> は読み捨てられるだけで、著者を変える経路が無い（<code>INSERT</code> に束ねるのは <code>AuthUser</code> の <code>user_id</code> だけ）。安全性は <code>deny_unknown_fields</code> の有無に左右されない。</li>
+          </ul>
+          <p>入力を厳しくしたいチームは、付けても構いません。</p>
+            </div>
+          </details>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>tests/posts.rs</code> の 22 件（他人の記事への更新・削除が 404 になるテストを含む）が成功すれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>/users</code> の書き込み系と API キーを削除する</h3>
+        </div>
+        <div class="step__body">
+          <p>10 で見たとおり、<code>POST /users</code>（API キー）で作った user には認証情報が無く、ログインできません。利用者の登録を <code>/auth/register</code> に一本化し、<code>/users</code> の書き込み系（<code>POST /users</code>・<code>PUT|DELETE /users/{id}</code>）を削除します。<code>GET /users</code>・<code>GET /users/{id}</code> は、著者の一覧として公開のまま残します。これで API キーを使うルートが無くなるので、API キーの設定とミドルウェアも削除します。</p>
+          <p>まずルーターから <code>protected_users</code> を消します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line">      middleware,</span><span class="diff-line">      response::Response,</span><span class="diff-line diff-line--remove">-     routing::{get, post, put},</span><span class="diff-line diff-line--add">+     routing::{get, post},</span><span class="diff-line">  };</span><span class="diff-line"> </span><span class="diff-line">  use crate::error::error_response;</span><span class="diff-line diff-line--remove">- use crate::middleware::{log_request, require_api_key};</span><span class="diff-line diff-line--add">+ use crate::middleware::log_request;</span><span class="diff-line">  use crate::state::AppState;</span><span class="diff-line"> </span><span class="diff-line">  pub fn router(state: AppState) -&gt; Router {</span><span class="diff-line diff-line--remove">-     let protected_users = Router::new()</span><span class="diff-line diff-line--remove">-         .route("/users", post(users::create_user))</span><span class="diff-line diff-line--remove">-         .route(</span><span class="diff-line diff-line--remove">-             "/users/{id}",</span><span class="diff-line diff-line--remove">-             put(users::update_user).delete(users::delete_user),</span><span class="diff-line diff-line--remove">-         )</span><span class="diff-line diff-line--remove">-         .route_layer(middleware::from_fn_with_state(</span><span class="diff-line diff-line--remove">-             state.clone(),</span><span class="diff-line diff-line--remove">-             require_api_key,</span><span class="diff-line diff-line--remove">-         ));</span><span class="diff-line diff-line--remove">-</span><span class="diff-line">      Router::new()</span><span class="diff-line">          .route("/health", get(health::health))</span><span class="diff-line">          .route("/auth/register", post(auth::register))</span><span class="diff-line">  ...</span><span class="diff-line">                  .delete(posts::delete_post),</span><span class="diff-line">          )</span><span class="diff-line">          .route("/posts/{id}/like", post(posts::like_post))</span><span class="diff-line diff-line--remove">-         .merge(protected_users)</span><span class="diff-line">          .fallback(not_found)</span><span class="diff-line">          .layer(middleware::from_fn(log_request))</span><span class="diff-line">          .with_state(state)</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>src/routes/users.rs</code> から、書き込み系のハンドラと <code>CreateUser</code> を削除します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/users.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  use axum::{</span><span class="diff-line">      Json,</span><span class="diff-line diff-line--remove">-     extract::{Path, State, rejection::JsonRejection},</span><span class="diff-line diff-line--remove">-     http::StatusCode,</span><span class="diff-line diff-line--add">+     extract::{Path, State},</span><span class="diff-line">  };</span><span class="diff-line diff-line--remove">- use serde::{Deserialize, Serialize};</span><span class="diff-line diff-line--add">+ use serde::Serialize;</span><span class="diff-line"> </span><span class="diff-line">  use crate::error::AppError;</span><span class="diff-line">  use crate::state::AppState;</span><span class="diff-line">  ...</span><span class="diff-line">      pub name: String,</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- #[derive(Deserialize)]</span><span class="diff-line diff-line--remove">- pub struct CreateUser {</span><span class="diff-line diff-line--remove">-     name: String,</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">- impl CreateUser {</span><span class="diff-line diff-line--remove">-     fn validate(&amp;self) -&gt; Result&lt;(), AppError&gt; {</span><span class="diff-line diff-line--remove">-         let name = self.name.trim();</span><span class="diff-line diff-line--remove">-         if name.is_empty() {</span><span class="diff-line diff-line--remove">-             return Err(AppError::field("name", "name must not be empty"));</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--remove">-         if name.chars().count() &gt; 50 {</span><span class="diff-line diff-line--remove">-             return Err(AppError::field(</span><span class="diff-line diff-line--remove">-                 "name",</span><span class="diff-line diff-line--remove">-                 "name must be 50 characters or less",</span><span class="diff-line diff-line--remove">-             ));</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--remove">-         Ok(())</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line">  pub async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, AppError&gt; {</span><span class="diff-line">      let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users ORDER BY id")</span><span class="diff-line">          .fetch_all(&amp;state.pool)</span><span class="diff-line">          .await?;</span><span class="diff-line">      Ok(Json(users))</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">- pub async fn create_user(</span><span class="diff-line diff-line--remove">-     State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--remove">-     payload: Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;,</span><span class="diff-line diff-line--remove">- ) -&gt; Result&lt;(StatusCode, Json&lt;User&gt;), AppError&gt; {</span><span class="diff-line diff-line--remove">-     let Json(payload) = payload?;</span><span class="diff-line diff-line--remove">-     payload.validate()?;</span><span class="diff-line diff-line--remove">-     let user = sqlx::query_as::&lt;_, User&gt;("INSERT INTO users (name) VALUES (?) RETURNING id, name")</span><span class="diff-line diff-line--remove">-         .bind(&amp;payload.name)</span><span class="diff-line diff-line--remove">-         .fetch_one(&amp;state.pool)</span><span class="diff-line diff-line--remove">-         .await?;</span><span class="diff-line diff-line--remove">-     Ok((StatusCode::CREATED, Json(user)))</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  pub async fn get_user(</span><span class="diff-line">  ...</span><span class="diff-line">          .await?;</span><span class="diff-line">      user.map(Json).ok_or(AppError::NotFound("user not found"))</span><span class="diff-line">  }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">- pub async fn update_user(</span><span class="diff-line diff-line--remove">-     State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--remove">-     Path(id): Path&lt;i64&gt;,</span><span class="diff-line diff-line--remove">-     payload: Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;,</span><span class="diff-line diff-line--remove">- ) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {</span><span class="diff-line diff-line--remove">-     let Json(payload) = payload?;</span><span class="diff-line diff-line--remove">-     payload.validate()?;</span><span class="diff-line diff-line--remove">-     let user =</span><span class="diff-line diff-line--remove">-         sqlx::query_as::&lt;_, User&gt;("UPDATE users SET name = ? WHERE id = ? RETURNING id, name")</span><span class="diff-line diff-line--remove">-             .bind(&amp;payload.name)</span><span class="diff-line diff-line--remove">-             .bind(id)</span><span class="diff-line diff-line--remove">-             .fetch_optional(&amp;state.pool)</span><span class="diff-line diff-line--remove">-             .await?;</span><span class="diff-line diff-line--remove">-     user.map(Json).ok_or(AppError::NotFound("user not found"))</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">- pub async fn delete_user(</span><span class="diff-line diff-line--remove">-     State(state): State&lt;AppState&gt;,</span><span class="diff-line diff-line--remove">-     Path(id): Path&lt;i64&gt;,</span><span class="diff-line diff-line--remove">- ) -&gt; Result&lt;StatusCode, AppError&gt; {</span><span class="diff-line diff-line--remove">-     let result = sqlx::query("DELETE FROM users WHERE id = ?")</span><span class="diff-line diff-line--remove">-         .bind(id)</span><span class="diff-line diff-line--remove">-         .execute(&amp;state.pool)</span><span class="diff-line diff-line--remove">-         .await?;</span><span class="diff-line diff-line--remove">-     if result.rows_affected() == 0 {</span><span class="diff-line diff-line--remove">-         Err(AppError::NotFound("user not found"))</span><span class="diff-line diff-line--remove">-     } else {</span><span class="diff-line diff-line--remove">-         Ok(StatusCode::NO_CONTENT)</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--remove">- }</span></pre>
+</div>
+          <p><code>src/middleware.rs</code> から <code>require_api_key</code> を削除します。リクエストログの <code>log_request</code> は残します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/middleware.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">- use axum::{</span><span class="diff-line diff-line--remove">-     extract::{Request, State},</span><span class="diff-line diff-line--remove">-     http::StatusCode,</span><span class="diff-line diff-line--remove">-     middleware::Next,</span><span class="diff-line diff-line--remove">-     response::Response,</span><span class="diff-line diff-line--remove">- };</span><span class="diff-line diff-line--add">+ use axum::{extract::Request, middleware::Next, response::Response};</span><span class="diff-line">  use std::time::Instant;</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">- use crate::error::error_response;</span><span class="diff-line diff-line--remove">- use crate::state::AppState;</span><span class="diff-line"> </span><span class="diff-line">  pub async fn log_request(req: Request, next: Next) -&gt; Response {</span><span class="diff-line">      let method = req.method().clone();</span><span class="diff-line">  ...</span><span class="diff-line">      println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());</span><span class="diff-line">      response</span><span class="diff-line">  }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">- pub async fn require_api_key(State(state): State&lt;AppState&gt;, req: Request, next: Next) -&gt; Response {</span><span class="diff-line diff-line--remove">-     let is_valid = req</span><span class="diff-line diff-line--remove">-         .headers()</span><span class="diff-line diff-line--remove">-         .get("x-api-key")</span><span class="diff-line diff-line--remove">-         .and_then(|value| value.to_str().ok())</span><span class="diff-line diff-line--remove">-         == Some(state.config.api_key.as_str());</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">-     if !is_valid {</span><span class="diff-line diff-line--remove">-         return error_response(</span><span class="diff-line diff-line--remove">-             StatusCode::UNAUTHORIZED,</span><span class="diff-line diff-line--remove">-             "unauthorized",</span><span class="diff-line diff-line--remove">-             "invalid or missing x-api-key",</span><span class="diff-line diff-line--remove">-         );</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">-     next.run(req).await</span><span class="diff-line diff-line--remove">- }</span></pre>
+</div>
+          <p><code>src/config.rs</code> から <code>api_key</code> を削除します。起動時に <code>API_KEY</code> が無くてもエラーにならなくなります。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/config.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      pub host: String,</span><span class="diff-line">      pub port: u16,</span><span class="diff-line">      pub database_url: String,</span><span class="diff-line diff-line--remove">-     pub api_key: String,</span><span class="diff-line">      pub session_ttl_secs: i64,</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  ...</span><span class="diff-line">          };</span><span class="diff-line">          let database_url =</span><span class="diff-line">              env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://app.db".to_string());</span><span class="diff-line diff-line--remove">-         let api_key = env::var("API_KEY")</span><span class="diff-line diff-line--remove">-             .ok()</span><span class="diff-line diff-line--remove">-             .filter(|value| !value.is_empty())</span><span class="diff-line diff-line--remove">-             .ok_or(ConfigError::Missing("API_KEY"))?;</span><span class="diff-line">          // セッション（トークン）の有効期間。既定は 7 日</span><span class="diff-line">          let session_ttl_secs = match env::var("SESSION_TTL_SECS") {</span><span class="diff-line">              Ok(value) =&gt; value</span><span class="diff-line">  ...</span><span class="diff-line">              host,</span><span class="diff-line">              port,</span><span class="diff-line">              database_url,</span><span class="diff-line diff-line--remove">-             api_key,</span><span class="diff-line">              session_ttl_secs,</span><span class="diff-line">          })</span><span class="diff-line">      }</span><span class="diff-line">  ...</span><span class="diff-line">              .field("host", &amp;self.host)</span><span class="diff-line">              .field("port", &amp;self.port)</span><span class="diff-line">              .field("database_url", &amp;self.database_url)</span><span class="diff-line diff-line--remove">-             .field("api_key", &amp;"***")</span><span class="diff-line">              .field("session_ttl_secs", &amp;self.session_ttl_secs)</span><span class="diff-line">              .finish()</span><span class="diff-line">      }</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>.env.example</code> からも <code>API_KEY</code> の 2 行を消し、<code>.env</code> を作り直します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">.env.example</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  APP_HOST=127.0.0.1</span><span class="diff-line">  APP_PORT=8080</span><span class="diff-line">  DATABASE_URL=sqlite://app.db</span><span class="diff-line diff-line--remove">- # 開発用のダミー値。本番では十分に長いランダムな値を実環境変数で渡す</span><span class="diff-line diff-line--remove">- API_KEY=change-me-dev-only</span><span class="diff-line">  # ログインで発行するトークンの有効期間（秒）。省略すると 604800（7 日）</span><span class="diff-line">  SESSION_TTL_SECS=604800</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp .env.example .env</span></pre>
+</div>
+          <p>テストの共通部分を直します。<code>TEST_API_KEY</code> と <code>create_user</code> を削除し、<code>json_request</code> の第 3 引数を、API キーではなく Bearer トークンとして送るように意味を変えます。これまでの呼び出しは全て <code>None</code> なので、呼び出し側は直さなくて構いません。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">tests/common/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  use std::sync::Arc;</span><span class="diff-line">  use tower::ServiceExt;</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- pub const TEST_API_KEY: &amp;str = "test-api-key";</span><span class="diff-line">  pub const TEST_SESSION_TTL_SECS: i64 = 3600;</span><span class="diff-line"> </span><span class="diff-line">  pub fn test_app(pool: SqlitePool) -&gt; Router {</span><span class="diff-line">  ...</span><span class="diff-line">          host: "127.0.0.1".to_string(),</span><span class="diff-line">          port: 0,</span><span class="diff-line">          database_url: "unused".to_string(),</span><span class="diff-line diff-line--remove">-         api_key: TEST_API_KEY.to_string(),</span><span class="diff-line">          session_ttl_secs: TEST_SESSION_TTL_SECS,</span><span class="diff-line">      };</span><span class="diff-line">      build_app(AppState {</span><span class="diff-line">  ...</span><span class="diff-line">      Request::get(uri).body(Body::empty()).unwrap()</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- pub fn json_request(method: &amp;str, uri: &amp;str, api_key: Option&lt;&amp;str&gt;, body: &amp;str) -&gt; Request&lt;Body&gt; {</span><span class="diff-line diff-line--add">+ // token があれば Authorization: Bearer を付ける</span><span class="diff-line diff-line--add">+ pub fn json_request(method: &amp;str, uri: &amp;str, token: Option&lt;&amp;str&gt;, body: &amp;str) -&gt; Request&lt;Body&gt; {</span><span class="diff-line">      let mut builder = Request::builder()</span><span class="diff-line">          .method(method)</span><span class="diff-line">          .uri(uri)</span><span class="diff-line">          .header("content-type", "application/json");</span><span class="diff-line diff-line--remove">-     if let Some(key) = api_key {</span><span class="diff-line diff-line--remove">-         builder = builder.header("x-api-key", key);</span><span class="diff-line diff-line--add">+     if let Some(token) = token {</span><span class="diff-line diff-line--add">+         builder = builder.header("authorization", format!("Bearer {token}"));</span><span class="diff-line">      }</span><span class="diff-line">      builder.body(Body::from(body.to_string())).unwrap()</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">- // 記事のテスト用に、API 経由で user を 1 人作って id を返す</span><span class="diff-line diff-line--remove">- pub async fn create_user(app: &amp;Router, name: &amp;str) -&gt; i64 {</span><span class="diff-line diff-line--remove">-     let (status, user) = send(</span><span class="diff-line diff-line--remove">-         app.clone(),</span><span class="diff-line diff-line--remove">-         json_request(</span><span class="diff-line diff-line--remove">-             "POST",</span><span class="diff-line diff-line--remove">-             "/users",</span><span class="diff-line diff-line--remove">-             Some(TEST_API_KEY),</span><span class="diff-line diff-line--remove">-             &amp;serde_json::json!({ "name": name }).to_string(),</span><span class="diff-line diff-line--remove">-         ),</span><span class="diff-line diff-line--remove">-     )</span><span class="diff-line diff-line--remove">-     .await;</span><span class="diff-line diff-line--remove">-     assert_eq!(status, StatusCode::CREATED);</span><span class="diff-line diff-line--remove">-     user["id"].as_i64().unwrap()</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  // 記事を API 経由で 1 件作って、応答の JSON を返す（著者は token の持ち主）</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>tests/users.rs</code> は、ファイル全体を次の内容に置き換えます。<code>POST /users</code> を使っていた 06 からのテストを、次の 3 つを確かめるテストに書き換えます。</p>
+          <ul>
+            <li>登録した利用者が一覧に出る（メールアドレスは含まない）。</li>
+            <li>書き込み系のルートが無くなった（405）。</li>
+            <li>古い <code>x-api-key</code> ヘッダーでは、もう投稿できない（401）。</li>
+          </ul>
+          <p>ファイルの全文です。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tests/users.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">mod common;
+
+use axum::http::{Request, StatusCode};
+use common::{get, json_request, register_user, send, test_app};
+use sqlx::SqlitePool;
+use tower::ServiceExt;
+
+#[sqlx::test]
+async fn registered_user_is_listed_and_fetchable_without_email(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+
+    let (status, list) = send(app.clone(), get("/users")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        list,
+        serde_json::json!([{ "id": alice.id, "name": "alice" }])
+    );
+
+    let (status, fetched) = send(app, get(&amp;format!("/users/{}", alice.id))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        fetched,
+        serde_json::json!({ "id": alice.id, "name": "alice" })
+    );
+}
+
+#[sqlx::test]
+async fn list_starts_empty(pool: SqlitePool) {
+    let (status, body) = send(test_app(pool), get("/users")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!([]));
+}
+
+#[sqlx::test]
+async fn get_unknown_user_is_not_found(pool: SqlitePool) {
+    let (status, body) = send(test_app(pool), get("/users/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[sqlx::test]
+async fn user_write_routes_are_gone(pool: SqlitePool) {
+    let app = test_app(pool);
+    let alice = register_user(&amp;app, "alice").await;
+
+    // 登録は /auth/register に一本化した。/users には読み取りのルートしか無いので 405
+    let requests = [
+        json_request("POST", "/users", Some(&amp;alice.token), r#"{"name":"x"}"#),
+        json_request("PUT", "/users/1", Some(&amp;alice.token), r#"{"name":"x"}"#),
+        json_request("DELETE", "/users/1", Some(&amp;alice.token), ""),
+    ];
+    for request in requests {
+        let label = format!("{} {}", request.method(), request.uri());
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED, "{label}");
+    }
+
+    // alice はそのまま残っている
+    let (_, list) = send(app, get("/users")).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+}
+
+#[sqlx::test]
+async fn the_old_api_key_header_no_longer_authenticates(pool: SqlitePool) {
+    let app = test_app(pool);
+    let request = Request::post("/posts")
+        .header("content-type", "application/json")
+        .header("x-api-key", "change-me-dev-only")
+        .body(axum::body::Body::from(r#"{"title":"t","body":"b"}"#))
+        .unwrap();
+    let (status, body) = send(app, request).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], "unauthorized");
+}</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.64s</span><span class="terminal__line">…</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-0fb0d3f152375bd6)</span><span class="terminal__line"></span><span class="terminal__line">running 5 tests</span><span class="terminal__line">test the_old_api_key_header_no_longer_authenticates ... ok</span><span class="terminal__line">test list_starts_empty ... ok</span><span class="terminal__line">test get_unknown_user_is_not_found ... ok</span><span class="terminal__line">test user_write_routes_are_gone ... ok</span><span class="terminal__line">test registered_user_is_listed_and_fetchable_without_email ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s</span><span class="terminal__line">…</span></pre>
+</div>
+          <p><code>tests/users.rs</code> は 5 件になり、全体では 49 件（lib 5・auth 16・health 1・posts 22・users 5）です。</p>
+          <p>API キーの痕跡が残っていないかを <code>grep</code> で確かめます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rn -i "api_key\|x-api-key" src tests .env.example; echo "grep rc=$?"</span><span class="terminal__line">tests/users.rs:65:async fn the_old_api_key_header_no_longer_authenticates(pool: SqlitePool) {</span><span class="terminal__line">tests/users.rs:69:        .header("x-api-key", "change-me-dev-only")</span><span class="terminal__line">grep rc=0</span></pre>
+</div>
+          <p>残っているのは、「古いヘッダーはもう効かない」ことを確かめる <code>tests/users.rs</code> のテストだけです。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>49 件のテストが成功し、<code>grep</code> の結果が <code>tests/users.rs</code> の 2 行だけになれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">空の DB から curl で一連の流れを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>サーバーを起動して、<code>curl</code> で登録から記事の操作、ログアウトまでを通して確かめます。このレッスンでは <code>app.db</code> をコピーしていないので、起動時に空の DB が作られ、3 つのマイグレーションが適用されます。</p>
+          <p>1 つ目のターミナルでサーバーを起動します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.06s</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">config: Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", session_ttl_secs: 604800 }</span><span class="terminal__line">listening on 127.0.0.1:8080</span></pre>
+</div>
+          <p>起動ログの <code>Config</code> から <code>api_key</code> が消えました。</p>
+          <p>2 つ目のターミナルで、alice と bob を登録します。<code>date</code> ヘッダーは実行した時刻になり、<code>token</code> と <code>expires_at</code> の値は実行ごとに変わります。以下の出力は、執筆時に使い捨ての DB で実行したときのものです。</p>
+          <p>応答の <code>token</code> を、その場でシェル変数 <code>ALICE</code> と <code>BOB</code> に入れながら登録します。<code>tee</code> で応答を画面にも出し、最後の行（本文）から <code>token</code> を取り出します。最後の <code>echo</code> は、本文の末尾に改行が無いのを補うためです。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ALICE=$(curl -si -X POST localhost:8080/auth/register -H "Content-Type: application/json" -d '{"name":"alice","email":"alice@example.com","password":"alice-password-1234"}' | tee /dev/stderr | tail -n 1 | sed -E 's/.*"token":"([^"]*)".*/\1/'); echo</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 110</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:31 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"user":{"id":1,"name":"alice"},"token":"ye2mx1pzD24YrCSEAHAu43NeeGVnT6z04eg2h_jDV-k","expires_at":1791705331}</span><span class="terminal__line"><span class="terminal__prompt">$</span> BOB=$(curl -si -X POST localhost:8080/auth/register -H "Content-Type: application/json" -d '{"name":"bob","email":"bob@example.com","password":"bob-password-123456"}' | tee /dev/stderr | tail -n 1 | sed -E 's/.*"token":"([^"]*)".*/\1/'); echo</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 108</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:32 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"user":{"id":2,"name":"bob"},"token":"-5G7jfdHf_0hE2eBMojBbpskTexlkDo165kQplp1Bvk","expires_at":1791705332}</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo "${#ALICE} ${#BOB}"</span><span class="terminal__line">43 43</span></pre>
+</div>
+          <p>2 つとも 43（トークンの長さ）と表示されれば、変数に入っています。</p>
+          <p>トークンは base64url の文字列なので、bob のトークンのように <code>-</code> で始まることがあります。変数に入れて使う分には問題ありませんが、ほかのコマンドの引数に渡すときは注意が必要です（「<a href="#troubleshooting">つまずきポイント</a>」）。</p>
+          <h4>認証が要るルート</h4>
+          <p>alice のトークンで <code>GET /auth/me</code> を呼びます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/auth/me -H "Authorization: Bearer $ALICE"</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 51</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice","email":"alice@example.com"}</span></pre>
+</div>
+          <h4>記事の作成: 著者はトークンの持ち主</h4>
+          <p>alice のトークンで、本文に bob の id（2）を <code>author_id</code> として入れて投稿します。続けて、bob が 1 件、alice がもう 1 件を投稿します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H "Authorization: Bearer $ALICE" -H "Content-Type: application/json" -d '{"author_id":2,"title":"Alice first","body":"written by alice"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 157</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"author_id":1,"title":"Alice first","body":"written by alice","like_count":0,"created_at":"2026-10-04T07:55:48Z","updated_at":"2026-10-04T07:55:48Z"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H "Authorization: Bearer $BOB" -H "Content-Type: application/json" -d '{"title":"Bob first","body":"written by bob"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 153</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":2,"author_id":2,"title":"Bob first","body":"written by bob","like_count":0,"created_at":"2026-10-04T07:55:48Z","updated_at":"2026-10-04T07:55:48Z"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H "Authorization: Bearer $ALICE" -H "Content-Type: application/json" -d '{"title":"Alice second","body":"second by alice"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 157</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":3,"author_id":1,"title":"Alice second","body":"second by alice","like_count":0,"created_at":"2026-10-04T07:55:48Z","updated_at":"2026-10-04T07:55:48Z"}</span></pre>
+</div>
+          <ul>
+            <li>1 件目は、本文に <code>"author_id":2</code> を入れましたが、作られた記事の <code>author_id</code> は alice の 1 です。400 や 422 にはならず、本文の <code>author_id</code> は黙って無視されました。09 でできた「他人の名義での投稿」は、もうできません。</li>
+          </ul>
+          <h4>自分の記事の更新と、他人の記事への操作</h4>
+          <p>alice が自分の記事（id 1）を更新します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X PATCH localhost:8080/posts/1 -H "Authorization: Bearer $ALICE" -H "Content-Type: application/json" -d '{"title":"Alice first (edited)"}'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 166</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"author_id":1,"title":"Alice first (edited)","body":"written by alice","like_count":0,"created_at":"2026-10-04T07:55:48Z","updated_at":"2026-10-04T07:55:48Z"}</span></pre>
+</div>
+          <p><code>updated_at</code> は秒単位なので、作成と同じ秒に更新すると、<code>created_at</code> と同じ値に見えます。更新に失敗しているわけではありません。</p>
+          <p>次に、alice が bob の記事（id 2）を更新・削除しようとします。比べるために、存在しない記事（id 999）への更新も送ります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X PATCH localhost:8080/posts/2 -H "Authorization: Bearer $ALICE" -H "Content-Type: application/json" -d '{"title":"hacked"}'</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 57</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"post not found"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X DELETE localhost:8080/posts/2 -H "Authorization: Bearer $ALICE"</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 57</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"post not found"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X PATCH localhost:8080/posts/999 -H "Authorization: Bearer $ALICE" -H "Content-Type: application/json" -d '{"title":"hacked"}'</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 57</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"post not found"}}</span></pre>
+</div>
+          <p>3 つとも、ステータスは 404、本文は <code>{"error":{"code":"not_found","message":"post not found"}}</code> で同じです。応答からは「他人の記事」と「存在しない記事」を区別できません。bob の記事が変わっていないことと、bob が alice の記事（id 3）を削除できないことを確かめます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/posts/2</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 153</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:48 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":2,"author_id":2,"title":"Bob first","body":"written by bob","like_count":0,"created_at":"2026-10-04T07:55:48Z","updated_at":"2026-10-04T07:55:48Z"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X DELETE localhost:8080/posts/3 -H "Authorization: Bearer $BOB"</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 57</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:49 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"post not found"}}</span></pre>
+</div>
+          <h4>自分の記事の削除</h4>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X DELETE localhost:8080/posts/1 -H "Authorization: Bearer $ALICE"</span><span class="terminal__line">HTTP/1.1 204 No Content</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:49 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/posts/1</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 57</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:49 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"post not found"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/posts</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 342</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:55:49 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"items":[{"id":3,"author_id":1,"title":"Alice second","body":"second by alice","like_count":0,"created_at":"2026-10-04T07:55:48Z","updated_at":"2026-10-04T07:55:48Z"},{"id":2,"author_id":2,"title":"Bob first","body":"written by bob","like_count":0,"created_at":"2026-10-04T07:55:48Z","updated_at":"2026-10-04T07:55:48Z"}],"next_cursor":null}</span></pre>
+</div>
+          <p>自分の記事は 204 で削除でき、一覧には id 3（alice）と id 2（bob）だけが残りました。</p>
+          <h4>401 になるケース</h4>
+          <p>トークン無し、存在しないトークン、<code>Basic</code> スキーム、トークン無しで本文が壊れた JSON の 4 つを送ります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H "Content-Type: application/json" -d '{"title":"t","body":"b"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">www-authenticate: Bearer</span><span class="terminal__line">content-length: 77</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"missing or invalid bearer token"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H "Authorization: Bearer not-a-real-token" -H "Content-Type: application/json" -d '{"title":"t","body":"b"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">www-authenticate: Bearer</span><span class="terminal__line">content-length: 77</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"missing or invalid bearer token"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/auth/me -H "Authorization: Basic $ALICE"</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">www-authenticate: Bearer</span><span class="terminal__line">content-length: 77</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"missing or invalid bearer token"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H "Content-Type: application/json" -d '{"title":"'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">www-authenticate: Bearer</span><span class="terminal__line">content-length: 77</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"missing or invalid bearer token"}}</span></pre>
+</div>
+          <p>4 つとも、<code>www-authenticate: Bearer</code> 付きの同じ 401 です。最後の 1 つは本文が壊れた JSON ですが、400 ではなく 401 になりました。<code>AuthUser</code> が <code>Json</code> より先に評価されるためです。</p>
+          <h4>期限切れのトークン</h4>
+          <p>期限を過ぎたトークンが 401 になることと、ログインし直すと期限切れのセッションが掃除されることは、どちらもステップ 3 のテストで確かめ済みです。DB を書き換えて手元で試したい場合は、次の折りたたみを開いてください。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意: DB を書き換えて期限切れを試す</summary>
+            <div class="disclosure__body">
+          <p>alice でもう一度ログインして 2 つ目のトークンを作り、登録のときと同じ方法で、変数 <code>ALICE2</code> に入れます。<code>sessions</code> の中身も見ておきます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ALICE2=$(curl -si -X POST localhost:8080/auth/login -H "Content-Type: application/json" -d '{"email":"alice@example.com","password":"alice-password-1234"}' | tee /dev/stderr | tail -n 1 | sed -E 's/.*"token":"([^"]*)".*/\1/'); echo</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 110</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"user":{"id":1,"name":"alice"},"token":"zEp7HjY0ko6n531Q9cGR-d7BLtWfCBF2355W7uye2tI","expires_at":1791705365}</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 -header -column app.db "SELECT hex(token_hash) AS token_hash_hex, user_id, expires_at - unixepoch() AS secs_left FROM sessions"</span><span class="terminal__line">token_hash_hex                                                    user_id  secs_left</span><span class="terminal__line">----------------------------------------------------------------  -------  ---------</span><span class="terminal__line">D5CC21824DE744B8436D7F3B42E7A533973A0CA9F8F845F884EB0C63799B72BC  1        604766   </span><span class="terminal__line">2FA2FFE7401EE0E419BAF0189B5A682334170CB58F8B9BDFC020BD14A84117FB  2        604767   </span><span class="terminal__line">2A48462A74B4F14E1277B75A53DA2962ED9FC2F0D74B52FEC52A789E10DF6A2E  1        604800   </span></pre>
+</div>
+          <p><code>sessions</code> には、alice の 2 行と bob の 1 行があります。<code>token_hash</code> は SHA-256 の 32 バイト（<code>hex()</code> で 16 進数 64 文字として表示）で、応答のトークンそのものは保存されていません。<code>secs_left</code> は期限までの残り秒数です。</p>
+          <p><code>ALICE2</code> の SHA-256 を <code>shasum</code> で求め、その行の <code>expires_at</code> を 1 秒前に書き換えます。サーバーは DB の <code>unixepoch()</code> と比べるので、これで期限切れになります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> HASH=$(printf %s "$ALICE2" | shasum -a 256 | cut -d" " -f1)</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo $HASH</span><span class="terminal__line">2a48462a74b4f14e1277b75a53da2962ed9fc2f0d74b52fec52a789e10df6a2e</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 app.db "UPDATE sessions SET expires_at = unixepoch() - 1 WHERE token_hash = x'$HASH'"; echo "update rc=$?"</span><span class="terminal__line">update rc=0</span></pre>
+</div>
+          <p>表示されたハッシュは、上の表の 3 行目（<code>2A48…</code>）と同じ値です（<code>hex()</code> は大文字、<code>shasum</code> は小文字で表示します）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/auth/me -H "Authorization: Bearer $ALICE2"</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">www-authenticate: Bearer</span><span class="terminal__line">content-length: 77</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"missing or invalid bearer token"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/auth/me -H "Authorization: Bearer $ALICE"</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 51</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice","email":"alice@example.com"}</span></pre>
+</div>
+          <p>期限切れの <code>ALICE2</code> は 401 で、最初のトークン（<code>ALICE</code>）はそのまま使えます。</p>
+            </div>
+          </details>
+          <h4>ログアウト</h4>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/auth/logout -H "Authorization: Bearer $ALICE"</span><span class="terminal__line">HTTP/1.1 204 No Content</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/auth/me -H "Authorization: Bearer $ALICE"</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">www-authenticate: Bearer</span><span class="terminal__line">content-length: 77</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"missing or invalid bearer token"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 -header -column app.db "SELECT hex(token_hash) AS token_hash_hex, user_id, expires_at - unixepoch() AS secs_left FROM sessions"</span><span class="terminal__line">token_hash_hex                                                    user_id  secs_left</span><span class="terminal__line">----------------------------------------------------------------  -------  ---------</span><span class="terminal__line">2FA2FFE7401EE0E419BAF0189B5A682334170CB58F8B9BDFC020BD14A84117FB  2        604767   </span><span class="terminal__line">2A48462A74B4F14E1277B75A53DA2962ED9FC2F0D74B52FEC52A789E10DF6A2E  1        -1       </span></pre>
+</div>
+          <ul>
+            <li>ログアウトは 204 で、その後は同じトークンが 401 になりました。</li>
+            <li><code>sessions</code> から消えたのは <code>ALICE</code> の行（<code>D5CC…</code>）だけです。bob の行と、期限切れの <code>ALICE2</code> の行（<code>secs_left</code> が -1）は残っています（上の折りたたみを試していない場合、<code>ALICE2</code> の行はありません）。</li>
+          </ul>
+          <p>この後の手順のために、もう一度ログインして、新しいトークンを変数 <code>ALICE3</code> に入れます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ALICE3=$(curl -si -X POST localhost:8080/auth/login -H "Content-Type: application/json" -d '{"email":"alice@example.com","password":"alice-password-1234"}' | tee /dev/stderr | tail -n 1 | sed -E 's/.*"token":"([^"]*)".*/\1/'); echo</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 110</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"user":{"id":1,"name":"alice"},"token":"2-nWetZQQXozFKrGKYwYCiLBcrz_EV4R5QW01v70MVk","expires_at":1791705365}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/auth/me -H "Authorization: Bearer $ALICE3"</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 51</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:05 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice","email":"alice@example.com"}</span></pre>
+</div>
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意: 期限切れの行が掃除されたことを確かめる（上の折りたたみを試した場合）</summary>
+            <div class="disclosure__body">
+          <p>ログインし直すと、期限切れの行が掃除されます。<code>sessions</code> の中身を見ます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sqlite3 -header -column app.db "SELECT hex(token_hash) AS token_hash_hex, user_id, expires_at - unixepoch() AS secs_left FROM sessions"</span><span class="terminal__line">token_hash_hex                                                    user_id  secs_left</span><span class="terminal__line">----------------------------------------------------------------  -------  ---------</span><span class="terminal__line">2FA2FFE7401EE0E419BAF0189B5A682334170CB58F8B9BDFC020BD14A84117FB  2        604767   </span><span class="terminal__line">965992AB77BB72DBE2F9E7736A718503076D45CF6AC584D9684EF7453704EA74  1        604800   </span></pre>
+</div>
+          <p>期限切れだった <code>2A48…</code> の行が消え、新しいセッションの行（<code>9659…</code>）が増えました。</p>
+            </div>
+          </details>
+          <h4>認証が要らないルートと、削除したルート</h4>
+          <p>いいねと読み取りは、トークン無しで呼べます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts/2/like</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:15 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"id":2,"like_count":1}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si localhost:8080/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 47</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:15 GMT</span><span class="terminal__line"></span><span class="terminal__line">[{"id":1,"name":"alice"},{"id":2,"name":"bob"}]</span></pre>
+</div>
+          <p>削除した <code>POST /users</code>・<code>PUT /users/{id}</code> を、古い API キーと、トークン付きで呼びます。最後に、古い API キーで記事を投稿します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/users -H "x-api-key: change-me-dev-only" -H "Content-Type: application/json" -d '{"name":"mallory"}'</span><span class="terminal__line">HTTP/1.1 405 Method Not Allowed</span><span class="terminal__line">allow: GET,HEAD</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:15 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X PUT localhost:8080/users/1 -H "Authorization: Bearer $ALICE3" -H "Content-Type: application/json" -d '{"name":"x"}'</span><span class="terminal__line">HTTP/1.1 405 Method Not Allowed</span><span class="terminal__line">allow: GET,HEAD</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:15 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -si -X POST localhost:8080/posts -H "x-api-key: change-me-dev-only" -H "Content-Type: application/json" -d '{"title":"t","body":"b"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">www-authenticate: Bearer</span><span class="terminal__line">content-length: 77</span><span class="terminal__line">date: Sun, 04 Oct 2026 07:56:15 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"missing or invalid bearer token"}}</span></pre>
+</div>
+          <ul>
+            <li><code>/users</code> には <code>GET</code> のルートしか無いので、<code>POST</code>・<code>PUT</code> は 405（<code>allow: GET,HEAD</code>）になります。本文は空で、エラーの JSON 形式（<code>{"error": {...}}</code>）になっていません。これは後の項目で扱います（「<a href="#remaining">まだ残っていること</a>」）。</li>
+            <li>古い <code>x-api-key</code> ヘッダーでの投稿は、トークン無しと同じ 401 です。</li>
+          </ul>
+          <h4>ログにトークンが出ていないか</h4>
+          <p>1 つ目のターミナル（サーバー）には、リクエストごとに 1 行が出ています。全体は次のとおりです。時間は実行ごとに変わります（折りたたみの手順を試していない場合は、その分の行がありません）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">サーバーのログ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">config: Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", session_ttl_secs: 604800 }</span><span class="terminal__line">listening on 127.0.0.1:8080</span><span class="terminal__line">POST /auth/register -&gt; 201 Created (13.957959ms)</span><span class="terminal__line">POST /auth/register -&gt; 201 Created (13.729083ms)</span><span class="terminal__line">GET /auth/me -&gt; 200 OK (734.459µs)</span><span class="terminal__line">POST /posts -&gt; 201 Created (720.959µs)</span><span class="terminal__line">POST /posts -&gt; 201 Created (507.208µs)</span><span class="terminal__line">POST /posts -&gt; 201 Created (519.292µs)</span><span class="terminal__line">PATCH /posts/1 -&gt; 200 OK (568.417µs)</span><span class="terminal__line">PATCH /posts/2 -&gt; 404 Not Found (681.583µs)</span><span class="terminal__line">DELETE /posts/2 -&gt; 404 Not Found (450.875µs)</span><span class="terminal__line">PATCH /posts/999 -&gt; 404 Not Found (232.416µs)</span><span class="terminal__line">GET /posts/2 -&gt; 200 OK (239.542µs)</span><span class="terminal__line">DELETE /posts/3 -&gt; 404 Not Found (493.208µs)</span><span class="terminal__line">DELETE /posts/1 -&gt; 204 No Content (627.75µs)</span><span class="terminal__line">GET /posts/1 -&gt; 404 Not Found (215.625µs)</span><span class="terminal__line">GET /posts -&gt; 200 OK (337.459µs)</span><span class="terminal__line">POST /posts -&gt; 401 Unauthorized (38µs)</span><span class="terminal__line">POST /posts -&gt; 401 Unauthorized (221µs)</span><span class="terminal__line">GET /auth/me -&gt; 401 Unauthorized (23.125µs)</span><span class="terminal__line">POST /posts -&gt; 401 Unauthorized (33.708µs)</span><span class="terminal__line">POST /auth/login -&gt; 200 OK (14.399167ms)</span><span class="terminal__line">GET /auth/me -&gt; 401 Unauthorized (214.583µs)</span><span class="terminal__line">GET /auth/me -&gt; 200 OK (580.625µs)</span><span class="terminal__line">POST /auth/logout -&gt; 204 No Content (546.833µs)</span><span class="terminal__line">GET /auth/me -&gt; 401 Unauthorized (164.833µs)</span><span class="terminal__line">POST /auth/login -&gt; 200 OK (12.826334ms)</span><span class="terminal__line">GET /auth/me -&gt; 200 OK (233.792µs)</span><span class="terminal__line">POST /posts/2/like -&gt; 200 OK (457.209µs)</span><span class="terminal__line">GET /users -&gt; 200 OK (383.458µs)</span><span class="terminal__line">POST /users -&gt; 405 Method Not Allowed (11.834µs)</span><span class="terminal__line">PUT /users/1 -&gt; 405 Method Not Allowed (11.333µs)</span><span class="terminal__line">POST /posts -&gt; 401 Unauthorized (35.458µs)</span></pre>
+</div>
+          <p>ログに出るのは、メソッド・URI・ステータス・所要時間だけです（07 から使っている <code>log_request</code>）。<code>Authorization</code> ヘッダーの値は出ません。執筆時には、このログをファイルに保存し、4 つのトークン（<code>ALICE</code>・<code>BOB</code>・<code>ALICE2</code>・<code>ALICE3</code>）のどれも含まれていないことを <code>grep</code> で確かめました。</p>
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">本番では HTTPS が前提</p>
+              <p>ここでは、ローカルのサーバーに HTTP で送って試しています。<code>Authorization</code> ヘッダーのトークンは、そのまま送られます。トークンを知られると、期限が切れるかログアウトするまで、その利用者として記事を書き換えられます。本番では、HTTPS で通信を暗号化することが前提です。</p>
+            </div>
+          </div>
+          <p>確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>次の 4 つを確かめられれば OK です。</p>
+            <ul>
+              <li>本文の <code>author_id</code> が無視される。</li>
+              <li>他人の記事への更新・削除が、存在しない記事と同じ 404 になる。</li>
+              <li>期限切れ・ログアウト後のトークンが 401 になる。</li>
+              <li>削除した <code>/users</code> の書き込み系が 405 になる。</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">テストを全件実行して仕上げる</h3>
+        </div>
+        <div class="step__body">
+          <p>最後に、フォーマット・clippy・テストを確かめます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check &amp;&amp; echo fmt-ok</span><span class="terminal__line">fmt-ok</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy --all-targets -- -D warnings</span><span class="terminal__line">   Compiling stable_deref_trait v1.2.1</span><span class="terminal__line">    …（依存クレートの Checking / Compiling の行が続く。初回は約 120 行）</span><span class="terminal__line">    Checking authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.37s</span></pre>
+</div>
+          <p><code>cargo clippy</code> は警告なしで <code>Finished</code> の行まで進みます。<code>cargo test</code> の集計の行だけを抜き出すと、次のとおりです。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test 2&gt;&amp;1 | grep -E "test result|FAILED"</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.10s</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span><span class="terminal__line">test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+          <p>合計 49 件（lib 5・main.rs 0・auth 16・health 1・posts 22・users 5・doc-tests 0）が成功しました。ほかに、計測用の <code>#[ignore]</code> のテストが 1 件あります。<code>FAILED</code> の行はありません。</p>
+          <p>11 の完成時点のエンドポイントと、認証の要否は次のとおりです。</p>
+          <table>
+            <thead>
+              <tr><th>メソッド</th><th>パス</th><th>認証</th><th>備考</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>GET</td><td><code>/health</code></td><td>不要</td><td></td></tr>
+              <tr><td>POST</td><td><code>/auth/register</code></td><td>不要</td><td>10 から</td></tr>
+              <tr><td>POST</td><td><code>/auth/login</code></td><td>不要</td><td>10 から。<strong>11 で</strong>期限切れのセッションの掃除を追加</td></tr>
+              <tr><td>GET</td><td><code>/auth/me</code></td><td><strong>必要</strong></td><td><strong>11 で追加</strong>。<code>{id, name, email}</code></td></tr>
+              <tr><td>POST</td><td><code>/auth/logout</code></td><td><strong>必要</strong></td><td><strong>11 で追加</strong>。204。そのトークンのセッションだけを削除</td></tr>
+              <tr><td>GET</td><td><code>/users</code>、<code>/users/{id}</code></td><td>不要</td><td><code>{id, name}</code> のみ</td></tr>
+              <tr><td>GET</td><td><code>/posts</code>、<code>/posts/{id}</code></td><td>不要</td><td></td></tr>
+              <tr><td>POST</td><td><code>/posts</code></td><td><strong>必要</strong></td><td>著者はトークンの持ち主。本文の <code>author_id</code> は無視</td></tr>
+              <tr><td>PATCH / DELETE</td><td><code>/posts/{id}</code></td><td><strong>必要（所有者のみ）</strong></td><td>他人の記事・存在しない記事は 404</td></tr>
+              <tr><td>POST</td><td><code>/posts/{id}/like</code></td><td>不要</td><td></td></tr>
+            </tbody>
+          </table>
+          <p>削除したエンドポイントは次のとおりです。呼ぶと 405（本文は空）になります。</p>
+          <table>
+            <thead>
+              <tr><th>メソッド</th><th>パス</th><th>代わり</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>POST</td><td><code>/users</code></td><td><code>POST /auth/register</code></td></tr>
+              <tr><td>PUT / DELETE</td><td><code>/users/{id}</code></td><td>無し（利用者の更新・削除の API は持たない）</td></tr>
+            </tbody>
+          </table>
+          <p>最終的なディレクトリ構成は次のとおりです（<code>target/</code> は省略）。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">11-authorization/
+  .env                 # ローカル専用（コミットしない）。API_KEY を削除
+  .env.example         # API_KEY を削除
+  .gitignore
+  Cargo.toml           # name = "authorization"（依存クレートは 10 と同じ）
+  Cargo.lock
+  app.db               # 開発用の DB（WAL の app.db-shm・app.db-wal も。コミットしない）
+  migrations/
+    0001_create_users.sql
+    0002_create_posts.sql
+    0003_create_credentials_and_sessions.sql
+  src/
+    main.rs
+    lib.rs               # auth_user を追加
+    auth_user.rs         # AuthUser エクストラクタ（新規）
+    config.rs            # api_key を削除
+    state.rs
+    error.rs
+    middleware.rs        # require_api_key を削除（log_request だけ）
+    password.rs
+    token.rs
+    routes/
+      mod.rs             # /auth/me・/auth/logout を追加、/users の書き込み系と API キーを削除
+      auth.rs            # me・logout とログイン時の掃除を追加
+      health.rs
+      posts.rs           # 作成・更新・削除に AuthUser、所有者の検査
+      users.rs           # 読み取りだけ
+  tests/
+    common/
+      mod.rs             # authed_json・register_user を追加、json_request は Bearer に
+    auth.rs              # 16 件
+    health.rs            # 1 件
+    posts.rs             # 22 件
+    users.rs             # 5 件</code></pre>
+</div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo fmt --check</code> が <code>fmt-ok</code> を表示し、clippy が警告なしで終わり、49 件のテストが成功すれば完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">認証と認可の違いを説明でき、このレッスンでそれぞれをどこで検査しているか（<code>AuthUser</code> と記事の SQL）を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>FromRequestParts</code> と <code>FromRequest</code> の違いと、<code>Json</code> を引数の最後に置く理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">トークンを SHA-256 で引き、期限を DB の時計で判定していることを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">ログアウトで、そのトークンのセッションだけが消え、別のトークンは使えることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">本文に <code>author_id</code> を入れても、著者がトークンの持ち主になることを <code>curl</code> で確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">他人の記事への更新・削除が、存在しない記事と同じ 404 になることを確かめ、403 にしない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">エクストラクタ方式では、<code>AuthUser</code> を書き忘れたハンドラが守られないことを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>cargo test</code> の 49 件が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">Bearer トークンを付けたのに、記事の書き込みが 401 になる</p>
+          <p>記事のルートで、API キーのミドルウェア（<code>route_layer(... require_api_key)</code>）が残っていないか確かめてください。ミドルウェアはエクストラクタより先に走るので、<code>x-api-key</code> が無いリクエストは <code>AuthUser</code> まで届かず、401 で返されます。執筆時に試した結果です。ハンドラとテストだけを書き換え、<code>src/routes/mod.rs</code> の <code>protected_posts</code> を残したまま実行しました。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test posts 2&gt;&amp;1 | grep -E "test result|panicked|left|right" | head -8</span><span class="terminal__line">thread 'delete_removes_the_post' (10369420) panicked at tests/common/mod.rs:83:5:</span><span class="terminal__line">assertion `left == right` failed</span><span class="terminal__line">  left: 401</span><span class="terminal__line"> right: 201</span><span class="terminal__line">thread 'concurrent_likes_are_not_lost' (10369416) panicked at tests/common/mod.rs:83:5:</span><span class="terminal__line">assertion `left == right` failed</span><span class="terminal__line">  left: 401</span><span class="terminal__line"> right: 201</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test posts 2&gt;&amp;1 | grep "test result"</span><span class="terminal__line">test result: FAILED. 6 passed; 16 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s</span></pre>
+</div>
+          <p>22 件中 16 件が失敗します（どのテストが先に表示されるかは実行ごとに変わります）。多くは、テストの共通部分（<code>tests/common/mod.rs</code> の <code>create_post</code>）が、201 を期待したところで 401 を受け取っています。ステップ 4 の <code>src/routes/mod.rs</code> の変更（<code>protected_posts</code> の削除）を確かめてください。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>the trait bound `fn(...) {create_post}: Handler&lt;_, _&gt;` is not satisfied</code></p>
+          <p><code>create_post</code> の引数を <code>State</code>、<code>Json</code>（<code>payload</code>）、<code>AuthUser</code> の順に入れ替えたときのエラーです。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">error[E0277]: the trait bound `fn(State&lt;AppState&gt;, _, _) -&gt; _ {create_post}: Handler&lt;_, _&gt;` is not satisfied</span><span class="terminal__line">   --&gt; src/routes/mod.rs:27:54</span><span class="terminal__line">    |</span><span class="terminal__line"> 27 |         .route("/posts", get(posts::list_posts).post(posts::create_post))</span><span class="terminal__line">    |                                                 ---- ^^^^^^^^^^^^^^^^^^ the trait `Handler&lt;_, AppState&gt;` is not implemented for fn item `fn(State&lt;AppState&gt;, Result&lt;Json&lt;CreatePost&gt;, _&gt;, _) -&gt; _ {create_post}`</span><span class="terminal__line">    |                                                 |</span><span class="terminal__line">    |                                                 required by a bound introduced by this call</span><span class="terminal__line">    |</span><span class="terminal__line">    = note: Consider using `#[axum::debug_handler]` to improve the error message</span><span class="terminal__line">note: required by a bound in `MethodRouter::&lt;S&gt;::post`</span><span class="terminal__line">   --&gt; ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/routing/method_routing.rs:326:16</span><span class="terminal__line">    |</span><span class="terminal__line">326 |             H: Handler&lt;T, S&gt;,</span><span class="terminal__line">    |                ^^^^^^^^^^^^^ required by this bound in `MethodRouter::&lt;S&gt;::post`</span><span class="terminal__line">...</span><span class="terminal__line">649 |     chained_handler_fn!(post, POST);</span><span class="terminal__line">    |     -------------------------------</span><span class="terminal__line">    |     |                   |</span><span class="terminal__line">    |     |                   required by a bound in this associated function</span><span class="terminal__line">    |     in this macro invocation</span><span class="terminal__line">    = note: the full name for the type has been written to '/path/to/11-authorization/target/debug/deps/app-dca66eb5b89065cc.long-type-5832973521730026693.txt'</span><span class="terminal__line">    = note: consider using `--verbose` to print the full type name to the console</span><span class="terminal__line">    = note: this error originates in the macro `chained_handler_fn` (in Nightly builds, run with -Z macro-backtrace for more info)</span><span class="terminal__line"></span><span class="terminal__line">For more information about this error, try `rustc --explain E0277`.</span><span class="terminal__line">error: could not compile `authorization` (lib) due to 1 previous error</span></pre>
+</div>
+          <p>エラーは「<code>Handler</code> が実装されていない」とだけ言い、どの引数が悪いかを教えてくれません。原因は、本文を消費する <code>Json</code>（<code>FromRequest</code>）が最後の引数になっていないことです。<code>AuthUser</code>（<code>FromRequestParts</code>）は本文を読まないので、<code>Json</code> より前ならどこに置いても構いません。</p>
+          <p>メッセージの <code>#[axum::debug_handler]</code> は、axum の <code>macros</code> 機能（feature）を有効にすると使えるマクロです。この教材では有効にしておらず、エラーがどう変わるかは試していません。詳しくは公式ドキュメント（<a href="https://docs.rs/axum/0.8.9/axum/attr.debug_handler.html">axum::debug_handler</a>）を参照してください。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">所有者の検査（<code>AND author_id = ?</code>）を入れ忘れても、コンパイルは通る</p>
+          <p><code>update_post</code> と <code>delete_post</code> の SQL から、<code>AND author_id = ?</code> と対応する <code>.bind(user.user_id)</code> を消したとします。認証はあるが、所有者を確かめない状態です。09 の「誰の記事でも書き換えられる」と同じ穴で、09 と違うのは、ログインした利用者なら誰でもできることです。執筆時に試した結果です。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling authorization v0.1.0 (/path/to/11-authorization)</span><span class="terminal__line">warning: unused variable: `user`</span><span class="terminal__line">   --&gt; src/routes/posts.rs:158:5</span><span class="terminal__line">    |</span><span class="terminal__line">158 |     user: AuthUser,</span><span class="terminal__line">    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_user`</span><span class="terminal__line">    |</span><span class="terminal__line">    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default</span><span class="terminal__line"></span><span class="terminal__line">warning: unused variable: `user`</span><span class="terminal__line">   --&gt; src/routes/posts.rs:181:5</span><span class="terminal__line">    |</span><span class="terminal__line">181 |     user: AuthUser,</span><span class="terminal__line">    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_user`</span><span class="terminal__line"></span><span class="terminal__line">warning: `authorization` (lib) generated 2 warnings (run `cargo fix --lib -p authorization` to apply 2 suggestions)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.88s</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test posts 2&gt;&amp;1 | grep -E "^test .*FAILED|test result|panicked|left|right"</span><span class="terminal__line">test someone_elses_post_cannot_be_deleted_and_looks_missing ... FAILED</span><span class="terminal__line">test someone_elses_post_cannot_be_patched_and_looks_missing ... FAILED</span><span class="terminal__line">thread 'someone_elses_post_cannot_be_deleted_and_looks_missing' (10392397) panicked at tests/posts.rs:233:5:</span><span class="terminal__line">assertion `left == right` failed</span><span class="terminal__line">  left: 204</span><span class="terminal__line"> right: 404</span><span class="terminal__line">thread 'someone_elses_post_cannot_be_patched_and_looks_missing' (10392404) panicked at tests/posts.rs:207:5:</span><span class="terminal__line">assertion `left == right` failed</span><span class="terminal__line">  left: 200</span><span class="terminal__line"> right: 404</span><span class="terminal__line">test result: FAILED. 20 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s</span></pre>
+</div>
+          <p>コンパイルは通り、<code>user</code> が使われていないという警告が出るだけです。一方、ステップ 4 で足した 2 件のテストが落ちます。他人の記事への更新が 200 で通り（記事が書き換わる）、削除が 204 で通っています。認可の検査は型では守れないので、「他人の記事は 404」をテストで確かめておくことが安全網になります。警告（<code>unused variable: `user`</code>）も見逃さないでください。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>grep: invalid option -- j</code>（トークンが <code>-</code> で始まる）</p>
+          <p>base64url のトークンには <code>-</code> と <code>_</code> が含まれ、<code>-</code> で始まることもあります。トークンを <code>grep</code> などの引数に渡すときは <code>grep -F -e "$BOB" ファイル</code> のように <code>-e</code> を付けます。付けないと <code>-5G7j…</code> のようなトークンがオプションと解釈され、<code>grep: invalid option -- j</code> になります。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">更新したのに <code>updated_at</code> が <code>created_at</code> と同じ</p>
+          <p><code>updated_at</code> は秒単位（<code>%Y-%m-%dT%H:%M:%SZ</code>）です。作成と同じ秒に更新すると、同じ値に見えます（ステップ 6 の <code>Alice first (edited)</code>）。更新は成功しています。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>POST /users</code> が 405 で、本文が空</p>
+          <p>ステップ 5 で <code>/users</code> の書き込み系を削除したためです。利用者の登録は <code>POST /auth/register</code> を使います。405 の本文がエラーの JSON 形式になっていないのは、このレッスンの時点の仕様です（「<a href="#remaining">まだ残っていること</a>」）。</p>
+        </div>
+      </div>
+
+      <h2 id="remaining">まだ残っていること</h2>
+      <p>このレッスンで、09 から残してきた「他人の名義での投稿」と「誰の記事でも書き換えられる」穴は塞がりました。一方で、次の課題はまだ残っています。12「HTTP の防御層」以降で扱います。</p>
+      <ul>
+        <li><strong>レート制限</strong>: ログインの総当たりや、いいねの連打を制限していません。</li>
+        <li><strong>CORS とセキュリティヘッダー</strong>: ブラウザから呼ばれる場合の CORS の設定や、<code>x-content-type-options</code> などのセキュリティヘッダーを付けていません。本文のサイズの上限とタイムアウトも、12 で扱います。</li>
+        <li><strong>エラーの形がそろっていない応答</strong>: 削除したルートなどへの 405 は本文が空で、09 で見たパスの型違い（<code>/posts/abc</code>）の 400 は <code>text/plain</code> のままです。どちらも、ほかのエラーと同じ JSON の形になっていません。</li>
+        <li><strong>期限切れのセッションの掃除</strong>: ログイン時にまとめて消す簡易版です。ログインが無い間は、期限切れの行が DB に残ります（照合では弾かれます）。</li>
+      </ul>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>FromRequestParts</code> を実装した <code>AuthUser</code> で、Bearer トークンから利用者を特定しました。
+        記事の著者はトークンの持ち主で決め、更新・削除は所有者だけに限り、他人の記事は存在しない記事と同じ 404 で返します。
+        API キーと <code>/users</code> の書き込み系は廃止しました。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>観点</th><th>このレッスンでの扱い</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>認証</td><td><code>AuthUser</code>（<code>FromRequestParts&lt;AppState&gt;</code>）。<code>Authorization: Bearer</code> のトークンの SHA-256 で <code>sessions</code> を引き、期限は <code>unixepoch()</code> で判定する。失敗は全て同じ 401（<code>WWW-Authenticate: Bearer</code> 付き）</td></tr>
+          <tr><td>引数の順</td><td><code>AuthUser</code> は <code>Json</code> より前。認証が本文の解析より先に走る</td></tr>
+          <tr><td>ログアウトと期限</td><td>ログアウトはそのトークンのセッション行だけを削除。期限切れの行はログイン時に掃除する（簡易版）</td></tr>
+          <tr><td>著者</td><td>トークンの持ち主。本文の <code>author_id</code> は無視される</td></tr>
+          <tr><td>認可</td><td>所有者の検査を <code>UPDATE</code>・<code>DELETE</code> の <code>WHERE</code> に入れる。他人の記事は 404</td></tr>
+          <tr><td>安全網</td><td>「トークン無しは 401」「他人の記事は 404」「本文の <code>author_id</code> は無視」をテストで確かめる</td></tr>
+          <tr><td>廃止したもの</td><td>API キー（<code>API_KEY</code>・<code>require_api_key</code>）、<code>POST /users</code>・<code>PUT|DELETE /users/{id}</code></td></tr>
+          <tr><td>残っていること</td><td>レート制限、CORS、セキュリティヘッダー、405 やパスの型違いの応答の JSON 化など。12 以降で扱う</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/11-authorization</code> の <code>axum/11-authorization/</code> ディレクトリにあります。<code>.env</code> はコミットしていないので、<code>.env.example</code> をコピーして作ってください。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../10-authentication/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">10: パスワードハッシュとログイン</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">12: HTTP の防御層</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
