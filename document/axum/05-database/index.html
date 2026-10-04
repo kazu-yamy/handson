@@ -97,7 +97,7 @@
           <p class="callout__title">使用バージョン</p>
           <p>
             Rust（rustc）1.98.1 / cargo 1.98.1（Rust edition 2024）で動作を確認しています。クレートのバージョンは axum 0.8.9 / tokio 1.53.1 / serde 1.0.229 / serde_json 1.0.151 / sqlx 0.9.0 です。
-            バージョンは執筆時点（2026年9月）のものです。このレッスンで新たに追加するクレートは sqlx（機能 <code>runtime-tokio</code>・<code>sqlite</code>）だけです。DB の中身の確認には <code>sqlite3</code> コマンド 3.51.0 を使います。
+            バージョンは執筆時点（2026年9月）のものです。このレッスンで新たに追加するクレートは sqlx（機能 <code>runtime-tokio</code>・<code>sqlite</code>）だけです。sqlx の新しいメジャーバージョン（0.10 以降）が入ってコードがコンパイルできない場合は、<code>cargo add sqlx@0.9 --features runtime-tokio,sqlite</code> のようにバージョンを指定して、0.9 系を追加してください。DB の中身の確認には <code>sqlite3</code> コマンド 3.51.0 を使います。
           </p>
         </div>
       </div>
