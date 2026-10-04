@@ -1055,7 +1055,7 @@ async fn list_with_malformed_query_is_bad_request(pool: SqlitePool) {
             <li><code>like_count = like_count + 1</code> は、今の値を読んで 1 足して書く、という処理を DB の中で 1 文で行います。同時にいいねが押されても、1 件ずつ確実に足されます（原子的な更新）。</li>
             <li>記事が無ければ更新される行が無く、<code>RETURNING</code> も何も返しません。<code>fetch_optional</code> が <code>None</code> になるので 404 にします。</li>
             <li>いいねは記事の編集ではないので、<code>updated_at</code> は変えません。</li>
-            <li>いいねは認証の要らないエンドポイントなので、この時点では誰でも何回でも押せます。回数の制限は 12 で扱います。</li>
+            <li>いいねは認証の要らないエンドポイントなので、この時点では誰でも何回でも押せます。回数の制限は 13 で扱います。</li>
           </ul>
           <details class="disclosure">
             <summary class="disclosure__summary">読み物: 「読んでから +1 して書く」と、同時のいいねが失われる</summary>
