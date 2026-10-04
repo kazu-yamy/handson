@@ -41,7 +41,7 @@ Kotlin + Jetpack Compose を使った Android アプリ開発を学ぶトラッ�
 | 09 | [Ktor と serialization で API 取得](./09-ktor-serialization/index.html) | Ktor Client と kotlinx.serialization で API から一覧を取得し、読み込み中・成功・失敗（再試行）を表示できる | 60分 |
 | 10 | [MockEngine でネットワークのテスト](./10-mockengine-testing/index.html) | `MockEngine` で、API の成功と失敗・ViewModel の失敗と再試行とキャンセル・失敗表示を、ネットワークに出ずにテストできる | 60分 |
 | 11 | [Room 3 でローカル保存](./11-room/index.html) | Room 3 の Entity・DAO・Database と Repository で、一覧の追加・完了・削除を端末の DB に保存し、アプリを終了しても残るようにできる | 60分 |
-| 12 | DataStore で設定を保存 | 絞り込みなどの設定を DataStore に保存し、アプリを再起動しても保たれるようにできる | 45分 |
+| 12 | [DataStore で設定を保存](./12-datastore/index.html) | Preferences DataStore に「最初の一覧を取得済み」の印と絞り込みを保存し、全件削除しても API から取り直さず、アプリを再起動しても絞り込みが保たれるようにできる | 60分 |
 | 13 | Hilt | Hilt を使った依存性注入を実装できる | 45分 |
 | 14 | WorkManager | WorkManager を使ったバックグラウンド処理を実装できる | 45分 |
 | 15 | テストとリリースビルド | ユニットテストを書き、リリースビルドを作成できる | 45分 |

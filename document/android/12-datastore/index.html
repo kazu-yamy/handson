@@ -1,0 +1,1608 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>12: DataStore で設定を保存 | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">12</li>
+        </ol>
+        <h1 class="lesson-title">DataStore で設定を保存</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分（任意の実験を除く）</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 11 で Room 3 のローカル保存まで作った人</li>
+          <li class="lesson-meta__item">📋 前提: 11 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること。エミュレータからインターネットに接続できること（最初の一覧の取得と、release の確認で使います）</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../11-room/index.html">11: Room 3 でローカル保存</a></li>
+          <li class="lesson-meta__item">🧩 版: Kotlin 2.4.20 / AGP 9.4.1 / Compose BOM 2026.09.00 / DataStore 1.2.1（<code>androidx.datastore:datastore-preferences</code>）/ Room 3.0.3 / Ktor 3.6.0</li>
+          <li class="lesson-meta__item">🌿 完成コード: ブランチ <code>android/12-datastore</code></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>Preferences DataStore をアプリで 1 つだけ作り、キーと値の組で設定を保存・読み出しできる</li>
+          <li>「最初の一覧を取得済み」の印を DataStore に保存し、全件削除して起動し直しても API から取り直さないようにできる</li>
+          <li>一覧の絞り込みを <code>SavedStateHandle</code> から DataStore に移し、アプリを終了して起動し直しても保たれるようにできる</li>
+          <li><code>DataStore&lt;Preferences&gt;</code> の偽物を使い、設定の入口（<code>SettingsRepository</code>）を本物のまま、ファイルを作らずにテストできる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>11 では、Todo の一覧を Room の DB に保存しました。API に行くかどうかは、DB が空かどうかだけで決めていました。そのため、一覧を全件削除してから起動し直すと、API から最初の 20 件を取り直していました（<a href="../11-room/index.html#limits">11 の「この設計の限界」</a>）。</p>
+      <p>この項目では、Jetpack の DataStore を使い、2 つの値を端末に保存します。</p>
+          <ul>
+            <li><strong>「最初の一覧を取得済み」の印</strong>: API から最初の一覧を取得して DB に保存できたら、印を付けます。次の起動からは、DB が空でも、印があれば API に行きません。</li>
+            <li><strong>一覧の絞り込み</strong>（すべて・未完了・完了）: 11 までは <code>SavedStateHandle</code> に置いていました。DataStore に移し、アプリを終了して起動し直しても、前回選んだ絞り込みで一覧が出るようにします。</li>
+          </ul>
+      <p>前提知識として、07 の ViewModel と <code>StateFlow</code> を使います。10 の偽のサーバー（<code>FakeTodoServer</code>）と、11 の <code>TodoRepository</code>・<code>AppContainer</code>・偽の DAO（<code>FakeTodoDao</code>）も使います。</p>
+
+      <h3 id="room-vs-datastore">Room と DataStore の使い分け</h3>
+      <p>どちらも、アプリを終了しても残るデータの保存先です。この教材では、次のように使い分けます。</p>
+
+          <table>
+            <thead>
+            <tr><th></th><th>Room（11）</th><th>DataStore（この項目）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>保存するもの</td><td>Todo の一覧のような「行の集まり」</td><td>少数の設定やフラグ（取得済みの印・絞り込み）</td></tr>
+            <tr><td>形</td><td>テーブル。SQL で、条件に合う行だけを読み書きできる</td><td>キーと値の組。1 つのファイルにまとめて保存する</td></tr>
+            <tr><td>読み書きの API</td><td>DAO に並べた関数（<code>@Query</code>・<code>@Insert</code> など）</td><td><code>data</code>（全体の <code>Flow</code>）と <code>updateData</code>（全体を変換して書き込む）の 2 つだけ</td></tr>
+            <tr><td>この教材のファイル</td><td><code>databases/todos.db</code></td><td><code>files/datastore/settings.preferences_pb</code></td></tr>
+            </tbody>
+          </table>
+      <p>DataStore の本体は、<code>DataStore&lt;T&gt;</code> という interface です。持っているのは <code>val data: Flow&lt;T&gt;</code> と <code>suspend fun updateData(transform)</code> の 2 つだけです（<code>datastore-core</code> 1.2.1 のソース）。読み書きで扱うのは、いつも保存した値の全体です。行を検索したり、一部の行だけを更新したりする仕組みはありません。数件の設定には十分ですが、件数が増えて検索や並べ替えが要るデータは Room に置きます。</p>
+      <p>DataStore には、キーと値の組を保存する <strong>Preferences DataStore</strong> と、自分で定義した型（protobuf）を保存する Proto DataStore があります。この項目では Preferences DataStore を使います。</p>
+
+      <h3 id="what-changes">何が変わるか</h3>
+
+          <table>
+            <thead>
+            <tr><th>データ・操作</th><th>11 まで</th><th>この項目（12）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>API から最初の一覧を取得する条件</td><td>DB が空のとき</td><td>「取得済み」の印が無いとき</td></tr>
+            <tr><td>全件削除して起動し直したとき</td><td>API から 20 件を取り直す</td><td>取り直さない（一覧は空のまま）</td></tr>
+            <tr><td>絞り込み</td><td><code>SavedStateHandle</code></td><td>DataStore（アプリを終了しても残る）</td></tr>
+            <tr><td>Todo の一覧</td><td>DB（Room）</td><td>DB（Room。変わらない）</td></tr>
+            <tr><td>読み込み中・失敗の表示</td><td>ViewModel のメモリ</td><td>ViewModel のメモリ（変わらない）</td></tr>
+            </tbody>
+          </table>
+      <p>11 の限界のうち、もう 1 つの「2 回目以降の起動では、サーバー側の変更を取り込まない」は、この項目でも変わりません。API に行くのは、印が付くまでの 1 回だけです。</p>
+
+      <h3 id="what-we-build">この項目で作るもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>作るもの</th><th>主に変えるファイル</th><th>テストの件数（単体 / UI）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>DataStore を用意し、「取得済み」の印を保存する</td><td><code>libs.versions.toml</code>・<code>app/build.gradle.kts</code>・<code>SettingsRepository.kt</code>（新規）・<code>AppContainer.kt</code>・<code>TodoRepository.kt</code>・<code>FakeDataStore.kt</code>（新規、2 つ）</td><td>71 / 66</td></tr>
+            <tr><td>2</td><td>絞り込みを <code>SavedStateHandle</code> から DataStore に移す</td><td><code>SettingsRepository.kt</code>・<code>AppContainer.kt</code>・<code>TodoListViewModel.kt</code>・既存のテスト</td><td>71 / 66</td></tr>
+            <tr><td>3</td><td>印と絞り込みのテストを足す（完成状態）</td><td><code>TodoRepositoryTest.kt</code>（新規）・<code>TodoListViewModelTest.kt</code></td><td>76 / 66</td></tr>
+            <tr><td>4</td><td>アプリで確かめる（全件削除、設定ファイル、<code>pm clear</code>、機内モード、絞り込み）</td><td>なし</td><td>76 / 66</td></tr>
+            <tr><td>5</td><td>まとめて確認する（テスト・lint、機内モードでの UI テスト、release）</td><td>なし</td><td>76 / 66</td></tr>
+            </tbody>
+          </table>
+      <p>11 の完成コードからの変更は、12 ファイル・追加 245 行・削除 46 行です（準備の名前の変更を除く）。そのうちアプリ本体のコードは 4 ファイル・約 80 行の追加で、残りはテストです。UI テストは、テストのクラスを変えず、補助の 2 ファイルだけを偽の DataStore に合わせます。</p>
+
+      <h3 id="versions">使用バージョン</h3>
+
+          <table>
+            <thead>
+            <tr><th>ライブラリ</th><th>版</th><th>用途</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>androidx.datastore:datastore-preferences</code></td><td>1.2.1</td><td>Preferences DataStore（<code>preferencesDataStore</code>・<code>edit</code>・キーを作る関数）</td></tr>
+            </tbody>
+          </table>
+      <p>執筆時点（2026年10月）の最新の安定版です。Google の Maven の一覧では、1.2.1 の次は <code>1.3.0-alpha01</code> から始まる alpha で、最新は <code>1.3.0-alpha11</code> でした。足す依存はこの 1 つだけです。<code>datastore-core</code> と <code>datastore-preferences-core</code> は、推移的な依存として入ります。DataStore は Google の Maven から取得されるので、<code>settings.gradle.kts</code> のリポジトリの設定は変えません。</p>
+
+      <h2 id="prepare">準備</h2>
+      <p>11 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 12 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid11&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid12&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid11&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid12&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span></pre>
+</div>
+          <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // Step 1: 変数・関数・文字列テンプレート・when 式</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid11&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid12&quot;</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できる。型は推論されるが、ここでは Int のまま</span><span class="diff-line">  var counter = 0</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          counter = 0</span><span class="diff-line">          assertEquals(1, incrementCounter())</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid11&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid12&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+          <p>パッケージ名と <code>applicationId</code>（<code>com.handson.android01</code>）は 11 と同じく変えません。11 で端末に入れたアプリと同じアプリとして扱われます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:packageDebug</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">&gt; Task :app:createDebugApkListingFileRedirect</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 18s</span><span class="terminal__line">39 actionable tasks: 39 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+          <p><code>BUILD SUCCESSFUL</code> と表示されれば準備は完了です。かかる時間は、Gradle デーモンが起動済みかどうかで変わります。エミュレータも 11 と同じ手順で起動しておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">emulator-5554	device</span></pre>
+</div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">DataStore を用意し、「取得済み」の印を保存する</h3>
+        </div>
+        <div class="step__body">
+          <p>DataStore をプロジェクトに足し、「最初の一覧を取得済み」の印を保存します。<code>TodoRepository</code> の判断を「DB が空か」から「印が無いか」に変えます。絞り込みは、このステップでは <code>SavedStateHandle</code> のままです。</p>
+          <h4>依存を足す</h4>
+          <p>バージョンカタログに、版とライブラリを足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  kotlinxSerialization = &quot;1.11.0&quot;</span><span class="diff-line">  ktor = &quot;3.6.0&quot;</span><span class="diff-line">  room3 = &quot;3.0.3&quot;</span><span class="diff-line diff-line--add">+ datastore = &quot;1.2.1&quot;</span><span class="diff-line">  ksp = &quot;2.3.12&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  ...</span><span class="diff-line">  androidx-compose-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }</span><span class="diff-line">  androidx-navigation3-runtime = { group = &quot;androidx.navigation3&quot;, name = &quot;navigation3-runtime&quot;, version.ref = &quot;navigation3&quot; }</span><span class="diff-line">  androidx-navigation3-ui = { group = &quot;androidx.navigation3&quot;, name = &quot;navigation3-ui&quot;, version.ref = &quot;navigation3&quot; }</span><span class="diff-line diff-line--add">+ androidx-datastore-preferences = { group = &quot;androidx.datastore&quot;, name = &quot;datastore-preferences&quot;, version.ref = &quot;datastore&quot; }</span><span class="diff-line">  androidx-room3-compiler = { group = &quot;androidx.room3&quot;, name = &quot;room3-compiler&quot;, version.ref = &quot;room3&quot; }</span><span class="diff-line">  androidx-room3-runtime = { group = &quot;androidx.room3&quot;, name = &quot;room3-runtime&quot;, version.ref = &quot;room3&quot; }</span><span class="diff-line">  kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>app/build.gradle.kts</code> の <code>dependencies</code> に足します。並びは名前の順にしてあり、<code>core.ktx</code> の次です。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.compose.ui.graphics)</span><span class="diff-line">      implementation(libs.androidx.compose.ui.tooling.preview)</span><span class="diff-line">      implementation(libs.androidx.core.ktx)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.datastore.preferences)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.runtime.compose)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.runtime.ktx)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.viewmodel.compose)</span><span class="diff-line">  ...</span></pre>
+</div>
+          <h4>設定の入口 SettingsRepository を作る</h4>
+          <p><code>app/src/main/java/com/handson/android01/data/SettingsRepository.kt</code> を作ります。アプリの設定は、このクラスだけを通して読み書きします。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/SettingsRepository.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import kotlinx.coroutines.flow.first
+
+// アプリの設定の入口。保存先は Preferences DataStore（キーと値の組を、1 つのファイルに保存する）。
+// DataStore&lt;Preferences&gt; は引数で受け取る（テストでは、メモリ上の偽物を渡すため）
+class SettingsRepository(private val dataStore: DataStore&lt;Preferences&gt;) {
+
+    // 「初回の取得が済んだか」。キーは型ごとの関数（booleanPreferencesKey）で作り、名前は保存されるキーそのもの
+    suspend fun isInitialFetchDone(): Boolean = dataStore.data.first()[INITIAL_FETCH_DONE] ?: false
+
+    // edit は、読み取り → 変更 → 書き込みを 1 つのトランザクションとして行う。保存が終わるまで中断する
+    suspend fun markInitialFetchDone() {
+        dataStore.edit { it[INITIAL_FETCH_DONE] = true }
+    }
+
+    private companion object {
+        val INITIAL_FETCH_DONE = booleanPreferencesKey(&quot;initial_fetch_done&quot;)
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li><code>DataStore&lt;Preferences&gt;</code> を、コンストラクタの引数で受け取ります。アプリでは本物の DataStore を、テストではメモリ上の偽物を渡します。</li>
+            <li><code>booleanPreferencesKey("initial_fetch_done")</code> は、<code>Boolean</code> の値を入れるキーです。キーは型ごとの関数（<code>stringPreferencesKey</code> など）で作ります。<code>"initial_fetch_done"</code> が、ファイルに保存されるキーの名前そのものになります。</li>
+            <li><code>isInitialFetchDone()</code> は、<code>dataStore.data</code>（保存した値の <code>Flow</code>）から <code>first()</code> で 1 回だけ読みます。キーがまだ無ければ <code>null</code> なので、<code>?: false</code> で「取得していない」とみなします。<code>DataStore</code> の KDoc でも、1 回だけ読むときは <code>data.first()</code> を使うように書かれています。</li>
+            <li><code>markInitialFetchDone()</code> の <code>edit</code> は、読み取り → 変更 → 書き込みを 1 つのトランザクションとして行います。<code>edit</code> の中身は <code>updateData</code> で、KDoc には「データがディスクに保存されたときにコルーチンが完了する」とあります。<code>edit</code> から戻った時点で、ファイルへの保存は済んでいます。</li>
+          </ul>
+          <h4>DataStore をアプリで 1 つだけ作る</h4>
+          <p>11 で DB を作った <code>AppContainer</code> に、DataStore と <code>SettingsRepository</code> を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/AppContainer.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.data</span><span class="diff-line">  </span><span class="diff-line">  import android.content.Context</span><span class="diff-line diff-line--add">+ import androidx.datastore.core.DataStore</span><span class="diff-line diff-line--add">+ import androidx.datastore.preferences.core.Preferences</span><span class="diff-line diff-line--add">+ import androidx.datastore.preferences.preferencesDataStore</span><span class="diff-line">  import androidx.room3.Room</span><span class="diff-line">  import androidx.sqlite.driver.AndroidSQLiteDriver</span><span class="diff-line">  import io.ktor.client.engine.android.Android</span><span class="diff-line">  import kotlinx.coroutines.Dispatchers</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ // DataStore は、ファイル（datastore/settings.preferences_pb）ごとに、アプリで 1 つだけ作る。</span><span class="diff-line diff-line--add">+ // preferencesDataStore のプロパティ委譲は、トップレベルに 1 回だけ書く（クラスの中に書くと、インスタンスのたびに別の DataStore が作られる）</span><span class="diff-line diff-line--add">+ private val Context.settingsDataStore: DataStore&lt;Preferences&gt; by preferencesDataStore(name = &quot;settings&quot;)</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // アプリ全体で使う部品の置き場所（手書きの最小の DI）。ViewModel は、ここから TodoApi や TodoRepository を受け取る。</span><span class="diff-line diff-line--add">+ // アプリ全体で使う部品の置き場所（手書きの最小の DI）。ViewModel は、ここから TodoRepository と SettingsRepository を受け取る。</span><span class="diff-line">  // HttpClient は接続を使い回すので、画面ごとに作らず、アプリで 1 つを使い回す。DB も同じで、アプリで 1 つだけ作る。</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      private val defaultTodoApi: TodoApi by lazy { TodoApi(createTodoHttpClient(Android.create())) }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     private val defaultTodoRepository: TodoRepository by lazy { TodoRepository(database.todoDao(), defaultTodoApi) }</span><span class="diff-line diff-line--add">+     private val defaultSettingsRepository: SettingsRepository by lazy { SettingsRepository(appContext.settingsDataStore) }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // テストが、偽の DAO を使う TodoRepository に差し替えるための入口</span><span class="diff-line diff-line--add">+     private val defaultTodoRepository: TodoRepository by lazy { TodoRepository(database.todoDao(), defaultTodoApi, defaultSettingsRepository) }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // テストが、偽の DAO と偽の DataStore を使う TodoRepository に差し替えるための入口</span><span class="diff-line">      var todoRepositoryOverride: TodoRepository? = null</span><span class="diff-line">  </span><span class="diff-line">      val todoRepository: TodoRepository get() = todoRepositoryOverride ?: defaultTodoRepository</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>preferencesDataStore(name = "settings")</code> は、プロパティ委譲（<code>by</code>）で DataStore を作る関数です。<code>Context</code> の拡張プロパティとして、ファイルのトップレベルに書きます。KDoc には「ファイルのトップレベルで 1 回だけ呼び、すべての利用箇所で同じインスタンスを使う」とあります。クラスの中のプロパティに書くと、インスタンスのたびに別の DataStore が作られます。</li>
+            <li>保存先は、アプリのデータの場所の <code>files/datastore/</code> の下です。名前が <code>settings</code> なので、ファイルは <code>settings.preferences_pb</code> になります（ステップ 4 で中身を見ます）。</li>
+            <li><code>defaultSettingsRepository</code> は、DB と同じく <code>lazy</code> で、初めて使われたときに作ります。<code>appContext</code> は、11 で <code>TodoApplication</code> から渡すようにした <code>applicationContext</code> です。</li>
+            <li><code>TodoRepository</code> に <code>SettingsRepository</code> を渡します。<code>preferencesDataStore</code> の <code>scope</code> 引数は省略しています。既定は <code>CoroutineScope(Dispatchers.IO + SupervisorJob())</code> です（1.2.1 のソースで確認）。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: 同じファイルに DataStore を 2 つ作ると</summary>
+            <div class="disclosure__body">
+          <p>この実験は任意です。読むだけでもかまいません。筆者は、一時的に <code>val Context.secondDataStore by preferencesDataStore(name = "settings")</code> を足しました。そのうえで、<code>Application.onCreate</code> から 2 つの DataStore の <code>data.first()</code> を呼びました。2 つ目を読んだところで、次の例外になりました（1 回の実測。メッセージはそのままです）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">Logcat（一時的に入れたログ）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">10-04 09:27:35.002  6333  6381 E Dup     : failed
+10-04 09:27:35.002  6333  6381 E Dup     : java.lang.IllegalStateException: There are multiple DataStores active for the same file: /data/data/com.handson.android01/files/datastore/settings.preferences_pb. You should either maintain your DataStore as a singleton or confirm that there is no two DataStore&#x27;s active on the same file (by confirming that the scope is cancelled).
+10-04 09:27:35.002  6333  6381 E Dup     : 	at androidx.datastore.core.FileStorage.createConnection(FileStorage.kt:52)</code></pre>
+</div>
+          <p>例外が投げられたのは、DataStore を作った時点ではなく、ファイルへの最初のアクセス（<code>FileStorage.createConnection</code>）の時点でした。この実験では <code>try</code> / <code>catch</code> で受けてログに出したので、アプリは落ちていません。公式ガイドにも、同じプロセスで 1 つのファイルに複数の DataStore を作ると <code>IllegalStateException</code> になる、と書かれています。実験のコードは元に戻してください。</p>
+
+            </div>
+          </details>
+          <h4>「取得済み」の印で判断する</h4>
+          <p><code>TodoRepository</code> の <code>refreshIfEmpty()</code> を、印で判断する <code>fetchInitialTodosIfNeeded()</code> に変えます。「空なら」ではなくなったので、名前も変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoRepository.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import kotlinx.coroutines.flow.map</span><span class="diff-line">  </span><span class="diff-line">  // Todo の入口。画面（ViewModel）は DAO と API を直接触らず、ここだけを使う。</span><span class="diff-line diff-line--remove">- // 唯一の情報源は Room。API は、DB が空のときに最初の一覧を取ってくるためだけに使う</span><span class="diff-line diff-line--add">+ // 唯一の情報源は Room。API は、最初の 1 回だけ一覧を取ってくるために使う（取得済みかどうかは DataStore の設定に残す）</span><span class="diff-line">  class TodoRepository(</span><span class="diff-line">      private val dao: TodoDao,</span><span class="diff-line">      private val api: TodoApi,</span><span class="diff-line diff-line--add">+     private val settings: SettingsRepository,</span><span class="diff-line">  ) {</span><span class="diff-line">      // DB の一覧。変更のたびに最新の一覧が流れる</span><span class="diff-line">      val todos: Flow&lt;List&lt;Todo&gt;&gt; = dao.observeAll().map { list -&gt; list.map { it.toTodo() } }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // DB が空のときだけ、API から取得して保存する。保存した件数を返す（取得しなかったときは 0）。</span><span class="diff-line diff-line--remove">-     // 失敗した場合は、例外をそのまま投げる（失敗の表示は ViewModel の仕事）</span><span class="diff-line diff-line--remove">-     suspend fun refreshIfEmpty(): Int {</span><span class="diff-line diff-line--remove">-         if (dao.count() &gt; 0) return 0</span><span class="diff-line diff-line--add">+     // 「取得済み」の印が無いときだけ、API から取得して保存する。保存した件数を返す（取得しなかったときは 0）。</span><span class="diff-line diff-line--add">+     // 全件を削除して DB が空になっても、印があれば取り直さない。</span><span class="diff-line diff-line--add">+     // 印が無くても DB に Todo があれば（印を付ける前の版で使っていた端末）、上書きを避けて、取得せずに印だけ付ける。</span><span class="diff-line diff-line--add">+     // 失敗した場合は、印を付けずに例外をそのまま投げる（失敗の表示は ViewModel の仕事。再試行でもう一度取得できる）</span><span class="diff-line diff-line--add">+     suspend fun fetchInitialTodosIfNeeded(): Int {</span><span class="diff-line diff-line--add">+         if (settings.isInitialFetchDone()) return 0</span><span class="diff-line diff-line--add">+         if (dao.count() &gt; 0) {</span><span class="diff-line diff-line--add">+             settings.markInitialFetchDone()</span><span class="diff-line diff-line--add">+             return 0</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">          val todos = api.fetchTodos().map { it.toEntity() }</span><span class="diff-line">          dao.insertAll(todos)</span><span class="diff-line diff-line--add">+         settings.markInitialFetchDone()</span><span class="diff-line">          return todos.size</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>判断は次の 3 通りです。</p>
+
+          <table>
+            <thead>
+            <tr><th>状態</th><th>動き</th><th>戻り値</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>印がある</td><td>何もしない（DB が空でも取得しない）</td><td>0</td></tr>
+            <tr><td>印が無く、DB に Todo がある</td><td>取得せずに、印だけ付ける</td><td>0</td></tr>
+            <tr><td>印が無く、DB が空</td><td>API から取得して DB に保存し、成功したら印を付ける</td><td>保存した件数</td></tr>
+            </tbody>
+          </table>
+          <ul>
+            <li>印を付けるのは、<code>api.fetchTodos()</code> と <code>dao.insertAll()</code> が両方成功した後です。取得に失敗すると例外がそのまま投げられ、印は付きません。画面には 11 と同じく失敗の表示と「再試行」が出て、再試行でもう一度取得できます（ステップ 4 で機内モードを使って確かめます）。</li>
+            <li>印を持つのを <code>TodoRepository</code> にしたのは、「API から取得するかどうか」の判断が、11 から Repository の仕事だからです。ViewModel は、呼ぶ関数の名前が変わるだけです。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">印が無いのに DB に Todo がある場合</p>
+              <p>11 のアプリを使っていた端末に 12 を上書きで入れると、DB には Todo がありますが、印はまだありません。この場合は「取得せずに、印だけ付ける」ことにしました。理由は次の 3 つです。</p>
+              <ul>
+                <li>API の一覧を取り込むと、<code>insertAll</code>（同じ id は置き換え）が、ユーザーが完了にした Todo や追加した Todo を API の値で上書きしてしまいます。</li>
+                <li>11 までの端末では、最初の取得はもう済んでいます。印を付けるのが事実に合います。</li>
+                <li>実装は <code>if</code> を 1 つ足すだけで済みます。</li>
+                <li>取得後の保存と印の書き込みの間でプロセスが落ちた場合も、次の起動では取り直さずに印だけ付きます。</li>
+              </ul>
+              <p>「印が無ければ必ず取得する」という書き方もできますが、上書きのおそれがあるので採りませんでした。この動きは、ステップ 3 のテスト <code>existingTodosWithoutMark_areKeptAndMarked</code> で確かめます。</p>
+            </div>
+          </div>
+          <p><code>TodoListViewModel</code> は、呼ぶ関数の名前を変えるだけです。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListViewModel.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          load()</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // DB が空のときだけ API から取得して保存し、成功なら読み込み済みにして、失敗なら失敗の状態にする。</span><span class="diff-line diff-line--add">+     // 「取得済み」の印が無いときだけ API から取得して保存し、成功なら読み込み済みにして、失敗なら失敗の状態にする。</span><span class="diff-line">      // viewModelScope: ViewModel が破棄される（onCleared）ときに、中の処理もまとめてキャンセルされるスコープ。</span><span class="diff-line">      // 既定のディスパッチャーは Dispatchers.Main.immediate。DB の処理は Room が（AppContainer で指定した）IO のスレッドで、</span><span class="diff-line">      // 通信は Ktor のエンジンが別のスレッドで行うので、withContext は要らない</span><span class="diff-line">      private fun load() {</span><span class="diff-line">          viewModelScope.launch {</span><span class="diff-line">              try {</span><span class="diff-line diff-line--remove">-                 val saved = repository.refreshIfEmpty()</span><span class="diff-line diff-line--add">+                 val saved = repository.fetchInitialTodosIfNeeded()</span><span class="diff-line">                  // DB に書いてから、Room が新しい一覧を Flow に流すまでには少し間がある（実測で約 50 ms）。</span><span class="diff-line">                  // その間に読み込み済みにすると、空の一覧が一瞬見えるので、一覧が届くまで読み込み中のままにする</span><span class="diff-line">                  if (saved &gt; 0) uiState.first { it.todos.isNotEmpty() }</span><span class="diff-line">  ...</span></pre>
+</div>
+          <h4>テストを偽の DataStore に合わせる</h4>
+          <p><code>TodoRepository</code> のコンストラクタに <code>SettingsRepository</code> が増えたので、テストで <code>TodoRepository</code> を作っている箇所を合わせます。テストでは本物の DataStore（ファイル）は使わず、メモリ上の偽物を渡します。単体テスト用に <code>app/src/test/java/com/handson/android01/ui/screens/FakeDataStore.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/FakeDataStore.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+
+// テスト用の偽の DataStore。ファイルには書かず、メモリ上の Preferences を MutableStateFlow に入れて動かす。
+// SettingsRepository が使うキーの変換は本物のまま動くので、保存と復元を（ファイルなしで）確かめられる。
+// initial は「前回の起動で保存した」状態を作るためのもの
+class FakeDataStore(initial: Preferences = emptyPreferences()) : DataStore&lt;Preferences&gt; {
+
+    private val state = MutableStateFlow(initial)
+
+    override val data: Flow&lt;Preferences&gt; = state
+
+    override suspend fun updateData(transform: suspend (Preferences) -&gt; Preferences): Preferences {
+        val updated = transform(state.value)
+        state.update { updated }
+        return updated
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li><code>DataStore&lt;Preferences&gt;</code> は <code>data</code> と <code>updateData</code> の 2 つだけの interface なので、11 の <code>FakeTodoDao</code> と同じように、<code>MutableStateFlow</code> で手書きできます。</li>
+            <li><code>updateData</code> は、本物と同じく、変換した後の値を返します。<code>SettingsRepository</code> が使う <code>edit</code> は、この <code>updateData</code> を呼ぶ拡張関数なので、テストでも本物と同じ呼び出しのまま動きます。</li>
+            <li><code>initial</code> で、「前回の起動で保存した」状態から始められます。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">偽物を作るのは DataStore の層にする</p>
+              <p><code>SettingsRepository</code> に interface を切って偽物を作る方法もあります。ただし、本番と偽物の 2 つの実装を書くことになり、行数が増えます。さらに、キーの名前・enum との変換・既定値といった <code>SettingsRepository</code> の中身がテストで動かないので、変換の誤りを見逃します。この教材では <code>DataStore&lt;Preferences&gt;</code> の偽物を作り、<code>SettingsRepository</code> は本物のままテストします。</p>
+            </div>
+          </div>
+          <p>UI テストでも使うので、同じ内容のファイルを <code>androidTest</code> 側の同じパッケージにも作ります。11 の <code>FakeTodoDao</code> が両方にあるのと同じ扱いです。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">UI テスト用の <code>FakeDataStore.kt</code> を見る（単体テスト用と同じ内容）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/FakeDataStore.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
+
+// テスト用の偽の DataStore。ファイルには書かず、メモリ上の Preferences を MutableStateFlow に入れて動かす。
+// SettingsRepository が使うキーの変換は本物のまま動くので、保存と復元を（ファイルなしで）確かめられる。
+// initial は「前回の起動で保存した」状態を作るためのもの
+class FakeDataStore(initial: Preferences = emptyPreferences()) : DataStore&lt;Preferences&gt; {
+
+    private val state = MutableStateFlow(initial)
+
+    override val data: Flow&lt;Preferences&gt; = state
+
+    override suspend fun updateData(transform: suspend (Preferences) -&gt; Preferences): Preferences {
+        val updated = transform(state.value)
+        state.update { updated }
+        return updated
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <p>ViewModel の単体テストで <code>TodoRepository</code> を作る 3 か所に、<code>SettingsRepository(FakeDataStore())</code> を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/TodoListViewModelTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import androidx.lifecycle.SavedStateHandle</span><span class="diff-line">  import androidx.lifecycle.viewModelScope</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.SettingsRepository</span><span class="diff-line">  import com.handson.android01.data.TodoRepository</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import io.ktor.http.HttpStatusCode</span><span class="diff-line">  ...</span><span class="diff-line">          dao: FakeTodoDao = FakeTodoDao(),</span><span class="diff-line">          responseDelayMillis: Long = 1_000L,</span><span class="diff-line">          dispatcher: CoroutineDispatcher,</span><span class="diff-line diff-line--remove">-     ) = TodoListViewModel(saved, TodoRepository(dao, FakeTodoServer(todos, delayMillis = responseDelayMillis, dispatcher = dispatcher).api))</span><span class="diff-line diff-line--add">+     ) = TodoListViewModel(saved, TodoRepository(dao, FakeTodoServer(todos, delayMillis = responseDelayMillis, dispatcher = dispatcher).api, SettingsRepository(FakeDataStore())))</span><span class="diff-line">  </span><span class="diff-line">      // StandardTestDispatcher: launch した処理はキューに入るだけで、テスト側が進める（runCurrent / advanceTimeBy / advanceUntilIdle）まで動かない。</span><span class="diff-line">      // delay は仮想時間なので、待たずに時間だけ進められる</span><span class="diff-line">  ...</span><span class="diff-line">          val dispatcher = UnconfinedTestDispatcher()</span><span class="diff-line">          Dispatchers.setMain(dispatcher)</span><span class="diff-line">          val server = FakeTodoServer(todos, dispatcher = dispatcher).apply(configure)</span><span class="diff-line diff-line--remove">-         return server to TodoListViewModel(saved, TodoRepository(dao, server.api))</span><span class="diff-line diff-line--add">+         return server to TodoListViewModel(saved, TodoRepository(dao, server.api, SettingsRepository(FakeDataStore())))</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">  ...</span><span class="diff-line">          val dispatcher = StandardTestDispatcher(testScheduler)</span><span class="diff-line">          Dispatchers.setMain(dispatcher)</span><span class="diff-line">          val server = FakeTodoServer(todos, status = HttpStatusCode.InternalServerError, delayMillis = 1_000L, dispatcher = dispatcher)</span><span class="diff-line diff-line--remove">-         val vm = TodoListViewModel(SavedStateHandle(), TodoRepository(FakeTodoDao(), server.api))</span><span class="diff-line diff-line--add">+         val vm = TodoListViewModel(SavedStateHandle(), TodoRepository(FakeTodoDao(), server.api, SettingsRepository(FakeDataStore())))</span><span class="diff-line">          advanceTimeBy(1_000)</span><span class="diff-line">          runCurrent()</span><span class="diff-line">          assertEquals(&quot;サーバーがエラーを返しました（HTTP 500）&quot;, vm.uiState.value.errorMessage)</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>UI テストの補助の 2 ファイルも同じように合わせます。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>FakeTodoApiRule.kt</code> と <code>TestViewModels.kt</code> の変更を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/FakeTodoApiRule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line">  import com.handson.android01.data.AppContainer</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.SettingsRepository</span><span class="diff-line">  import com.handson.android01.data.TodoRepository</span><span class="diff-line">  import org.junit.rules.TestWatcher</span><span class="diff-line">  import org.junit.runner.Description</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // 実際の Activity（MainActivity）を起動するテスト用: アプリが使う TodoRepository を、本物の DB にもネットワークにも出ない（偽の DAO と偽のサーバーの）ものに差し替える。</span><span class="diff-line diff-line--add">+ // 実際の Activity（MainActivity）を起動するテスト用: アプリが使う TodoRepository と SettingsRepository を、本物の DB にも DataStore のファイルにもネットワークにも出ない（偽の DAO・偽のサーバー・偽の DataStore の）ものに差し替える。</span><span class="diff-line">  // Activity を起動するルールより外側に置く（RuleChain.outerRule）。そうしないと、起動のあとに差し替えることになる</span><span class="diff-line">  class FakeTodoApiRule(val server: FakeTodoServer = FakeTodoServer(demoTodos(20))) : TestWatcher() {</span><span class="diff-line">  </span><span class="diff-line">      override fun starting(description: Description) {</span><span class="diff-line diff-line--remove">-         AppContainer.todoRepositoryOverride = TodoRepository(FakeTodoDao(), server.api)</span><span class="diff-line diff-line--add">+         AppContainer.todoRepositoryOverride = TodoRepository(FakeTodoDao(), server.api, SettingsRepository(FakeDataStore()))</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      override fun finished(description: Description) {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TestViewModels.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.lifecycle.viewmodel.compose.viewModel</span><span class="diff-line">  import androidx.lifecycle.viewmodel.initializer</span><span class="diff-line">  import androidx.lifecycle.viewmodel.viewModelFactory</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.SettingsRepository</span><span class="diff-line">  import com.handson.android01.data.TodoApi</span><span class="diff-line">  import com.handson.android01.data.TodoRepository</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // テスト用: 偽の DAO（FakeTodoDao）と、偽のサーバー（FakeTodoServer）につないだ ViewModel を作る。api を渡さなければ、initialTodos をすぐに返すサーバーを使う。</span><span class="diff-line diff-line--add">+ // テスト用: 偽の DAO（FakeTodoDao）・偽のサーバー（FakeTodoServer）・偽の DataStore（FakeDataStore）につないだ ViewModel を作る。api を渡さなければ、initialTodos をすぐに返すサーバーを使う。</span><span class="diff-line">  // viewModel(factory = ...) は、同じ ViewModelStoreOwner（ここでは Activity）の中では同じインスタンスを返す</span><span class="diff-line">  @Composable</span><span class="diff-line">  fun testViewModel(initialTodos: List&lt;Todo&gt; = demoTodoList, api: TodoApi? = null): TodoListViewModel =</span><span class="diff-line">      viewModel(</span><span class="diff-line">          factory = viewModelFactory {</span><span class="diff-line diff-line--remove">-             initializer { TodoListViewModel(createSavedStateHandle(), TodoRepository(FakeTodoDao(), api ?: FakeTodoServer(initialTodos).api)) }</span><span class="diff-line diff-line--add">+             initializer { TodoListViewModel(createSavedStateHandle(), TodoRepository(FakeTodoDao(), api ?: FakeTodoServer(initialTodos).api, SettingsRepository(FakeDataStore()))) }</span><span class="diff-line">          },</span><span class="diff-line">      )</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>ビルド・lint・単体テスト・UI テストをまとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 11s</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 71 件と UI テスト 66 件がすべて成功すれば OK です。テストの件数は 11 と同じです。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">絞り込みを DataStore に移す</h3>
+        </div>
+        <div class="step__body">
+          <p>一覧の絞り込みを、<code>SavedStateHandle</code> から DataStore に移します。</p>
+          <h4>SettingsRepository に絞り込みを足す</h4>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/SettingsRepository.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.datastore.preferences.core.Preferences</span><span class="diff-line">  import androidx.datastore.preferences.core.booleanPreferencesKey</span><span class="diff-line">  import androidx.datastore.preferences.core.edit</span><span class="diff-line diff-line--add">+ import androidx.datastore.preferences.core.stringPreferencesKey</span><span class="diff-line diff-line--add">+ import com.handson.android01.ui.screens.TodoFilter</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.flow.Flow</span><span class="diff-line">  import kotlinx.coroutines.flow.first</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.flow.map</span><span class="diff-line">  </span><span class="diff-line">  // アプリの設定の入口。保存先は Preferences DataStore（キーと値の組を、1 つのファイルに保存する）。</span><span class="diff-line">  // DataStore&lt;Preferences&gt; は引数で受け取る（テストでは、メモリ上の偽物を渡すため）</span><span class="diff-line">  ...</span><span class="diff-line">          dataStore.edit { it[INITIAL_FETCH_DONE] = true }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // 一覧の絞り込み。enum の name（&quot;Active&quot; など）を文字列で保存する。</span><span class="diff-line diff-line--add">+     // 保存が無い（初回）・知らない名前（将来の版で消した値など）のときは、すべて</span><span class="diff-line diff-line--add">+     val filter: Flow&lt;TodoFilter&gt; = dataStore.data.map { prefs -&gt;</span><span class="diff-line diff-line--add">+         TodoFilter.entries.firstOrNull { it.name == prefs[FILTER] } ?: TodoFilter.All</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     suspend fun setFilter(filter: TodoFilter) {</span><span class="diff-line diff-line--add">+         dataStore.edit { it[FILTER] = filter.name }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      private companion object {</span><span class="diff-line diff-line--add">+         val FILTER = stringPreferencesKey(&quot;filter&quot;)</span><span class="diff-line">          val INITIAL_FETCH_DONE = booleanPreferencesKey(&quot;initial_fetch_done&quot;)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+          <ul>
+            <li>絞り込み（<code>TodoFilter</code>）は enum なので、<code>name</code>（<code>"All"</code>・<code>"Active"</code>・<code>"Done"</code>）を文字列で保存します。キーは <code>stringPreferencesKey("filter")</code> です。</li>
+            <li><code>filter</code> は、<code>dataStore.data</code> を <code>map</code> で <code>TodoFilter</code> に変換した <code>Flow</code> です。保存した値が変わるたびに、新しい絞り込みが流れます。</li>
+            <li>読み出すときは <code>TodoFilter.entries.firstOrNull { it.name == 保存した値 }</code> で探し、見つからなければ「すべて」にします。保存が無い（初回）ときと、知らない名前（将来の版で値を消したときなど）のときです。<code>TodoFilter.valueOf(name)</code> は知らない名前で例外を投げます。ファイルに保存した値はアプリの外から来るデータとして扱い、例外にせず既定の値に倒します。</li>
+            <li><code>data</code> のパッケージの <code>SettingsRepository</code> が、画面側（<code>ui.screens</code>）の <code>TodoFilter</code> を参照しています。この依存の向きは仮置きで、13 で整理します。</li>
+          </ul>
+          <h4>AppContainer から SettingsRepository を渡す</h4>
+          <p>ViewModel にも <code>SettingsRepository</code> を渡すので、<code>AppContainer</code> から取り出せるようにします。UI テスト用の差し替え口も足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/AppContainer.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      private val defaultTodoRepository: TodoRepository by lazy { TodoRepository(database.todoDao(), defaultTodoApi, defaultSettingsRepository) }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // テストが、偽の DAO と偽の DataStore を使う TodoRepository に差し替えるための入口</span><span class="diff-line diff-line--add">+     // テストが、偽の DAO・偽の DataStore を使うものに差し替えるための入口</span><span class="diff-line">      var todoRepositoryOverride: TodoRepository? = null</span><span class="diff-line diff-line--add">+     var settingsRepositoryOverride: SettingsRepository? = null</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     val settingsRepository: SettingsRepository get() = settingsRepositoryOverride ?: defaultSettingsRepository</span><span class="diff-line">  </span><span class="diff-line">      val todoRepository: TodoRepository get() = todoRepositoryOverride ?: defaultTodoRepository</span><span class="diff-line">  }</span></pre>
+</div>
+          <h4>ViewModel の絞り込みを DataStore に切り替える</h4>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListViewModel.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- import androidx.lifecycle.SavedStateHandle</span><span class="diff-line">  import androidx.lifecycle.ViewModel</span><span class="diff-line">  import androidx.lifecycle.viewModelScope</span><span class="diff-line">  import com.handson.android01.data.AppContainer</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.SettingsRepository</span><span class="diff-line">  import com.handson.android01.data.TodoRepository</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import io.ktor.client.call.NoTransformationFoundException</span><span class="diff-line">  ...</span><span class="diff-line">  import java.io.IOException</span><span class="diff-line">  </span><span class="diff-line">  // 画面状態を持つ ViewModel。画面回転（Activity の作り直し）では破棄されず、同じインスタンスが使われ続ける。</span><span class="diff-line diff-line--remove">- // SavedStateHandle: プロセスが終了されても残したい値の入れ物。Activity の onSaveInstanceState の Bundle に保存され、</span><span class="diff-line diff-line--remove">- // プロセスが作り直されたときに、保存した値が入った状態で渡される</span><span class="diff-line">  class TodoListViewModel(</span><span class="diff-line diff-line--remove">-     private val savedStateHandle: SavedStateHandle,</span><span class="diff-line">      // Todo の保存先と取得元。テストでは、偽の DAO と、通信しない MockEngine 入りの TodoApi をつないだものを渡す</span><span class="diff-line">      private val repository: TodoRepository,</span><span class="diff-line diff-line--add">+     // 絞り込みの保存先（DataStore）。アプリを終了しても残る。テストでは、メモリ上の偽の DataStore をつないだものを渡す</span><span class="diff-line diff-line--add">+     private val settings: SettingsRepository,</span><span class="diff-line">  ) : ViewModel() {</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // viewModel() の既定のファクトリは、引数なし、または SavedStateHandle だけのコンストラクタを探して呼ぶ。</span><span class="diff-line diff-line--remove">-     // そのため、アプリでは TodoRepository を AppContainer（手書きの置き場所）から受け取る</span><span class="diff-line diff-line--remove">-     constructor(savedStateHandle: SavedStateHandle) : this(savedStateHandle, AppContainer.todoRepository)</span><span class="diff-line diff-line--add">+     // viewModel() の既定のファクトリは、引数なしのコンストラクタを探して呼ぶ。</span><span class="diff-line diff-line--add">+     // そのため、アプリでは TodoRepository と SettingsRepository を AppContainer（手書きの置き場所）から受け取る</span><span class="diff-line diff-line--add">+     constructor() : this(AppContainer.todoRepository, AppContainer.settingsRepository)</span><span class="diff-line">  </span><span class="diff-line">      // 読み込み中かどうかと失敗の文言。DB には入らない画面だけの状態なので、ViewModel のメモリだけに持つ（復元しない）</span><span class="diff-line">      private data class LoadState(val isLoading: Boolean = true, val errorMessage: String? = null)</span><span class="diff-line">  </span><span class="diff-line">      private val loadState = MutableStateFlow(LoadState())</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // 画面の状態は、3 つの Flow を combine して作る: DB の一覧（Room）・絞り込み（SavedStateHandle）・読み込みの状態。</span><span class="diff-line diff-line--add">+     // 画面の状態は、3 つの Flow を combine して作る: DB の一覧（Room）・絞り込み（DataStore）・読み込みの状態。</span><span class="diff-line diff-line--add">+     // combine は、3 つがすべて 1 回は値を出すまで何も流さない。DataStore の読み込みは非同期だが、保存した絞り込みが届くまでは</span><span class="diff-line diff-line--add">+     // 初期値（読み込み中）のままなので、既定の「すべて」が一瞬見えることはない</span><span class="diff-line">      // どれかが変わるたびに作り直されるので、一覧を書き換える処理は ViewModel に要らない（DAO に書けば、Flow で届く）。</span><span class="diff-line">      // stateIn: 冷たい Flow を、現在の値を持つ StateFlow にする。Eagerly は、ViewModel が作られた時点から購読を始める</span><span class="diff-line">      val uiState: StateFlow&lt;TodoListUiState&gt; = combine(</span><span class="diff-line">          repository.todos,</span><span class="diff-line diff-line--remove">-         savedStateHandle.getStateFlow(KEY_FILTER, TodoFilter.All),</span><span class="diff-line diff-line--add">+         settings.filter,</span><span class="diff-line">          loadState,</span><span class="diff-line">      ) { todos, filter, load -&gt;</span><span class="diff-line">          TodoListUiState(todos = todos, filter = filter, isLoading = load.isLoading, errorMessage = load.errorMessage)</span><span class="diff-line">  ...</span><span class="diff-line">          viewModelScope.launch { repository.deleteDone() }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // 絞り込みだけは SavedStateHandle に残す（プロセスが終了されても残る）。書き込むと、上の getStateFlow を通って画面に届く</span><span class="diff-line diff-line--add">+     // 絞り込みは DataStore に書く。書き込みが終わると、上の settings.filter を通って画面に届く</span><span class="diff-line">      fun setFilter(filter: TodoFilter) {</span><span class="diff-line diff-line--remove">-         savedStateHandle[KEY_FILTER] = filter</span><span class="diff-line diff-line--add">+         viewModelScope.launch { settings.setFilter(filter) }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      // 例外を、画面に出す文言にする。e.message はそのまま出さない（レスポンスの本文が入ることがある）</span><span class="diff-line">  ...</span><span class="diff-line">          is ContentConvertException, is SerializationException, is NoTransformationFoundException -&gt; &quot;データの形式が正しくありません&quot;</span><span class="diff-line">          else -&gt; &quot;予期しないエラーが発生しました&quot;</span><span class="diff-line">      }</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-     private companion object {</span><span class="diff-line diff-line--remove">-         const val KEY_FILTER = &quot;filter&quot;</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line">  }</span></pre>
+</div>
+          <ul>
+            <li>コンストラクタから <code>SavedStateHandle</code> を外し、<code>(repository, settings)</code> を受け取るようにしました。</li>
+            <li><code>viewModel()</code> の既定のファクトリは、引数なしのコンストラクタ（または <code>SavedStateHandle</code> だけを受け取るコンストラクタ）を探して呼びます。<code>SavedStateHandle</code> の引数が無くなったので、2 次コンストラクタを引数なしの <code>constructor()</code> にして、<code>AppContainer</code> から 2 つの Repository を受け取ります。</li>
+            <li><code>combine</code> の 2 つ目を、<code>savedStateHandle.getStateFlow(...)</code> から <code>settings.filter</code> に替えました。</li>
+            <li><code>setFilter</code> は、<code>viewModelScope.launch</code> の中で <code>settings.setFilter</code> を呼びます。<code>edit</code> は中断関数なので、コルーチンの中から呼びます。保存が終わると、<code>settings.filter</code> に新しい値が流れ、<code>combine</code> を通って画面に届きます。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>SavedStateHandle</code> を外した理由</p>
+              <p>絞り込みを DataStore と <code>SavedStateHandle</code> の両方に持つと、どちらが正しい値かを決める必要が出てきます。11 で一覧を DB だけに持つようにしたのと同じく、同じデータを 2 か所で持たないようにしました。</p>
+              <p>回転などで Activity が作り直されても、ViewModel は破棄されないので、絞り込みはそのまま残ります。既存の UI テストには、絞り込みが Activity の作り直しの後も残ることを確かめるものが 2 件あります。<code>selectedFilter_survivesRecreation</code> と <code>filter_survivesActivityRecreation</code> で、どちらも変更なしで通ります。ViewModel が作り直されないので、偽の DataStore も一緒に残るためです。</p>
+            </div>
+          </div>
+          <h4>起動直後に「すべて」が一瞬見えないか</h4>
+          <p>DataStore の最初の読み込みは非同期です。起動した直後、保存した絞り込み（たとえば「未完了」）が届くまでの間に、既定の「すべて」の一覧が一瞬見えないかが気になります。筆者は ViewModel に一時的にログ（<code>Log.d</code>）を入れて確かめました。保存した絞り込みが「未完了」（<code>Active</code>）の状態でアプリを強制終了して起動し、<code>uiState</code> の変化を記録しています（それぞれ 1 回の実測。ログのコードは完成コードに入っていません）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">Logcat（A: 完成コードのまま）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">loading=true filter=All todos=0
+loading=false filter=Active todos=20</code></pre>
+</div>
+          <p>1 行目は、<code>uiState</code> の <code>stateIn</code> の初期値（読み込み中）です。最初に画面へ出るのはこの値で、<code>combine</code> は 3 つの <code>Flow</code> がどれも 1 回は値を出すまで何も流しません。2 行目で、保存した絞り込みと一覧がそろって読み込み済みになります。「すべて」で一覧がある状態は、一度も流れていません。</p>
+          <p>比べるために、2 つの書き方も試しました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">Logcat（B: settings.filter を stateIn で初期値「すべて」の StateFlow にしてから combine に渡す）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">loading=true filter=All todos=0
+loading=false filter=Active todos=20</code></pre>
+</div>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">Logcat（C: B に加えて、読み込み中の表示を外す。isLoading の初期値も false）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">loading=false filter=All todos=0
+loading=false filter=Active todos=20</code></pre>
+</div>
+          <ul>
+            <li>B も A と同じ 2 つの状態でした。<code>filter=All</code> が流れても、そのときは読み込み中です。読み込み中の画面は、件数・絞り込みのチップ・一覧を出さず、読み込みの表示だけにしているので（09 で作った <code>TodoListScreen</code>）、「すべて」は見えません。</li>
+            <li>C では、読み込み中の表示が無いので、最初に「すべて・0 件」の状態が 1 回流れてから「未完了」に変わりました。画面では、空の一覧が一瞬見えることになります。</li>
+          </ul>
+          <p>つまり、ちらつかないのは、値がそろうまで読み込み中の表示にしているからです。C の 1 行目（<code>filter=All todos=0</code>）は <code>uiState</code> の <code>stateIn</code> の初期値で、読み込み中の表示を外したので見えるようになりました（1 回の実測）。「必要な値がそろうまでは読み込み中」という 11 までの方針のままで、ちらつきのための追加のコードは要りませんでした。</p>
+          <h4>テストを合わせる</h4>
+          <p>ViewModel の単体テストは、<code>SavedStateHandle</code> を使っていた箇所を、偽の DataStore をつないだ <code>SettingsRepository</code> に置き換えます。主な変更は次のとおりです。</p>
+          <ul>
+            <li>補助関数（<code>viewModel</code>・<code>loadedViewModel</code>）の引数 <code>saved: SavedStateHandle</code> を、<code>settings: SettingsRepository</code> に替えます。同じ <code>settings</code> を <code>TodoRepository</code> と ViewModel の両方に渡します。</li>
+            <li><code>dbHasTodos_isShownWithoutLoading</code>: 前回の絞り込みを <code>SavedStateHandle(mapOf("filter" to TodoFilter.Done))</code> で渡していたのを、<code>settings.setFilter(TodoFilter.Done)</code> で保存してから ViewModel を作るようにします。<code>setFilter</code> が中断関数なので、テストを <code>runTest</code> で囲みます。</li>
+            <li><code>updates_areWrittenToDao</code>: 絞り込みの確認を <code>settings.filter.first()</code> にします。<code>assertFalse(saved.contains("todos"))</code> は、<code>SavedStateHandle</code> が無くなったので消します。「一覧は DB だけに書く」ことは、残っている <code>dao.observeAll()</code> との比較で確かめられます。</li>
+            <li>ほかは、引数の置き換えだけです。テストの件数は変わりません。</li>
+          </ul>
+          <p>変更が 6 か所に散らばるので、ファイル全体を次の内容に差し替えてください。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoListViewModelTest.kt</code> の全文を見る（ファイル全体を差し替える）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/TodoListViewModelTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.lifecycle.viewModelScope
+import com.handson.android01.data.SettingsRepository
+import com.handson.android01.data.TodoRepository
+import com.handson.android01.kotlin.Todo
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.IOException
+
+// ViewModel の単体テスト（JVM 上。エミュレータは不要）。
+// viewModelScope は Dispatchers.Main.immediate を使うが、JVM には Main が無いので、setMain でテスト用のディスパッチャーに差し替える
+@OptIn(ExperimentalCoroutinesApi::class)
+class TodoListViewModelTest {
+
+    private val todos = listOf(
+        Todo(1, &quot;write&quot;),
+        Todo(2, &quot;test&quot;, done = true),
+        Todo(3, &quot;ship&quot;),
+    )
+
+    // setMain したら、テストのあとで必ず resetMain する（他のテストに差し替えが残らないように）
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    // 偽のサーバーは、渡されたディスパッチャーで動く。テスト用のディスパッチャーなら、応答までの待ち時間（delayMillis）は仮想時間になる
+    private fun viewModel(
+        settings: SettingsRepository = SettingsRepository(FakeDataStore()),
+        dao: FakeTodoDao = FakeTodoDao(),
+        responseDelayMillis: Long = 1_000L,
+        dispatcher: CoroutineDispatcher,
+    ) = TodoListViewModel(TodoRepository(dao, FakeTodoServer(todos, delayMillis = responseDelayMillis, dispatcher = dispatcher).api, settings), settings)
+
+    // StandardTestDispatcher: launch した処理はキューに入るだけで、テスト側が進める（runCurrent / advanceTimeBy / advanceUntilIdle）まで動かない。
+    // delay は仮想時間なので、待たずに時間だけ進められる
+    @Test
+    fun standardDispatcher_loadingFinishesWhenVirtualTimeAdvances() = runTest(StandardTestDispatcher()) {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val vm = viewModel(responseDelayMillis = 1_000L, dispatcher = dispatcher)
+
+        // 作った直後: 読み込み中で、一覧は空
+        assertTrue(vm.uiState.value.isLoading)
+        assertEquals(emptyList&lt;Todo&gt;(), vm.uiState.value.todos)
+
+        advanceTimeBy(999)
+        runCurrent()
+        assertTrue(vm.uiState.value.isLoading)
+
+        advanceTimeBy(1)
+        runCurrent()
+        assertFalse(vm.uiState.value.isLoading)
+        assertEquals(todos, vm.uiState.value.todos)
+    }
+
+    // 待ち時間が 0 でも、Standard では launch の中身は runCurrent するまで動かない
+    @Test
+    fun standardDispatcher_doesNotRunLaunchedWorkUntilTold() = runTest(StandardTestDispatcher()) {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val vm = viewModel(responseDelayMillis = 0L, dispatcher = dispatcher)
+
+        assertTrue(vm.uiState.value.isLoading)
+
+        runCurrent()
+        assertFalse(vm.uiState.value.isLoading)
+    }
+
+    // UnconfinedTestDispatcher: launch した処理は、最初の中断点（delay など）まで、呼び出した場所でそのまま実行される
+    @Test
+    fun unconfinedDispatcher_runsLaunchedWorkEagerly() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val vm = viewModel(responseDelayMillis = 0L, dispatcher = dispatcher)
+
+        // runCurrent なしで、もう読み込みが終わっている
+        assertFalse(vm.uiState.value.isLoading)
+        assertEquals(todos, vm.uiState.value.todos)
+    }
+
+    // StateFlow の値の変化を順に集める。collect は終わらないので backgroundScope で起動する（テストの最後に自動でキャンセルされる）。
+    // StateFlow は値が変わったときだけ通知し、collect が追いつく前の途中の値は飛ばされる（conflation）。
+    // 一覧が届いてから読み込み済みにするので、「一覧は入ったが、まだ読み込み中」の状態が途中に 1 つ入る（ViewModel の load を参照）
+    @Test
+    fun uiState_emitsLoadingThenLoadedThenToggled() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val vm = viewModel(responseDelayMillis = 1_000L, dispatcher = dispatcher)
+        val states = mutableListOf&lt;TodoListUiState&gt;()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.toList(states) }
+
+        advanceTimeBy(1_000)
+        runCurrent()
+        vm.toggleTodo(1, done = true)
+        runCurrent()
+
+        assertEquals(4, states.size)
+        assertTrue(states[0].isLoading)
+        assertEquals(emptyList&lt;Todo&gt;(), states[0].todos)
+        assertTrue(states[1].isLoading)
+        assertEquals(todos, states[1].todos)
+        assertFalse(states[2].isLoading)
+        assertFalse(states[2].todos.first { it.id == 1 }.done)
+        assertTrue(states[3].todos.first { it.id == 1 }.done)
+    }
+
+    // 以降のテストは、読み込み済み（待ち時間 0 + Unconfined）の状態から始める
+    private fun loadedViewModel(
+        settings: SettingsRepository = SettingsRepository(FakeDataStore()),
+        dao: FakeTodoDao = FakeTodoDao(),
+    ): TodoListViewModel {
+        val dispatcher = UnconfinedTestDispatcher()
+        Dispatchers.setMain(dispatcher)
+        return viewModel(settings, dao, responseDelayMillis = 0L, dispatcher = dispatcher)
+    }
+
+    @Test
+    fun toggleTodo_changesOnlyThatTodo() {
+        val vm = loadedViewModel()
+
+        vm.toggleTodo(1, done = true)
+
+        assertEquals(listOf(true, true, false), vm.uiState.value.todos.map { it.done })
+    }
+
+    @Test
+    fun addTodo_appendsWithNextIdAndIgnoresBlank() {
+        val vm = loadedViewModel()
+
+        vm.addTodo(&quot;  buy milk  &quot;)
+        vm.addTodo(&quot;   &quot;)
+
+        assertEquals(4, vm.uiState.value.todos.size)
+        assertEquals(Todo(4, &quot;buy milk&quot;), vm.uiState.value.todos.last())
+    }
+
+    @Test
+    fun deleteTodo_thenRestoreTodo_putsItBackAtTheSameIndex() {
+        val vm = loadedViewModel()
+        val target = todos[1]
+
+        vm.deleteTodo(target.id)
+        assertEquals(listOf(1, 3), vm.uiState.value.todos.map { it.id })
+
+        vm.restoreTodo(target)
+        assertEquals(listOf(1, 2, 3), vm.uiState.value.todos.map { it.id })
+    }
+
+    @Test
+    fun deleteDone_removesDoneTodos() {
+        val vm = loadedViewModel()
+
+        vm.deleteDone()
+
+        assertEquals(listOf(1, 3), vm.uiState.value.todos.map { it.id })
+    }
+
+    @Test
+    fun setFilter_changesFilterOnly() {
+        val vm = loadedViewModel()
+
+        vm.setFilter(TodoFilter.Done)
+
+        assertEquals(TodoFilter.Done, vm.uiState.value.filter)
+        assertEquals(todos, vm.uiState.value.todos)
+    }
+
+    // DB にすでに一覧があり、前回の絞り込みも保存されていれば、それをそのまま表示し、読み込み中にならない
+    // （アプリの再起動を、中身のある DAO と、絞り込みを保存した設定を渡して再現する）
+    @Test
+    fun dbHasTodos_isShownWithoutLoading() = runTest {
+        val settings = SettingsRepository(FakeDataStore())
+        settings.setFilter(TodoFilter.Done)
+
+        val vm = loadedViewModel(settings, FakeTodoDao(listOf(Todo(9, &quot;saved&quot;, done = true))))
+
+        assertFalse(vm.uiState.value.isLoading)
+        assertEquals(listOf(Todo(9, &quot;saved&quot;, done = true)), vm.uiState.value.todos)
+        assertEquals(TodoFilter.Done, vm.uiState.value.filter)
+    }
+
+    // 一覧の変更は DAO に書かれ、設定（DataStore）に書かれるのは絞り込みだけ
+    @Test
+    fun updates_areWrittenToDao() = runTest {
+        val settings = SettingsRepository(FakeDataStore())
+        val dao = FakeTodoDao()
+        val vm = loadedViewModel(settings, dao)
+
+        vm.toggleTodo(1, done = true)
+        vm.setFilter(TodoFilter.Active)
+
+        assertEquals(3, dao.count())
+        assertEquals(vm.uiState.value.todos, dao.observeAll().first().map { Todo(it.id, it.title, it.done) })
+        assertTrue(vm.uiState.value.todos.first { it.id == 1 }.done)
+        assertEquals(TodoFilter.Active, settings.filter.first())
+    }
+
+    // ---- 読み込みの失敗と再試行（偽のサーバーが失敗を返す） ----
+
+    // 偽のサーバーと、それにつないだ ViewModel を作る。ディスパッチャーは Unconfined なので、応答は呼んだ場所でそのまま処理される
+    private fun failingViewModel(
+        dao: FakeTodoDao = FakeTodoDao(),
+        configure: FakeTodoServer.() -&gt; Unit,
+    ): Pair&lt;FakeTodoServer, TodoListViewModel&gt; {
+        val dispatcher = UnconfinedTestDispatcher()
+        Dispatchers.setMain(dispatcher)
+        val server = FakeTodoServer(todos, dispatcher = dispatcher).apply(configure)
+        val settings = SettingsRepository(FakeDataStore())
+        return server to TodoListViewModel(TodoRepository(dao, server.api, settings), settings)
+    }
+
+    @Test
+    fun loadFailure_showsErrorAndStopsLoading() {
+        val (_, vm) = failingViewModel { status = HttpStatusCode.NotFound }
+
+        val state = vm.uiState.value
+        assertFalse(state.isLoading)
+        assertEquals(&quot;サーバーがエラーを返しました（HTTP 404）&quot;, state.errorMessage)
+        assertEquals(emptyList&lt;Todo&gt;(), state.todos)
+    }
+
+    @Test
+    fun loadFailure_messageDependsOnTheKindOfException() {
+        val (_, network) = failingViewModel { error = IOException(&quot;boom&quot;) }
+        assertEquals(&quot;ネットワークに接続できません&quot;, network.uiState.value.errorMessage)
+
+        val (_, broken) = failingViewModel { rawBody = &quot;[{&quot; }
+        assertEquals(&quot;データの形式が正しくありません&quot;, broken.uiState.value.errorMessage)
+
+        val (_, unexpected) = failingViewModel { error = IllegalStateException(&quot;bug&quot;) }
+        assertEquals(&quot;予期しないエラーが発生しました&quot;, unexpected.uiState.value.errorMessage)
+    }
+
+    // 例外の message（レスポンスの本文が入ることがある）は、画面に出す文言に混ぜない
+    @Test
+    fun loadFailure_doesNotLeakExceptionMessage() {
+        val (_, vm) = failingViewModel { rawBody = &quot;[{\&quot;secret\&quot;: 1}]&quot; }
+
+        assertEquals(&quot;データの形式が正しくありません&quot;, vm.uiState.value.errorMessage)
+    }
+
+    // 失敗したときは、DB に何も書かない（印も付かないので、次の起動でも取得し直される）
+    @Test
+    fun loadFailure_leavesDaoEmpty() = runTest {
+        val dao = FakeTodoDao()
+
+        failingViewModel(dao = dao) { status = HttpStatusCode.InternalServerError }
+
+        assertEquals(0, dao.count())
+    }
+
+    @Test
+    fun retry_afterFailure_loadsTodos() {
+        val (server, vm) = failingViewModel { status = HttpStatusCode.InternalServerError }
+        assertEquals(&quot;サーバーがエラーを返しました（HTTP 500）&quot;, vm.uiState.value.errorMessage)
+
+        server.status = HttpStatusCode.OK
+        vm.retry()
+
+        val state = vm.uiState.value
+        assertFalse(state.isLoading)
+        assertEquals(null, state.errorMessage)
+        assertEquals(todos, state.todos)
+        assertEquals(2, server.requestCount)
+    }
+
+    // 再試行は、失敗中にだけ効く。読み込み済みのときに呼んでも、取得し直さない
+    @Test
+    fun retry_whenNotFailed_doesNothing() {
+        val (server, vm) = failingViewModel { }
+
+        vm.retry()
+
+        assertEquals(todos, vm.uiState.value.todos)
+        assertEquals(1, server.requestCount)
+    }
+
+    // 再試行の途中（読み込み中）に、もう一度押されても、取得は 1 回だけ
+    @Test
+    fun retry_whileLoading_doesNotStartSecondRequest() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val server = FakeTodoServer(todos, status = HttpStatusCode.InternalServerError, delayMillis = 1_000L, dispatcher = dispatcher)
+        val settings = SettingsRepository(FakeDataStore())
+        val vm = TodoListViewModel(TodoRepository(FakeTodoDao(), server.api, settings), settings)
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(&quot;サーバーがエラーを返しました（HTTP 500）&quot;, vm.uiState.value.errorMessage)
+
+        server.status = HttpStatusCode.OK
+        vm.retry()
+        vm.retry()
+        // loadState の変更が uiState に届くのは、combine がテスト用のディスパッチャーで動いてから
+        runCurrent()
+        assertTrue(vm.uiState.value.isLoading)
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertEquals(todos, vm.uiState.value.todos)
+        assertEquals(2, server.requestCount)
+    }
+
+    // 取得の途中で ViewModel が破棄されると、viewModelScope がキャンセルされ、取得中のコルーチンも止まる。
+    // これは失敗ではないので、失敗の表示（errorMessage）にしてはいけない（catch (e: Exception) で握りつぶさず、CancellationException は投げ直す）
+    @Test
+    fun cancellationDuringLoad_isNotTreatedAsFailure() = runTest(StandardTestDispatcher()) {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val vm = viewModel(responseDelayMillis = 1_000L, dispatcher = dispatcher)
+
+        // 応答を待っている途中（1 秒のうち 0.5 秒）で、ViewModel の破棄と同じく viewModelScope をキャンセルする
+        advanceTimeBy(500)
+        runCurrent()
+        vm.viewModelScope.cancel()
+        advanceUntilIdle()
+
+        assertEquals(null, vm.uiState.value.errorMessage)
+    }
+
+    // 印が無くても、DB に一覧があれば取得しない（11 から上書きで入れた場合）。通信の回数で確かめる
+    @Test
+    fun dbHasTodos_doesNotCallApi() {
+        val (server, vm) = failingViewModel(dao = FakeTodoDao(listOf(Todo(9, &quot;saved&quot;)))) { }
+
+        assertEquals(0, server.requestCount)
+        assertEquals(listOf(Todo(9, &quot;saved&quot;)), vm.uiState.value.todos)
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <p>UI テストの補助の 2 ファイルは、<code>SavedStateHandle</code> を外します。同じ <code>SettingsRepository</code> を、<code>TodoRepository</code> と ViewModel の両方へ渡します。本物の <code>MainActivity</code> を起動するテスト用の <code>FakeTodoApiRule</code> は、<code>AppContainer.settingsRepositoryOverride</code> も差し替えます。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>FakeTodoApiRule.kt</code> と <code>TestViewModels.kt</code> の変更を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/FakeTodoApiRule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  class FakeTodoApiRule(val server: FakeTodoServer = FakeTodoServer(demoTodos(20))) : TestWatcher() {</span><span class="diff-line">  </span><span class="diff-line">      override fun starting(description: Description) {</span><span class="diff-line diff-line--remove">-         AppContainer.todoRepositoryOverride = TodoRepository(FakeTodoDao(), server.api, SettingsRepository(FakeDataStore()))</span><span class="diff-line diff-line--add">+         val settings = SettingsRepository(FakeDataStore())</span><span class="diff-line diff-line--add">+         AppContainer.settingsRepositoryOverride = settings</span><span class="diff-line diff-line--add">+         AppContainer.todoRepositoryOverride = TodoRepository(FakeTodoDao(), server.api, settings)</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      override fun finished(description: Description) {</span><span class="diff-line">          AppContainer.todoRepositoryOverride = null</span><span class="diff-line diff-line--add">+         AppContainer.settingsRepositoryOverride = null</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TestViewModels.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line diff-line--remove">- import androidx.lifecycle.createSavedStateHandle</span><span class="diff-line">  import androidx.lifecycle.viewmodel.compose.viewModel</span><span class="diff-line">  import androidx.lifecycle.viewmodel.initializer</span><span class="diff-line">  import androidx.lifecycle.viewmodel.viewModelFactory</span><span class="diff-line">  ...</span><span class="diff-line">  fun testViewModel(initialTodos: List&lt;Todo&gt; = demoTodoList, api: TodoApi? = null): TodoListViewModel =</span><span class="diff-line">      viewModel(</span><span class="diff-line">          factory = viewModelFactory {</span><span class="diff-line diff-line--remove">-             initializer { TodoListViewModel(createSavedStateHandle(), TodoRepository(FakeTodoDao(), api ?: FakeTodoServer(initialTodos).api, SettingsRepository(FakeDataStore()))) }</span><span class="diff-line diff-line--add">+             initializer {</span><span class="diff-line diff-line--add">+                 val settings = SettingsRepository(FakeDataStore())</span><span class="diff-line diff-line--add">+                 TodoListViewModel(TodoRepository(FakeTodoDao(), api ?: FakeTodoServer(initialTodos).api, settings), settings)</span><span class="diff-line diff-line--add">+             }</span><span class="diff-line">          },</span><span class="diff-line">      )</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>まとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 53s</span><span class="terminal__line">90 actionable tasks: 24 executed, 66 up-to-date</span><span class="terminal__line">Configuration cache entry reused.</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 71 件と UI テスト 66 件がすべて成功すれば OK です。UI テストのクラスは変えていません。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">印と絞り込みのテストを足す</h3>
+        </div>
+        <div class="step__body">
+          <p>ここまでで、既存のテストは通るようになりました。この項目で足した動き（印と絞り込みの保存）を確かめるテストを足します。</p>
+          <p><code>app/src/test/java/com/handson/android01/data/TodoRepositoryTest.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/data/TodoRepositoryTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.ui.screens.FakeDataStore
+import com.handson.android01.ui.screens.FakeTodoDao
+import com.handson.android01.ui.screens.FakeTodoServer
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Test
+
+// 「取得済み」の印（DataStore）で、初回の取得を 1 回だけにする判断のテスト。偽の DAO・偽のサーバー・偽の DataStore だけで動く
+class TodoRepositoryTest {
+
+    private val todos = listOf(Todo(1, &quot;write&quot;), Todo(2, &quot;test&quot;, done = true))
+
+    private val settings = SettingsRepository(FakeDataStore())
+    private val server = FakeTodoServer(todos)
+
+    // 取得済みの印があれば、DB が空でも取得しない（全件削除して再起動した場合）
+    @Test
+    fun fetchedMark_skipsFetchEvenWhenDbIsEmpty() = runTest {
+        settings.markInitialFetchDone()
+        val repository = TodoRepository(FakeTodoDao(), server.api, settings)
+
+        assertEquals(0, repository.fetchInitialTodosIfNeeded())
+
+        assertEquals(0, server.requestCount)
+    }
+
+    // 取得に成功したら保存して、印を付ける。2 回目は取得しない
+    @Test
+    fun successfulFetch_savesTodosAndMarksAsFetched() = runTest {
+        val repository = TodoRepository(FakeTodoDao(), server.api, settings)
+
+        assertEquals(2, repository.fetchInitialTodosIfNeeded())
+        assertEquals(0, repository.fetchInitialTodosIfNeeded())
+
+        assertTrue(settings.isInitialFetchDone())
+        assertEquals(1, server.requestCount)
+    }
+
+    // 取得に失敗したら、印を付けない（再試行でもう一度取得できる）
+    @Test
+    fun failedFetch_doesNotMarkAsFetched() = runTest {
+        server.status = HttpStatusCode.InternalServerError
+        val repository = TodoRepository(FakeTodoDao(), server.api, settings)
+
+        try {
+            repository.fetchInitialTodosIfNeeded()
+            fail(&quot;取得の失敗が例外で投げられるはず&quot;)
+        } catch (_: Exception) {
+            // 失敗は例外のまま投げられる（表示は ViewModel の仕事）
+        }
+
+        assertFalse(settings.isInitialFetchDone())
+    }
+
+    // 印が無くても DB に Todo があれば（印を付ける前の版で使っていた端末）、取得せずに印だけ付ける。API の一覧で上書きしないため
+    @Test
+    fun existingTodosWithoutMark_areKeptAndMarked() = runTest {
+        val repository = TodoRepository(FakeTodoDao(listOf(Todo(9, &quot;mine&quot;, done = true))), server.api, settings)
+
+        assertEquals(0, repository.fetchInitialTodosIfNeeded())
+
+        assertEquals(0, server.requestCount)
+        assertTrue(settings.isInitialFetchDone())
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li><code>fetchedMark_skipsFetchEvenWhenDbIsEmpty</code>: 印があれば、DB が空でも API を呼ばない（全件削除して起動し直した場合）。<code>FakeTodoServer</code> の <code>requestCount</code> で、API が呼ばれた回数を確かめます。</li>
+            <li><code>successfulFetch_savesTodosAndMarksAsFetched</code>: 取得に成功したら 2 件を保存して印を付け、2 回目は取得しない。</li>
+            <li><code>failedFetch_doesNotMarkAsFetched</code>: 取得に失敗したら（HTTP 500）、例外が投げられ、印は付かない。</li>
+            <li><code>existingTodosWithoutMark_areKeptAndMarked</code>: 印が無くても DB に Todo があれば、取得せずに印だけ付ける（ステップ 1 の「印が無いのに DB に Todo がある場合」）。</li>
+            <li>どのテストも、偽の DAO・偽のサーバー・偽の DataStore だけで動きます。<code>SettingsRepository</code> は本物です。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>fail()</code> は <code>catch (_: Exception)</code> に捕まらない</p>
+              <p><code>failedFetch_doesNotMarkAsFetched</code> では、<code>try</code> の中で例外が出なければ <code>fail(...)</code> でテストを失敗させます。<code>fail</code> が投げるのは <code>AssertionError</code> で、<code>Exception</code> ではありません。そのため、<code>catch (_: Exception)</code> に飲み込まれず、テストはきちんと失敗します。</p>
+            </div>
+          </div>
+          <p>ViewModel の単体テストに、絞り込みの保存と復元のテストを 1 件足します。同じ設定（偽の DataStore）をつないだ新しい ViewModel を作ることで、アプリの再起動を再現します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/TodoListViewModelTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          assertEquals(todos, vm.uiState.value.todos)</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // 絞り込みは設定（DataStore）に保存され、同じ設定をつないだ新しい ViewModel（アプリの再起動）でも復元される</span><span class="diff-line diff-line--add">+     @Test</span><span class="diff-line diff-line--add">+     fun filter_isSavedAndRestoredByNewViewModel() = runTest {</span><span class="diff-line diff-line--add">+         val settings = SettingsRepository(FakeDataStore())</span><span class="diff-line diff-line--add">+         loadedViewModel(settings).setFilter(TodoFilter.Done)</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         val restarted = loadedViewModel(settings)</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         assertEquals(TodoFilter.Done, restarted.uiState.value.filter)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      // DB にすでに一覧があり、前回の絞り込みも保存されていれば、それをそのまま表示し、読み込み中にならない</span><span class="diff-line">      // （アプリの再起動を、中身のある DAO と、絞り込みを保存した設定を渡して再現する）</span><span class="diff-line">      @Test</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>まとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 49s</span><span class="terminal__line">90 actionable tasks: 7 executed, 83 up-to-date</span><span class="terminal__line">Configuration cache entry reused.</span></pre>
+</div>
+          <p>単体テストは 76 件になりました（11 から 5 件増）。UI テストは 66 件のままです。筆者の環境では、変更・追加した 2 つのテストクラスだけを 3 回続けて実行しても、3 回とも全件成功しました。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 76 件と UI テスト 66 件がすべて成功すれば OK です。これが完成状態です。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">アプリで確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>完成したアプリを入れて、印と絞り込みが保存されることを確かめます。UI テストの後はアプリが消えているので、DB と設定は空です。</p>
+          <h4>最初の起動と設定ファイル</h4>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 3s</span><span class="terminal__line">40 actionable tasks: 1 executed, 39 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>最初の起動では、11 と同じく API から 20 件を取得します（<code>20 件中 11 件完了</code>）。DB と設定のファイルを見てみます。debug ビルドのアプリは、<code>run-as</code> でアプリのデータの場所にあるファイルを読めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls -l databases files/datastore&quot;</span><span class="terminal__line">databases:</span><span class="terminal__line">total 92</span><span class="terminal__line">-rw------- 1 u0_a218 u0_a218 12288 2026-10-04 09:22 todos.db</span><span class="terminal__line">-rw------- 1 u0_a218 u0_a218 32768 2026-10-04 09:22 todos.db-shm</span><span class="terminal__line">-rw------- 1 u0_a218 u0_a218 28872 2026-10-04 09:22 todos.db-wal</span><span class="terminal__line">-rw------- 1 u0_a218 u0_a218     0 2026-10-04 09:22 todos.db.lck</span><span class="terminal__line"></span><span class="terminal__line">files/datastore:</span><span class="terminal__line">total 8</span><span class="terminal__line">-rw------- 1 u0_a218 u0_a218 26 2026-10-04 09:22 settings.preferences_pb</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 xxd files/datastore/settings.preferences_pb&quot;</span><span class="terminal__line">00000000: 0a18 0a12 696e 6974 6961 6c5f 6665 7463  ....initial_fetc</span><span class="terminal__line">00000010: 685f 646f 6e65 1202 0801                 h_done....</span></pre>
+</div>
+          <ul>
+            <li>設定は <code>files/datastore/settings.preferences_pb</code> の 1 つのファイルです。<code>databases/</code> の DB とは別の場所です。</li>
+            <li>ファイルはテキストではなく、26 バイトのバイナリ（protobuf の形式）です。<code>xxd</code> で 16 進数にすると、キーの名前 <code>initial_fetch_done</code> と、値の <code>true</code>（末尾の <code>08 01</code>）が読み取れます。</li>
+            <li>ファイルの日時・サイズ・ユーザー名（<code>u0_a218</code>）は環境によって変わります。</li>
+          </ul>
+          <h4>全件削除して起動し直す</h4>
+          <p>11 では、全件削除して起動し直すと、API から 20 件を取り直していました（<a href="../11-room/index.html#limits">11 の「この設計の限界」</a>）。12 で同じことをします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select count(*) from todos&#x27;&quot;</span><span class="terminal__line">20</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;DELETE FROM todos;&#x27;&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select count(*) from todos&#x27;&quot;</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select count(*) from todos&#x27;&quot;</span><span class="terminal__line">0</span></pre>
+</div>
+          <p>起動し直しても、画面は <code>0 件中 0 件完了</code> と「Todo はありません」のままで、DB も 0 件でした。印があるので、<code>fetchInitialTodosIfNeeded()</code> は API に行きません。11 との違いはここです。</p>
+          <h4>アプリのデータを消すと初回に戻る</h4>
+          <p><code>pm clear</code> でアプリのデータを消してから起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm clear com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select count(*) from todos&#x27;&quot;</span><span class="terminal__line">20</span></pre>
+</div>
+          <p><code>pm clear</code> は、DB も DataStore のファイルも消します。印が無くなり、DB も空なので、最初の起動と同じく API から 20 件を取得しました（<code>20 件中 11 件完了</code>）。</p>
+          <h4>取得に失敗した間は印を付けない</h4>
+          <p>もう一度アプリのデータを消し、機内モードにしてから起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm clear com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 -W 3 8.8.8.8</span><span class="terminal__line">connect: Network is unreachable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls files/datastore&quot;</span><span class="terminal__line">ls: files/datastore: No such file or directory</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls files&quot;</span><span class="terminal__line">profileInstalled</span></pre>
+</div>
+          <p>画面には「ネットワークに接続できません」と「再試行」が出ました。取得に失敗したので、印は付いていません。それどころか、<code>files/datastore</code> のディレクトリ自体がありません。DataStore のファイルは、最初に書き込むまで作られないからです。ファイルが無いときの <code>data</code> は空の <code>Preferences</code> になり、「設定が無い」のと同じに扱われます。</p>
+          <p>機内モードを解除して、画面の「再試行」を押します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 -W 3 8.8.8.8</span><span class="terminal__line">（中略）</span><span class="terminal__line">1 packets transmitted, 1 received, 0% packet loss, time 0ms</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls files/datastore&quot;</span><span class="terminal__line">settings.preferences_pb</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 xxd files/datastore/settings.preferences_pb&quot;</span><span class="terminal__line">00000000: 0a18 0a12 696e 6974 6961 6c5f 6665 7463  ....initial_fetc</span><span class="terminal__line">00000010: 685f 646f 6e65 1202 0801                 h_done....</span></pre>
+</div>
+          <p>再試行で 20 件を取得し（<code>20 件中 11 件完了</code>）、そのときに初めてファイルができて、<code>initial_fetch_done</code> が入りました。</p>
+          <h4>絞り込みが起動し直しても残る</h4>
+          <p>画面の「未完了」のチップを押してから、アプリを強制終了して起動し直します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 xxd files/datastore/settings.preferences_pb&quot;</span><span class="terminal__line">00000000: 0a18 0a12 696e 6974 6961 6c5f 6665 7463  ....initial_fetc</span><span class="terminal__line">00000010: 685f 646f 6e65 1202 0801 0a12 0a06 6669  h_done........fi</span><span class="terminal__line">00000020: 6c74 6572 1208 2a06 4163 7469 7665       lter..*.Active</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls -l files/datastore&quot;</span><span class="terminal__line">total 8</span><span class="terminal__line">-rw------- 1 u0_a218 u0_a218 46 2026-10-04 09:26 settings.preferences_pb</span></pre>
+</div>
+          <p>起動し直した画面では、「未完了」のチップが選ばれた状態で、未完了の Todo だけが出ました。ファイルは 46 バイトになり、<code>initial_fetch_done</code> に加えて、キー <code>filter</code> と値 <code>Active</code> が入っています。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>全件削除して起動し直しても API から取り直さず、<code>pm clear</code> の後は 20 件を取得すれば OK です。機内モードの間は <code>files/datastore</code> ができず、再試行で取得した後に印が付くこと、絞り込みが強制終了の後に残ることも確かめてください。機内モードは解除しておきます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>最後に、完成状態でビルド・lint・単体テスト・UI テストをまとめて実行し、テストが設定ファイルを作らないことと、release ビルドでも DataStore が使えることを確かめます。コードはステップ 3 の完成状態のままです。エミュレータは起動しておいてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 47s</span><span class="terminal__line">90 actionable tasks: 2 executed, 88 up-to-date</span><span class="terminal__line">Configuration cache entry reused.</span></pre>
+</div>
+          <p>筆者の出力は、ステップ 3 の実行の直後にもう一度実行したものです。<code>test</code> はソースが変わっていないので実行済み（UP-TO-DATE）になり、<code>connectedDebugAndroidTest</code> だけが実際に実行されます。結果をまとめます。</p>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト（<code>test</code>）</td><td>76 件すべて成功（11 から 5 件増）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>66 件すべて成功（11 と同じ件数。テストのクラスは変更なし）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 9 件・ヒント 1 件。警告の内訳は <code>UnusedResources</code> 7 件・<code>RedundantLabel</code> 1 件・<code>AndroidGradlePluginVersion</code> 1 件。ヒントは <code>AutoboxingStateCreation</code> 1 件</td></tr>
+            <tr><td>debug APK</td><td>約 15.3MB（<code>./gradlew clean</code> の後のビルドで 15,258,418 バイト。11 は 14,660,304 バイト）</td></tr>
+            </tbody>
+          </table>
+          <p>11 では、警告に <code>Typos</code> が 1 件ありました（<code>HandsonAndroid11</code> を綴りの誤りと判定した誤検知）。<code>HandsonAndroid12</code> では出ませんでした。</p>
+
+          <table>
+            <thead>
+            <tr><th>テストクラス</th><th>種類</th><th>件数</th><th>この項目での変更</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>TodoRepositoryTest</code></td><td>単体</td><td>4</td><td>新規</td></tr>
+            <tr><td><code>TodoListViewModelTest</code></td><td>単体</td><td>21</td><td><code>SavedStateHandle</code> を偽の DataStore に置き換え、1 件を追加</td></tr>
+            <tr><td>11 までのその他の単体テスト</td><td>単体</td><td>51</td><td>準備で <code>BasicsTest</code> の期待値を変えた</td></tr>
+            <tr><td>11 までの UI テスト</td><td>UI</td><td>66</td><td>テストのクラスは変更なし（補助の <code>TestViewModels</code>・<code>FakeTodoApiRule</code> と、新しい <code>FakeDataStore</code> のみ）</td></tr>
+            </tbody>
+          </table>
+          <h4>機内モードでも UI テストが通ることを確かめる</h4>
+          <p>11 と同じく、機内モードにして UI テストを実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 -W 3 8.8.8.8</span><span class="terminal__line">connect: Network is unreachable</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 52s</span></pre>
+</div>
+          <p>筆者の環境では、機内モードのまま UI テスト 66 件がすべて成功しました。</p>
+          <h4>UI テストが DB も設定ファイルも作らないことを確かめる</h4>
+          <p>本物の <code>MainActivity</code> を起動する <code>MainActivityTest</code> では、<code>FakeTodoApiRule</code> が <code>AppContainer</code> の差し替え口を偽物に替えています。差し替えるのは <code>todoRepositoryOverride</code> と <code>settingsRepositoryOverride</code> の 2 つです。11 と同じく、アプリのデータを消してこのテストだけを実行し、データの場所を見ます。機内モードのまま続けます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug installDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 3s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm clear com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am instrument -w -e class com.handson.android01.MainActivityTest com.handson.android01.test/androidx.test.runner.AndroidJUnitRunner</span><span class="terminal__line">（中略）</span><span class="terminal__line">OK (1 test)</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls -a&quot;</span><span class="terminal__line">.</span><span class="terminal__line">..</span><span class="terminal__line">app_dxmaker_cache</span><span class="terminal__line">cache</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls files&quot;</span><span class="terminal__line">ls: files: No such file or directory</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls databases&quot;</span><span class="terminal__line">ls: databases: No such file or directory</span></pre>
+</div>
+          <p>テストは成功し、<code>databases</code> も <code>files</code>（<code>files/datastore</code> ごと）もできていませんでした。<code>AppContainer</code> の DB と <code>defaultSettingsRepository</code> は <code>lazy</code> なので、差し替えたテストでは本物は作られません。</p>
+          <p>確かめたら、機内モードを解除し、<code>ping</code> が通ることを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 -W 3 8.8.8.8</span><span class="terminal__line">（中略）</span><span class="terminal__line">1 packets transmitted, 1 received, 0% packet loss, time 0ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings get global airplane_mode_on</span><span class="terminal__line">0</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">機内モードの解除を忘れない</p>
+              <p>解除しないまま次の release の確認に進むと、印の無いアプリが API から取得できず、「ネットワークに接続できません」と表示されます。</p>
+            </div>
+          </div>
+          <h4>release ビルドでも動くことを確かめる</h4>
+          <p>release ビルドでは R8 がコードを縮小し、名前を短く変えます。DataStore が release でも動くことを確かめます。手順の詳しい説明は、09 のステップ 3「release ビルドでも動くことを確かめる」を参照してください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 28s</span><span class="terminal__line">52 actionable tasks: 51 executed, 1 up-to-date</span></pre>
+</div>
+          <p>できた <code>app-release-unsigned.apk</code> は約 1.9MB（1,888,473 バイト）でした。11 では 1,749,115 バイトでした。11 と同じ手順で、作業用ディレクトリにコピーし、debug 用の鍵で <code>apksigner sign</code> します。次のコマンドの <code>build-tools/37.0.0</code> は、筆者の環境の版です。<code>~/Library/Android/sdk/build-tools/</code> にインストール済みの版に読み替えてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp app/build/outputs/apk/release/app-release-unsigned.apk &lt;作業用ディレクトリ&gt;/rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd &lt;作業用ディレクトリ&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out rel-signed.apk rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner verify --verbose rel-signed.apk</span><span class="terminal__line">Verifies</span><span class="terminal__line">Verified using v1 scheme (JAR signing): false</span><span class="terminal__line">Verified using v2 scheme (APK Signature Scheme v2): true</span><span class="terminal__line">Verified using v3 scheme (APK Signature Scheme v3): true</span><span class="terminal__line">Verified using v3.1 scheme (APK Signature Scheme v3.1): false</span><span class="terminal__line">Verified using v3.2 scheme (APK Signature Scheme v3.2): false</span><span class="terminal__line">Verified using v4 scheme (APK Signature Scheme v4): false</span><span class="terminal__line">Verified for SourceStamp: false</span><span class="terminal__line">Number of signers: 1</span></pre>
+</div>
+          <p><code>apksigner sign</code> は、成功すると何も表示しません。端末には、1 つ前の確認で入れた debug 版のアプリが残っています。DB と設定が空の状態から確かめるため、debug 版をアンインストールしてから release 版を入れます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb install rel-signed.apk</span><span class="terminal__line">Serving...</span><span class="terminal__line">All files should be loaded. Notifying the device.</span><span class="terminal__line">Performing Incremental Install</span><span class="terminal__line">Success</span><span class="terminal__line">Install command complete in 223 ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -c</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p><code>Install command complete in</code> の後の時間は、実行のたびに変わります。筆者の環境では、<code>20 件中 11 件完了</code> の一覧が出ました。「完了」のチップを押してから、強制終了して起動し直します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls files/datastore&quot;</span><span class="terminal__line">run-as: package not debuggable: com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -c &quot;FATAL EXCEPTION&quot;</span><span class="terminal__line">0</span></pre>
+</div>
+          <p>起動し直すと、「完了」のチップが選ばれた状態で、完了済みの Todo だけが出ました。release ビルドは debuggable でないので、<code>run-as</code> は使えず、設定ファイルの中身は見られません。画面の動きで確かめます。R8 で DataStore が動かなくなることはなく、<code>proguard-rules.pro</code> に keep ルールを足す必要はありませんでした。</p>
+          <p>確認が終わったら、作業用ディレクトリの APK を削除し、アプリをアンインストールします。エミュレータと Gradle デーモンも止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>単体テスト 76 件と UI テスト 66 件が成功し、機内モードのままでも UI テストが通り、機内モードを解除していれば OK です。<code>MainActivityTest</code> の後に <code>databases</code> と <code>files</code> が無いことと、release の APK でも絞り込みが強制終了の後に残ることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="not-covered">この項目で扱わなかったこと</h2>
+      <ul>
+        <li>Proto DataStore。自分で定義した型を保存できますが、protobuf の Gradle プラグインが必要です。</li>
+        <li>設定画面と、複数の設定項目（完了済みを下にまとめる、などの表示の設定）。</li>
+        <li><code>SharedPreferences</code> からの移行（<code>produceMigrations</code>・<code>SharedPreferencesMigration</code>）。</li>
+        <li>DataStore のファイルが壊れたときの処理（<code>ReplaceFileCorruptionHandler</code>）と、読み込みの失敗の表示。<code>isInitialFetchDone()</code> や <code>filter</code> が <code>IOException</code> を投げた場合、今のコードでは、取得の失敗と同じ「ネットワークに接続できません」に分類されることがあります。</li>
+        <li>複数のプロセスから同じ DataStore を使う場合（<code>MultiProcessDataStoreFactory</code>）。</li>
+        <li>本物の DataStore（ファイル）を使う、端末上でのテスト。15 で扱う予定です。</li>
+        <li>サーバー側の変更の取り込み（API との同期）。API に行くのは、印が付くまでの 1 回だけです。</li>
+      </ul>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid12</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>preferencesDataStore</code> をトップレベルに 1 回だけ書く理由と、同じファイルに DataStore を 2 つ作ると起きることを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">Room と DataStore の使い分けを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">「取得済み」の印で API に行くかどうかを決め、取得に失敗したときは印を付けないようにした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">印が無いのに DB に Todo がある場合に、取得せずに印だけ付ける理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">絞り込みを enum の名前で保存し、知らない名前のときは「すべて」にした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">絞り込みを <code>SavedStateHandle</code> から外した理由と、起動直後に「すべて」が見えない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">テストで <code>DataStore&lt;Preferences&gt;</code> の偽物を使い、<code>SettingsRepository</code> を本物のままにする理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">全件削除しても取り直さないこと、<code>pm clear</code> で初回に戻ること、設定ファイルの場所と中身、絞り込みが残ることを確かめ、機内モードを解除した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-10" class="checklist__input">
+          <label for="check-10" class="checklist__label">単体テスト 76 件・UI テスト 66 件を通し、UI テストが設定ファイルを作らないこと、release の APK でも絞り込みが残ることを確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>There are multiple DataStores active for the same file</code> で失敗する</p>
+              <p>同じファイル名の DataStore が 2 つ作られています。<code>preferencesDataStore(name = "settings")</code> を、クラスの中や複数のファイルに書いていないか確かめます。この項目では、<code>AppContainer.kt</code> のトップレベルに 1 回だけ書きます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">ViewModel を作るところでアプリが落ちる</p>
+              <p><code>viewModel()</code> の既定のファクトリは、引数なしのコンストラクタ（または <code>SavedStateHandle</code> だけを受け取るコンストラクタ）を探します。<code>SavedStateHandle</code> の引数を外したら、2 次コンストラクタも <code>constructor()</code> に変えます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">保存した絞り込みを読むところで例外になる</p>
+              <p><code>TodoFilter.valueOf(保存した値)</code> は、知らない名前で例外を投げます。保存した値は外から来るデータとして扱い、<code>TodoFilter.entries.firstOrNull { it.name == 保存した値 } ?: TodoFilter.All</code> で受けます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>files/datastore</code> が無い</p>
+              <p>DataStore のファイルは、最初の書き込み（<code>edit</code>）まで作られません。取得に失敗して印をまだ付けていない場合や、絞り込みを一度も変えていない場合は、ファイルが無くても正常です。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">全件削除して起動し直したのに、API の 20 件に戻らない</p>
+              <p>この項目の意図した動きです。「取得済み」の印があるので、DB が空でも API には行きません。最初の状態に戻したいときは、<code>adb shell pm clear com.handson.android01</code> でアプリのデータ（DB と設定）を消します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">アプリが「ネットワークに接続できません」になる</p>
+              <p>印が無いときは API から取得するので、ネットワークが必要です。機内モードのままになっていないか確かめます。解除するコマンドは次のとおりです。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span></pre>
+</div>
+
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        Preferences DataStore を <code>AppContainer</code> のトップレベルに 1 つだけ作り、設定の読み書きを <code>SettingsRepository</code> にまとめました。
+        「最初の一覧を取得済み」の印を保存し、API に行くかどうかを DB の中身ではなく印で決めるようにしたので、全件削除して起動し直しても API から取り直しません。取得に失敗したときは印を付けず、再試行で取得できます。
+        絞り込みは <code>SavedStateHandle</code> から DataStore に移し、アプリを終了しても保たれるようにしました。起動直後は読み込み中の表示が出ているので、既定の「すべて」が見えることはありません。
+        テストでは <code>DataStore&lt;Preferences&gt;</code> の偽物を使い、<code>SettingsRepository</code> は本物のまま、設定ファイルを作らずに通ります。</p>
+      <p>次の項目（13: Hilt）では、09 から手書きしてきた <code>AppContainer</code> を Hilt に置き換え、部品を Hilt に作らせます。<code>data</code> のパッケージの <code>SettingsRepository</code> は、画面側（<code>ui.screens</code>）の <code>TodoFilter</code> を参照しています。この依存の向きも、そこで整理します。</p>
+
+      <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+              <p class="callout__title">完成コード</p>
+              <p>このレッスンの完成コードは、ブランチ <code>android/12-datastore</code> の <code>android/12-datastore/</code> ディレクトリにあります。</p>
+            </div>
+          </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../11-room/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">11: Room 3 でローカル保存</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">13: Hilt</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
