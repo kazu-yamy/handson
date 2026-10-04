@@ -102,7 +102,7 @@
                 <li>一覧を全件削除してから起動し直すと、DB が空なので、API から最初の 20 件を取り直します。ステップ 4 で実際に確かめます。</li>
                 <li>DB に一覧があれば API には行かないので、2 回目以降の起動では、サーバー側の変更は取り込まれません。</li>
               </ul>
-              <p>次の項目（12: DataStore で設定を保存）では、「最初の一覧を取得済み」という印を DataStore へ保存し、全件削除した後も取り直さないようにします。</p>
+              <p>次の項目（<a href="../12-datastore/index.html">12: DataStore で設定を保存</a>）では、「最初の一覧を取得済み」という印を DataStore へ保存し、全件削除した後も取り直さないようにします。</p>
             </div>
           </div>
 
@@ -1830,7 +1830,7 @@ java.lang.IllegalStateException: Room cannot verify the data integrity. Looks li
       <p>
         Room 3 の Gradle プラグインと KSP を設定し、Entity・DAO・Database を書きました。DAO と Database の実装は、Room が KSP で生成します。スキーマは JSON に書き出し、コミットしておきます。
         <code>TodoRepository</code> を置いて Room を唯一の情報源にし、API は DB が空のときにだけ使うようにしました。ViewModel は DB の <code>Flow</code>・絞り込み・読み込みの状態を <code>combine</code> して <code>uiState</code> を作ります。追加や削除は DAO に書くだけで、画面は <code>Flow</code> で更新されます。アプリを強制終了しても変更が残り、2 回目以降は機内モードでも一覧が出ます。ただし、全件削除すると次の起動で API の一覧を取り直し、サーバー側の変更は取り込みません。テストは偽の DAO を使い、本物の DB とネットワークを使わずに通ります。</p>
-      <p>次の項目（12: DataStore で設定を保存）では、絞り込みなどの設定を DataStore に保存し、アプリを再起動しても保たれるようにします。「最初の一覧を取得済み」の印も DataStore へ保存し、全件削除した後も API から取り直さないようにします。</p>
+      <p>次の項目（<a href="../12-datastore/index.html">12: DataStore で設定を保存</a>）では、絞り込みなどの設定を DataStore に保存し、アプリを再起動しても保たれるようにします。「最初の一覧を取得済み」の印も DataStore へ保存し、全件削除した後も API から取り直さないようにします。</p>
 
       <div class="callout callout--note">
             <span class="callout__icon" aria-hidden="true">ℹ️</span>
@@ -1846,10 +1846,10 @@ java.lang.IllegalStateException: Room cannot verify the data integrity. Looks li
           <span class="lesson-nav__direction">← 前のレッスン</span>
           <span class="lesson-nav__title">10: MockEngine でネットワークのテスト</span>
         </a>
-        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
-          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../12-datastore/index.html">
+          <span class="lesson-nav__direction">次のレッスン →</span>
           <span class="lesson-nav__title">12: DataStore で設定を保存</span>
-        </span>
+        </a>
       </nav>
 
     </div>
