@@ -1,0 +1,2070 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>14: WorkManager で定期バックアップ | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">14</li>
+        </ol>
+        <h1 class="lesson-title">WorkManager で定期バックアップ</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分（任意の実験を除く）</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 13 で Hilt による依存性注入まで作った人</li>
+          <li class="lesson-meta__item">📋 前提: 13 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること。エミュレータからインターネットに接続できること（バックアップの送信と release の確認で使います）</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../13-hilt/index.html">13: Hilt で依存性注入</a></li>
+          <li class="lesson-meta__item">🧩 版: <code>androidx.work:work-runtime</code> 2.12.0 / <code>androidx.work:work-testing</code> 2.12.0 / <code>androidx.hilt:hilt-work</code> 1.4.0 / <code>androidx.hilt:hilt-compiler</code> 1.4.0 / Hilt 2.60.1 / Kotlin 2.4.20 / AGP 9.4.1 / KSP 2.3.12 / Compose BOM 2026.09.00</li>
+          <li class="lesson-meta__item">🌿 完成コード: ブランチ <code>android/14-workmanager</code></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>WorkManager の既定の初期化を外し、<code>Configuration.Provider</code> で Hilt の <code>HiltWorkerFactory</code> を使う設定にできる</li>
+          <li><code>@HiltWorker</code> の <code>CoroutineWorker</code> を書き、<code>enqueueUniqueWork</code> で 1 回だけ動かして、logcat の出力で結果を確かめられる</li>
+          <li><code>Constraints</code>（ネットワーク・電池）と <code>Result.retry()</code>・バックオフで、条件がそろうまで待ち、失敗したら時間をおいてやり直す作業にできる</li>
+          <li><code>enqueueUniquePeriodicWork</code> と <code>KEEP</code> で 1 日 1 回のバックアップを予約し、最後に送った時刻を画面に出せる</li>
+          <li><code>TestListenableWorkerBuilder</code> と <code>WorkManagerTestInitHelper</code> で、Worker の結果と予約を端末上のテストで確かめられる</li>
+          <li><code>adb shell dumpsys jobscheduler</code> と機内モードの切り替えで、予約の条件と、アプリを終了しても動くことを確かめられる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>13 までのアプリの処理は、画面を開いている間だけ動きます。この項目では、アプリを閉じていても動くバックグラウンドの処理を、WorkManager で作ります。</p>
+      <p>WorkManager に作業を予約すると、WorkManager は予約を自分の DB に記録し、OS の JobScheduler にジョブとして登録します。条件がそろうと、OS がアプリのプロセスを起動して（終了していても）、Worker を動かします。作業の本体は Worker というクラスに書きます。</p>
+
+      <h3 id="when-to-use">WorkManager が向いている処理</h3>
+
+          <table>
+            <thead>
+            <tr><th></th><th>例</th><th>この項目では</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>向いている</td><td>アプリを閉じても、条件（ネットワーク・電池など）がそろったときに確実に実行したい作業。失敗したら時間をおいてやり直したい作業（サーバーへのデータ送信など）</td><td>Todo 一覧のバックアップに使う</td></tr>
+            <tr><td>向いている</td><td>すぐに始めて、すぐに終えたい作業（ユーザーの操作をきっかけにした送信など）。expedited work（優先して実行する作業）として依頼します</td><td>扱わない（API 31 未満では通知が必要なため）</td></tr>
+            <tr><td>向いていない</td><td>決まった時刻に実行したい処理（「毎日 9 時」など）。時刻が要るなら <code>AlarmManager</code> の領分です</td><td>扱わない</td></tr>
+            <tr><td>向いていない</td><td>画面が出ている間だけ動けばよい処理（一覧の読み込みなど）。画面を離れたら止めてよいので、コルーチン（<code>viewModelScope</code>）で書きます</td><td><code>TodoListViewModel</code> で使っている</td></tr>
+            </tbody>
+          </table>
+      <p>1 日周期の作業は、「毎日決まった時刻」ではなく「1 日に 1 回くらい、条件がそろったとき」に動きます。端末が省電力の状態（Doze）にある間や、アプリの使用頻度による制限（App Standby）によっては、さらに後ろへずれます。</p>
+
+      <h3 id="theme">この項目の題材: Todo 一覧の定期バックアップ</h3>
+      <p>端末の Todo 一覧を、1 日に 1 回サーバーへ送ってバックアップします。09〜13 では「最初の一覧だけを API から取得し、以後は端末の DB（Room）が正」という方針で作ってきました。バックアップは端末から送るだけで、サーバーからは何も取り込まないので、この方針と矛盾しません。</p>
+          <ul>
+            <li>送信先は、09 から使っている練習用の API（JSONPlaceholder）の <code>POST https://jsonplaceholder.typicode.com/todos</code> です。Todo の配列を送ると <code>201 Created</code> を返しますが、実際には保存されません。送信と応答までは本物の API と同じです。</li>
+            <li>送るのは Todo の一覧（番号・タイトル・完了したかどうか）だけです。API の形に合わせて <code>userId</code> を 1 に固定して付けます。</li>
+            <li>条件は「ネットワークにつながっている」と「電池残量が少なくない」の 2 つです。通信の失敗やサーバーのエラー（5xx）では、時間をおいてやり直します。</li>
+            <li>最後に送った時刻は DataStore に残し、一覧の上部に「最終バックアップ: 10/4 12:00」の形で出します。</li>
+            <li>バックアップから復元する機能は作りません。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">公開 API へ 1 日 1 回送信される</p>
+              <p>この項目のアプリ（debug 版も含む）を入れた端末は、1 日に 1 回、JSONPlaceholder へ Todo の一覧を送ります。ハンズオンが終わったら、最後のステップでアプリをアンインストールします。</p>
+            </div>
+          </div>
+
+      <h3 id="parts">登場する部品</h3>
+
+          <table>
+            <thead>
+            <tr><th>部品</th><th>役割</th><th>ステップ</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>TodoApplication</code></td><td><code>Configuration.Provider</code> で WorkManager に設定（Hilt の <code>HiltWorkerFactory</code>）を渡す。起動のたびにバックアップを予約する</td><td>1・2・4</td></tr>
+            <tr><td><code>work/TodoBackupWorker</code>（新規）</td><td>1 回分のバックアップ。<code>TodoRepository.backupTodos()</code> を呼び、結果（成功・失敗・やり直し）を返す</td><td>2・3</td></tr>
+            <tr><td><code>work/TodoBackupScheduler</code>（新規）</td><td>WorkManager への予約の窓口。条件・バックオフ・周期を決める</td><td>2・3・4</td></tr>
+            <tr><td><code>TodoRepository.backupTodos()</code></td><td>DB の一覧を <code>TodoApi.uploadBackup()</code> で送り、送った時刻を <code>SettingsRepository</code> に残す</td><td>2</td></tr>
+            <tr><td>画面（<code>TodoListViewModel</code>・<code>TodoListScreen</code> ほか）</td><td>最後に送った時刻を DataStore から読み、<code>TopAppBar</code> に出す</td><td>4</td></tr>
+            </tbody>
+          </table>
+
+      <h3 id="what-we-build">この項目で作るもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>やること</th><th>主に変えるファイル</th><th>テストの件数（単体 / UI）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>WorkManager を入れ、Hilt の <code>WorkerFactory</code> で初期化する</td><td><code>libs.versions.toml</code>・<code>app/build.gradle.kts</code>・<code>AndroidManifest.xml</code>・<code>TodoApplication.kt</code></td><td>76 / 66</td></tr>
+            <tr><td>2</td><td>Worker を書いて 1 回だけ動かす</td><td><code>TodoBackupWorker.kt</code>・<code>TodoBackupScheduler.kt</code>（新規）・<code>TodoApi.kt</code>・<code>TodoRepository.kt</code> ほか</td><td>79 / 66</td></tr>
+            <tr><td>3</td><td>条件とリトライを付ける</td><td><code>TodoBackupScheduler.kt</code>・<code>TodoBackupWorker.kt</code>・<code>TodoBackupWorkerTest.kt</code>（新規）</td><td>79 / 70</td></tr>
+            <tr><td>4</td><td>毎日のバックアップにして、最後に送った時刻を表示する</td><td><code>TodoBackupScheduler.kt</code>・<code>TodoApplication.kt</code>・画面の 4 ファイル・<code>TodoBackupSchedulerTest.kt</code>（新規）</td><td>79 / 72</td></tr>
+            <tr><td>5</td><td>まとめて確認する（テスト・lint、機内モードでの UI テスト、release）</td><td>なし</td><td>79 / 72</td></tr>
+            </tbody>
+          </table>
+      <p>13 の完成コードからの変更は、19 ファイル・追加と削除を合わせて 435 行です（準備の名前の変更を除く）。そのうち 222 行はテストです。テストのファイルは、全文を折りたたみに載せたので、そのまま貼り付けてください。</p>
+
+      <h3 id="versions">使用バージョン</h3>
+
+          <table>
+            <thead>
+            <tr><th>ライブラリ</th><th>版</th><th>用途</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>androidx.work:work-runtime</code></td><td>2.12.0</td><td>WorkManager の本体（<code>CoroutineWorker</code>・<code>WorkManager</code>・<code>Constraints</code> など）</td></tr>
+            <tr><td><code>androidx.work:work-testing</code></td><td>2.12.0</td><td>UI テスト（androidTest）用。<code>TestListenableWorkerBuilder</code>・<code>WorkManagerTestInitHelper</code></td></tr>
+            <tr><td><code>androidx.hilt:hilt-work</code></td><td>1.4.0</td><td><code>@HiltWorker</code> と <code>HiltWorkerFactory</code></td></tr>
+            <tr><td><code>androidx.hilt:hilt-compiler</code></td><td>1.4.0</td><td>KSP で動くコード生成（<code>@HiltWorker</code> の Worker を Hilt に登録するコードを作る）</td></tr>
+            </tbody>
+          </table>
+      <p>執筆時点（2026年10月）の最新の安定版です。<code>work-runtime</code> 2.12.0 は 2026年9月23日の版で、minSdk は 24 です（このプロジェクトは 26）。<code>hilt-work</code> と <code>hilt-compiler</code> は、13 で足した <code>androidxHilt</code>（1.4.0）と同じ版です。Hilt 2.60.1・KSP 2.3.12・Kotlin 2.4.20・Java 11 は 13 のままで、ビルドとテストが通りました。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>work-runtime-ktx</code> は使わない</p>
+              <p>ネット上の解説には、<code>androidx.work:work-runtime-ktx</code> を足すものが多くあります。WorkManager 2.9 以降、<code>CoroutineWorker</code> などの Kotlin 向けの機能は <code>work-runtime</code> に統合されました。<code>work-runtime-ktx</code> は互換のために残っているだけで、中身は空です。</p>
+            </div>
+          </div>
+
+      <h2 id="prepare">準備</h2>
+      <p>13 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 14 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid13&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid14&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid13&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid14&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span></pre>
+</div>
+          <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // Step 1: 変数・関数・文字列テンプレート・when 式</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid13&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid14&quot;</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できる。型は推論されるが、ここでは Int のまま</span><span class="diff-line">  var counter = 0</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          counter = 0</span><span class="diff-line">          assertEquals(1, incrementCounter())</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid13&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid14&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+          <p>パッケージ名と <code>applicationId</code>（<code>com.handson.android01</code>）は 13 と同じく変えません。エミュレータも 13 と同じ手順で起動しておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">emulator-5554	device</span></pre>
+</div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">WorkManager を入れ、Hilt の WorkerFactory で初期化する</h3>
+        </div>
+        <div class="step__body">
+          <p>WorkManager と、Worker で Hilt の部品を使うための <code>hilt-work</code> を足します。続けて、WorkManager が Hilt の工場（<code>HiltWorkerFactory</code>）で Worker を作るように、初期化の方法を変えます。このステップでは、まだ誰も WorkManager を使わないので、アプリの動きは 13 と同じです。</p>
+          <h4>依存を足す</h4>
+          <p>バージョンカタログに、版とライブラリを足します。<code>androidxHilt</code>（1.4.0）は 13 で足してあるので、<code>hilt-work</code> と <code>hilt-compiler</code> はそれを参照します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  ksp = &quot;2.3.12&quot;</span><span class="diff-line">  hilt = &quot;2.60.1&quot;</span><span class="diff-line">  androidxHilt = &quot;1.4.0&quot;</span><span class="diff-line diff-line--add">+ work = &quot;2.12.0&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  androidx-navigation3-ui = { group = &quot;androidx.navigation3&quot;, name = &quot;navigation3-ui&quot;, version.ref = &quot;navigation3&quot; }</span><span class="diff-line">  androidx-datastore-preferences = { group = &quot;androidx.datastore&quot;, name = &quot;datastore-preferences&quot;, version.ref = &quot;datastore&quot; }</span><span class="diff-line">  androidx-hilt-lifecycle-viewmodel-compose = { group = &quot;androidx.hilt&quot;, name = &quot;hilt-lifecycle-viewmodel-compose&quot;, version.ref = &quot;androidxHilt&quot; }</span><span class="diff-line diff-line--add">+ androidx-hilt-compiler = { group = &quot;androidx.hilt&quot;, name = &quot;hilt-compiler&quot;, version.ref = &quot;androidxHilt&quot; }</span><span class="diff-line diff-line--add">+ androidx-hilt-work = { group = &quot;androidx.hilt&quot;, name = &quot;hilt-work&quot;, version.ref = &quot;androidxHilt&quot; }</span><span class="diff-line">  androidx-room3-compiler = { group = &quot;androidx.room3&quot;, name = &quot;room3-compiler&quot;, version.ref = &quot;room3&quot; }</span><span class="diff-line">  androidx-room3-runtime = { group = &quot;androidx.room3&quot;, name = &quot;room3-runtime&quot;, version.ref = &quot;room3&quot; }</span><span class="diff-line diff-line--add">+ androidx-work-runtime = { group = &quot;androidx.work&quot;, name = &quot;work-runtime&quot;, version.ref = &quot;work&quot; }</span><span class="diff-line diff-line--add">+ androidx-work-testing = { group = &quot;androidx.work&quot;, name = &quot;work-testing&quot;, version.ref = &quot;work&quot; }</span><span class="diff-line">  hilt-android = { group = &quot;com.google.dagger&quot;, name = &quot;hilt-android&quot;, version.ref = &quot;hilt&quot; }</span><span class="diff-line">  hilt-android-compiler = { group = &quot;com.google.dagger&quot;, name = &quot;hilt-android-compiler&quot;, version.ref = &quot;hilt&quot; }</span><span class="diff-line">  hilt-android-testing = { group = &quot;com.google.dagger&quot;, name = &quot;hilt-android-testing&quot;, version.ref = &quot;hilt&quot; }</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.core.ktx)</span><span class="diff-line">      implementation(libs.androidx.datastore.preferences)</span><span class="diff-line">      implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.hilt.work)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.runtime.compose)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.runtime.ktx)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.viewmodel.compose)</span><span class="diff-line">      implementation(libs.androidx.navigation3.runtime)</span><span class="diff-line">      implementation(libs.androidx.navigation3.ui)</span><span class="diff-line">      implementation(libs.androidx.room3.runtime)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.work.runtime)</span><span class="diff-line">      implementation(libs.hilt.android)</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      implementation(libs.kotlinx.serialization.core)</span><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.ktor.client.content.negotiation)</span><span class="diff-line">      implementation(libs.ktor.client.core)</span><span class="diff-line">      implementation(libs.ktor.serialization.kotlinx.json)</span><span class="diff-line diff-line--add">+     ksp(libs.androidx.hilt.compiler)</span><span class="diff-line">      ksp(libs.androidx.room3.compiler)</span><span class="diff-line">      ksp(libs.hilt.android.compiler)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">  ...</span><span class="diff-line">      androidTestImplementation(libs.androidx.compose.ui.test.junit4)</span><span class="diff-line">      androidTestImplementation(libs.androidx.espresso.core)</span><span class="diff-line">      androidTestImplementation(libs.androidx.junit)</span><span class="diff-line diff-line--add">+     androidTestImplementation(libs.androidx.work.testing)</span><span class="diff-line">      androidTestImplementation(libs.hilt.android.testing)</span><span class="diff-line">      androidTestImplementation(libs.ktor.client.mock)</span><span class="diff-line">      kspAndroidTest(libs.hilt.android.compiler)</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>work-runtime</code> は WorkManager の本体です。<code>work-testing</code> はステップ 3・4 のテストで使うので、<code>androidTestImplementation</code> にします。</li>
+            <li><code>hilt-work</code> は <code>implementation</code>、<code>hilt-compiler</code>（<code>androidx.hilt</code>）は <code>ksp</code> です。<code>hilt-compiler</code> は、13 で足した Dagger の <code>hilt-android-compiler</code> とは別物で、両方とも必要です。</li>
+          </ul>
+          <h4>既定の初期化を外す</h4>
+          <p>WorkManager は、何もしなければ、アプリの起動時に <code>androidx.startup</code> の仕組みで初期化されます。このときの設定は既定の設定で、<code>TodoApplication</code> に書いた設定は読まれません。</p>
+          <p>既定の設定の <code>WorkerFactory</code>（Worker を作る工場）は、<code>(Context, WorkerParameters)</code> の 2 つを受け取るコンストラクタしか呼べません。ステップ 2 の Worker は <code>TodoRepository</code> も受け取るので、Hilt の工場で作る必要があります。そこで、manifest で既定の初期化だけを外します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/AndroidManifest.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">                  &lt;category android:name=&quot;android.intent.category.LAUNCHER&quot; /&gt;</span><span class="diff-line">              &lt;/intent-filter&gt;</span><span class="diff-line">          &lt;/activity&gt;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         &lt;!-- WorkManager は、既定では androidx.startup がアプリの起動時に「既定の設定」で初期化する。</span><span class="diff-line diff-line--add">+              Hilt の WorkerFactory を使う設定（TodoApplication の workManagerConfiguration）を読ませるため、その初期化だけを外す。</span><span class="diff-line diff-line--add">+              provider は他のライブラリ（Lifecycle など）の初期化にも使われているので、provider ごとは消さない（merge） --&gt;</span><span class="diff-line diff-line--add">+         &lt;provider</span><span class="diff-line diff-line--add">+             android:name=&quot;androidx.startup.InitializationProvider&quot;</span><span class="diff-line diff-line--add">+             android:authorities=&quot;${applicationId}.androidx-startup&quot;</span><span class="diff-line diff-line--add">+             android:exported=&quot;false&quot;</span><span class="diff-line diff-line--add">+             tools:node=&quot;merge&quot;&gt;</span><span class="diff-line diff-line--add">+             &lt;meta-data</span><span class="diff-line diff-line--add">+                 android:name=&quot;androidx.work.WorkManagerInitializer&quot;</span><span class="diff-line diff-line--add">+                 android:value=&quot;androidx.startup&quot;</span><span class="diff-line diff-line--add">+                 tools:node=&quot;remove&quot; /&gt;</span><span class="diff-line diff-line--add">+         &lt;/provider&gt;</span><span class="diff-line">      &lt;/application&gt;</span><span class="diff-line">  </span><span class="diff-line">  &lt;/manifest&gt;</span></pre>
+</div>
+          <ul>
+            <li><code>InitializationProvider</code> は、WorkManager 以外のライブラリ（Lifecycle など）の初期化にも使われています。<code>provider</code> には <code>tools:node="merge"</code> を付けて残し、WorkManager の <code>meta-data</code> だけを <code>tools:node="remove"</code> で消します。</li>
+            <li><code>provider</code> ごと <code>tools:node="remove"</code> にすると、他のライブラリの初期化も止まります。</li>
+          </ul>
+          <h4><code>TodoApplication</code> に設定を書く</h4>
+          <p>初期化を外すと、WorkManager は最初に使われた時点（<code>WorkManager.getInstance</code>）で、アプリの <code>Configuration.Provider</code> から設定を読みます。13 で空にした <code>TodoApplication</code> へ実装します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/TodoApplication.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01</span><span class="diff-line">  </span><span class="diff-line">  import android.app.Application</span><span class="diff-line diff-line--add">+ import android.util.Log</span><span class="diff-line diff-line--add">+ import androidx.hilt.work.HiltWorkerFactory</span><span class="diff-line diff-line--add">+ import androidx.work.Configuration</span><span class="diff-line">  import dagger.hilt.android.HiltAndroidApp</span><span class="diff-line diff-line--add">+ import javax.inject.Inject</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // Hilt の入口。この注釈を付けると、アプリ全体の部品の置き場所（コンポーネント）がここで作られる</span><span class="diff-line diff-line--add">+ // Hilt の入口。この注釈を付けると、アプリ全体の部品の置き場所（コンポーネント）がここで作られる。</span><span class="diff-line diff-line--add">+ // Configuration.Provider: WorkManager は、最初に使われたとき（WorkManager.getInstance）に、ここから設定を読んで初期化する</span><span class="diff-line">  @HiltAndroidApp</span><span class="diff-line diff-line--remove">- class TodoApplication : Application()</span><span class="diff-line diff-line--add">+ class TodoApplication : Application(), Configuration.Provider {</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // @HiltWorker の Worker を作る工場。Hilt が super.onCreate() の中で注入する</span><span class="diff-line diff-line--add">+     @Inject</span><span class="diff-line diff-line--add">+     lateinit var workerFactory: HiltWorkerFactory</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // get() にして、読まれるたびに作る（注入より前に読まれないことは、WorkManager を onCreate 以降で使うことで守る）</span><span class="diff-line diff-line--add">+     override val workManagerConfiguration: Configuration</span><span class="diff-line diff-line--add">+         get() = Configuration.Builder()</span><span class="diff-line diff-line--add">+             .setWorkerFactory(workerFactory)</span><span class="diff-line diff-line--add">+             // WorkManager のログ（タグは WM- で始まる）。INFO なら Worker の結果が出る。DEBUG にすると、さらに詳しく出る</span><span class="diff-line diff-line--add">+             .setMinimumLoggingLevel(Log.INFO)</span><span class="diff-line diff-line--add">+             .build()</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <ul>
+            <li><code>workerFactory</code> は、13 の部品と同じく Hilt が注入します。注入されるのは <code>super.onCreate()</code> の中です。</li>
+            <li><code>workManagerConfiguration</code> は <code>get()</code> にして、読まれるたびに設定を作ります。WorkManager を使うのは <code>onCreate</code> 以降なので、注入より前に読まれることはありません。</li>
+            <li><code>setMinimumLoggingLevel(Log.INFO)</code> で、WorkManager のログ（タグは <code>WM-</code> で始まる）に Worker の結果が出るようにします。ステップ 2 から、このログで結果を確かめます。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>getWorkManagerConfiguration()</code> と書くとコンパイルエラーになる</p>
+              <p>公式の「Debug WorkManager」のページなど、ネット上の Kotlin の例には、古い書き方が残っています。<code>override fun getWorkManagerConfiguration(): Configuration</code> です。WorkManager 2.9 以降は、プロパティの <code>override val workManagerConfiguration: Configuration</code> です。筆者が古い書き方を試すと、次のエラーになりました（1 行目の続きの行に <code>val workManagerConfiguration: Configuration</code> が出ます）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">compileDebugKotlin の出力</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">e: file:///（プロジェクトのパス）/app/src/main/java/com/handson/android01/TodoApplication.kt:14:1 Class &#x27;TodoApplication&#x27; is not abstract and does not implement abstract member:
+e: file:///（プロジェクトのパス）/app/src/main/java/com/handson/android01/TodoApplication.kt:30:5 &#x27;getWorkManagerConfiguration&#x27; overrides nothing.</code></pre>
+</div>
+
+            </div>
+          </div>
+          <p>まとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 27s</span></pre>
+</div>
+          <p>筆者の環境では、エミュレータが起動し終えてから実行して 2 分半ほどでした。以降のステップのゲートも 2 分前後でした。<code>hilt-compiler</code> 1.4.0 は、KSP 2.3.12・Kotlin 2.4.20 でエラーなくビルドできました。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">1 回目は lint の解析で失敗することがある</p>
+              <p>筆者の環境では、依存を足した直後の 1 回目に、次の失敗が 1 度だけ出ました。Hilt のコード生成（<code>hiltJavaCompileDebugAndroidTest</code>）と lint の解析が並列に動き、lint が生成途中のファイルを読んだためです。コードの問題ではなく、もう一度実行すると成功しました（エミュレータが起動し終えてから、依存を足した状態でゼロから実行すると、失敗せずに通りました。再現する条件は分かっていません）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">&gt; Task :app:lintAnalyzeDebugUnitTest FAILED</span><span class="terminal__line">&gt; Task :app:lintAnalyzeDebugAndroidTest FAILED</span><span class="terminal__line">     Message: Unexpected failure during lint analysis (this is a bug in lint or one of the libraries it depends on)</span><span class="terminal__line">     Message: /（プロジェクトのパス）/app/build/generated/hilt/component_sources/debugAndroidTest/com/handson/android01/MainActivityTest_TestComponentDataSupplier.java (No such file or directory)</span><span class="terminal__line">BUILD FAILED in 59s</span></pre>
+</div>
+
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意: 既定の初期化が消えたことを APK で確かめる</summary>
+            <div class="disclosure__body">
+          <p>この確認は任意です。<code>apkanalyzer</code> は Android SDK の Command-line Tools に入っています。</p>
+          <p>APK に入った manifest（ライブラリの manifest と合わせた後のもの）を見ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/cmdline-tools/latest/bin/apkanalyzer manifest print app/build/outputs/apk/debug/app-debug.apk | grep -c WorkManagerInitializer</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/cmdline-tools/latest/bin/apkanalyzer manifest print app/build/outputs/apk/debug/app-debug.apk | grep -c InitializationProvider</span><span class="terminal__line">1</span></pre>
+</div>
+          <p><code>InitializationProvider</code> は残り、WorkManager の <code>meta-data</code>（<code>WorkManagerInitializer</code>）だけが消えています。</p>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 76 件と UI テスト 66 件がすべて成功すれば OK です。アプリの動きは、まだ 13 と同じです。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">Worker を書いて 1 回だけ動かす</h3>
+        </div>
+        <div class="step__body">
+          <p>バックアップの本体を書き、アプリの起動時に 1 回だけ動かします。まず「Worker が Hilt の部品を受け取って動く」ことを確かめます。条件とリトライはステップ 3、毎日の予約はステップ 4 で足します。</p>
+          <h4>送る処理を書く</h4>
+          <p>アプリの <code>Todo</code> を、API の形（<code>TodoDto</code>）に変換する関数を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoDto.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  // API の形からアプリの Todo への変換</span><span class="diff-line">  fun TodoDto.toTodo(): Todo = Todo(id = id, title = title, done = completed)</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ // 送るときの変換。userId は API の都合の値で、アプリでは使わないので 1 に固定</span><span class="diff-line diff-line--add">+ fun Todo.toDto(): TodoDto = TodoDto(userId = 1, id = id, title = title, completed = done)</span></pre>
+</div>
+          <p><code>TodoApi</code> に、一覧をまとめて送る <code>uploadBackup</code> を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoApi.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import io.ktor.client.plugins.contentnegotiation.ContentNegotiation</span><span class="diff-line">  import io.ktor.client.request.get</span><span class="diff-line">  import io.ktor.client.request.parameter</span><span class="diff-line diff-line--add">+ import io.ktor.client.request.post</span><span class="diff-line diff-line--add">+ import io.ktor.client.request.setBody</span><span class="diff-line diff-line--add">+ import io.ktor.http.ContentType</span><span class="diff-line diff-line--add">+ import io.ktor.http.contentType</span><span class="diff-line">  import io.ktor.serialization.kotlinx.json.json</span><span class="diff-line">  import kotlinx.serialization.json.Json</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">      suspend fun fetchTodos(limit: Int = 20): List&lt;Todo&gt; {</span><span class="diff-line">          val dtos: List&lt;TodoDto&gt; = client.get(&quot;$baseUrl/todos&quot;) { parameter(&quot;_limit&quot;, limit) }.body()</span><span class="diff-line">          return dtos.map { it.toTodo() }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // 一覧をまとめて送る（バックアップ）。失敗時は例外を投げる（2xx 以外も expectSuccess で例外になる）。</span><span class="diff-line diff-line--add">+     // 練習用の API は 201 Created を返すが、保存はしない。送信と応答までは本物の API と同じ</span><span class="diff-line diff-line--add">+     suspend fun uploadBackup(todos: List&lt;Todo&gt;) {</span><span class="diff-line diff-line--add">+         client.post(&quot;$baseUrl/todos&quot;) {</span><span class="diff-line diff-line--add">+             // 本文を JSON にする。ContentNegotiation が、List&lt;TodoDto&gt; を JSON の配列に変換する</span><span class="diff-line diff-line--add">+             contentType(ContentType.Application.Json)</span><span class="diff-line diff-line--add">+             setBody(todos.map { it.toDto() })</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>POST /todos</code> に、Todo の配列を JSON で送ります。1 件ずつ送ると、20 件で 20 回の通信になるので、1 回にまとめます。</li>
+            <li><code>createTodoHttpClient</code> で <code>expectSuccess = true</code> にしてあるので、2xx 以外の応答も例外になります。4xx は <code>ClientRequestException</code>、5xx は <code>ServerResponseException</code> です（ステップ 3 で使い分けます）。</li>
+          </ul>
+          <p>送った時刻を残す場所を DataStore に用意します。12 の絞り込みと同じファイルに、キーを 1 つ足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/SettingsRepository.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.datastore.preferences.core.Preferences</span><span class="diff-line">  import androidx.datastore.preferences.core.booleanPreferencesKey</span><span class="diff-line">  import androidx.datastore.preferences.core.edit</span><span class="diff-line diff-line--add">+ import androidx.datastore.preferences.core.longPreferencesKey</span><span class="diff-line">  import androidx.datastore.preferences.core.stringPreferencesKey</span><span class="diff-line">  import kotlinx.coroutines.flow.Flow</span><span class="diff-line">  import kotlinx.coroutines.flow.first</span><span class="diff-line">  ...</span><span class="diff-line">          dataStore.edit { it[FILTER] = filter.name }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // 最後にバックアップした時刻（エポックミリ秒）。まだ一度も無ければ null</span><span class="diff-line diff-line--add">+     val lastBackupAt: Flow&lt;Long?&gt; = dataStore.data.map { it[LAST_BACKUP_AT] }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     suspend fun setLastBackupAt(epochMillis: Long) {</span><span class="diff-line diff-line--add">+         dataStore.edit { it[LAST_BACKUP_AT] = epochMillis }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      private companion object {</span><span class="diff-line">          val FILTER = stringPreferencesKey(&quot;filter&quot;)</span><span class="diff-line">          val INITIAL_FETCH_DONE = booleanPreferencesKey(&quot;initial_fetch_done&quot;)</span><span class="diff-line diff-line--add">+         val LAST_BACKUP_AT = longPreferencesKey(&quot;last_backup_at&quot;)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+          <p><code>TodoRepository</code> に、DB の一覧を送って時刻を残す <code>backupTodos</code> を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoRepository.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import kotlinx.coroutines.flow.Flow</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.flow.first</span><span class="diff-line">  import kotlinx.coroutines.flow.map</span><span class="diff-line">  import javax.inject.Inject</span><span class="diff-line">  import javax.inject.Singleton</span><span class="diff-line">  ...</span><span class="diff-line">      suspend fun restore(todo: Todo) = dao.insert(todo.toEntity())</span><span class="diff-line">  </span><span class="diff-line">      suspend fun deleteDone() = dao.deleteDone()</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // DB の一覧を、まるごとサーバーへ送る。ローカルが正なので、送るだけで、サーバーからは何も取り込まない。</span><span class="diff-line diff-line--add">+     // 成功したら送った時刻を残し、送った件数を返す。失敗したら例外をそのまま投げる（やり直すかどうかは Worker が決める）</span><span class="diff-line diff-line--add">+     suspend fun backupTodos(): Int {</span><span class="diff-line diff-line--add">+         val todos = dao.observeAll().first().map { it.toTodo() }</span><span class="diff-line diff-line--add">+         api.uploadBackup(todos)</span><span class="diff-line diff-line--add">+         settings.setLastBackupAt(System.currentTimeMillis())</span><span class="diff-line diff-line--add">+         return todos.size</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  }</span></pre>
+</div>
+          <ul>
+            <li>DB の一覧は、DAO の <code>observeAll()</code> の最初の値（<code>first()</code>）で取ります。DAO に関数を足さないので、テストの偽物（<code>FakeTodoDao</code>）も変えずに済みます。</li>
+            <li>失敗したときは、例外をそのまま投げます。やり直すかどうかは、呼び出し側の Worker が決めます。</li>
+          </ul>
+          <h4>Worker を書く</h4>
+          <p><code>app/src/main/java/com/handson/android01/work/TodoBackupWorker.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/work/TodoBackupWorker.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.work
+
+import android.content.Context
+import androidx.hilt.work.HiltWorker
+import androidx.work.CoroutineWorker
+import androidx.work.WorkerParameters
+import com.handson.android01.data.TodoRepository
+import dagger.assisted.Assisted
+import dagger.assisted.AssistedInject
+import kotlin.coroutines.cancellation.CancellationException
+
+// バックグラウンドで 1 回分のバックアップを行う Worker。
+// @HiltWorker + @AssistedInject: Context と WorkerParameters は WorkManager が実行のたびに渡し（@Assisted）、
+// それ以外（TodoRepository）は Hilt が組み立てて渡す。作るのは TodoApplication で設定した HiltWorkerFactory
+@HiltWorker
+class TodoBackupWorker @AssistedInject constructor(
+    @Assisted appContext: Context,
+    @Assisted params: WorkerParameters,
+    private val repository: TodoRepository,
+) : CoroutineWorker(appContext, params) {
+
+    // CoroutineWorker の doWork はメインスレッドの外（既定では Dispatchers.Default）で動く。
+    // 戻り値で、WorkManager に結果を伝える（success / failure / retry）
+    override suspend fun doWork(): Result = try {
+        repository.backupTodos()
+        Result.success()
+    } catch (e: CancellationException) {
+        // 条件を満たさなくなったときなど、WorkManager に止められると、コルーチンがキャンセルされる。握りつぶさない
+        throw e
+    } catch (e: Exception) {
+        Result.failure()
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li>Worker は <code>CoroutineWorker</code> を継承し、<code>suspend fun doWork()</code> に作業を書きます。<code>suspend</code> の Repository をそのまま呼べます。</li>
+            <li><code>doWork</code> の戻り値で、WorkManager に結果を伝えます。<code>Result.success()</code>（成功）・<code>Result.failure()</code>（失敗。やり直さない）・<code>Result.retry()</code>（時間をおいてやり直す。ステップ 3 で使う）の 3 種類です。</li>
+            <li><code>@HiltWorker</code> と <code>@AssistedInject</code> で、Hilt から部品を受け取ります。<code>@Assisted</code> を付けた <code>Context</code> と <code>WorkerParameters</code> は、WorkManager が実行のたびに渡します。それ以外の引数（<code>TodoRepository</code>）は、Hilt が組み立てて渡します。</li>
+            <li><code>CancellationException</code> は握りつぶさずに投げ直します。条件を満たさなくなったときなどに WorkManager が作業を止めると、コルーチンのキャンセルとして届くためです。</li>
+          </ul>
+          <h4>予約の窓口を書く</h4>
+          <p><code>app/src/main/java/com/handson/android01/work/TodoBackupScheduler.kt</code> を作ります。WorkManager への登録は、このクラスにまとめます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/work/TodoBackupScheduler.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.work
+
+import android.content.Context
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+
+// バックアップの予約の窓口。WorkManager への登録をここにまとめる
+class TodoBackupScheduler @Inject constructor(@ApplicationContext private val context: Context) {
+
+    // WorkManager.getInstance は、初回に TodoApplication.workManagerConfiguration を読んで初期化する。
+    // コンストラクタで取ると、TodoApplication への注入の途中で読まれる。今は workerFactory が先に注入されるので問題ないが、
+    // フィールドの宣言の順に頼ることになるので、使うときに取る
+    private val workManager: WorkManager get() = WorkManager.getInstance(context)
+
+    // 1 回だけのバックアップ。同じ名前の作業が待ち・実行中なら、新しく入れない（KEEP）。
+    // 終わった作業は数えないので、起動のたびに 1 回動く
+    fun backupOnce() {
+        val request = OneTimeWorkRequestBuilder&lt;TodoBackupWorker&gt;().build()
+        workManager.enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.KEEP, request)
+    }
+
+    companion object {
+        const val UNIQUE_NAME = &quot;todo-backup&quot;
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li><code>OneTimeWorkRequestBuilder</code> で、1 回だけの作業の依頼を作ります。</li>
+            <li><code>enqueueUniqueWork</code> は、名前（<code>todo-backup</code>）を付けて予約します。<code>ExistingWorkPolicy.KEEP</code> は、同じ名前の作業が待ちか実行中なら、新しく入れません。終わった作業は数えないので、このステップでは起動のたびに 1 回動きます。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>WorkManager</code> をコンストラクタで取らない理由</p>
+              <p><code>WorkManager.getInstance</code> は、初回に <code>TodoApplication</code> の <code>workManagerConfiguration</code> を読んで初期化します。Hilt は <code>super.onCreate()</code> の中で、<code>TodoApplication</code> のフィールドを宣言の順（<code>workerFactory</code> → <code>backupScheduler</code>）に注入します。<code>TodoBackupScheduler</code> のコンストラクタで <code>getInstance</code> を呼ぶと、<code>backupScheduler</code> の注入中に設定が読まれます。このコードでは <code>workerFactory</code> が先に注入されているので、問題は起きません。ただし、これはフィールドの宣言の順に頼った書き方です。順を入れ替えると、まだ注入されていない <code>workerFactory</code> を読み、<code>lateinit</code> のプロパティが初期化されていないという例外になりえます。そこで、使うたびに取る <code>get()</code> の形にしました。筆者は逆の書き方での失敗は試していません。</p>
+              <p>同じ理由で、<code>WorkManager</code> を <code>@Provides</code> で提供することもしていません。</p>
+            </div>
+          </div>
+          <h4>アプリの起動時に予約する</h4>
+          <p><code>TodoApplication</code> で <code>TodoBackupScheduler</code> を受け取り、<code>onCreate</code> で予約します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/TodoApplication.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import android.util.Log</span><span class="diff-line">  import androidx.hilt.work.HiltWorkerFactory</span><span class="diff-line">  import androidx.work.Configuration</span><span class="diff-line diff-line--add">+ import com.handson.android01.work.TodoBackupScheduler</span><span class="diff-line">  import dagger.hilt.android.HiltAndroidApp</span><span class="diff-line">  import javax.inject.Inject</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">      @Inject</span><span class="diff-line">      lateinit var workerFactory: HiltWorkerFactory</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     @Inject</span><span class="diff-line diff-line--add">+     lateinit var backupScheduler: TodoBackupScheduler</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // 起動のたびに、バックアップを予約する。super.onCreate() で注入が終わるので、その後で使う</span><span class="diff-line diff-line--add">+     override fun onCreate() {</span><span class="diff-line diff-line--add">+         super.onCreate()</span><span class="diff-line diff-line--add">+         backupScheduler.backupOnce()</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      // get() にして、読まれるたびに作る（注入より前に読まれないことは、WorkManager を onCreate 以降で使うことで守る）</span><span class="diff-line">      override val workManagerConfiguration: Configuration</span><span class="diff-line">          get() = Configuration.Builder()</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>super.onCreate()</code> の中で注入が終わるので、その後で使います。</li>
+            <li>予約する場所は、アプリの起動時に必ず通る <code>Application</code> にしました。ViewModel は画面がある間だけのものなので、バックグラウンドの予約の持ち主には合いません。</li>
+            <li>UI テストは 13 から <code>HiltTestApplication</code> で動くので、<code>TodoApplication</code> は作られず、予約もされません。</li>
+          </ul>
+          <h4>テストを足す</h4>
+          <p>単体テストを 3 件足します。<code>TodoApiTest.kt</code> と <code>TodoRepositoryTest.kt</code> は、ファイル全体を次の内容に差し替えてください。</p>
+          <ul>
+            <li><code>uploadBackup_postsTodosAsJsonArray</code>: <code>MockEngine</code> が受け取ったリクエストが <code>POST</code> で、パスが <code>/todos</code> で、本文に <code>"title":"write"</code> と <code>"completed":true</code> が入っている。</li>
+            <li><code>backup_sendsAllTodosAndRecordsTime</code>: DB の 2 件を 1 回の通信で送り、時刻が残る。</li>
+            <li><code>failedBackup_doesNotRecordTime</code>: サーバーが 500 を返すと例外になり、時刻は残らない。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoApiTest.kt</code> の全文を見る（ファイル全体を差し替える）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/data/TodoApiTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import com.handson.android01.kotlin.Todo
+import io.ktor.client.call.NoTransformationFoundException
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockRequestHandleScope
+import io.ktor.client.engine.mock.respond
+import io.ktor.client.engine.mock.toByteArray
+import io.ktor.client.plugins.ClientRequestException
+import io.ktor.client.plugins.HttpRequestTimeoutException
+import io.ktor.client.plugins.ServerResponseException
+import io.ktor.client.request.HttpRequestData
+import io.ktor.client.request.HttpResponseData
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.headersOf
+import io.ktor.serialization.JsonConvertException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+// TodoApi の単体テスト（JVM 上。ネットワークには出ない）。MockEngine が、決めたレスポンスを返す。
+// createTodoHttpClient を通すので、本番と同じ JSON の設定・ステータスの検査・タイムアウトが効く
+class TodoApiTest {
+
+    private val json = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+
+    private val body = &quot;&quot;&quot;
+        [
+          {&quot;userId&quot;: 1, &quot;id&quot;: 1, &quot;title&quot;: &quot;delectus aut autem&quot;, &quot;completed&quot;: false},
+          {&quot;userId&quot;: 1, &quot;id&quot;: 2, &quot;title&quot;: &quot;quis ut nam&quot;, &quot;completed&quot;: true}
+        ]
+    &quot;&quot;&quot;.trimIndent()
+
+    private fun api(
+        requestTimeoutMillis: Long = 15_000L,
+        handler: suspend MockRequestHandleScope.(HttpRequestData) -&gt; HttpResponseData,
+    ) = TodoApi(createTodoHttpClient(MockEngine(handler), requestTimeoutMillis))
+
+    @Test
+    fun fetchTodos_decodesJsonIntoTodos() = runTest {
+        val api = api { respond(body, HttpStatusCode.OK, json) }
+
+        val todos = api.fetchTodos()
+
+        assertEquals(listOf(Todo(1, &quot;delectus aut autem&quot;, done = false), Todo(2, &quot;quis ut nam&quot;, done = true)), todos)
+    }
+
+    // 送ったリクエストは、MockEngine の中で確かめられる
+    @Test
+    fun fetchTodos_sendsGetToTodosWithLimit() = runTest {
+        var request: HttpRequestData? = null
+        val api = api {
+            request = it
+            respond(&quot;[]&quot;, HttpStatusCode.OK, json)
+        }
+
+        api.fetchTodos(limit = 5)
+
+        assertEquals(HttpMethod.Get, request?.method)
+        assertEquals(&quot;https://jsonplaceholder.typicode.com/todos?_limit=5&quot;, request?.url.toString())
+    }
+
+    // バックアップは POST /todos に、Todo の一覧を JSON の配列で送る
+    @Test
+    fun uploadBackup_postsTodosAsJsonArray() = runTest {
+        var request: HttpRequestData? = null
+        val api = api {
+            request = it
+            respond(&quot;{}&quot;, HttpStatusCode.Created, json)
+        }
+
+        api.uploadBackup(listOf(Todo(1, &quot;write&quot;, done = true), Todo(2, &quot;test&quot;)))
+
+        assertEquals(HttpMethod.Post, request?.method)
+        assertEquals(&quot;/todos&quot;, request?.url?.encodedPath)
+        val sent = request!!.body.toByteArray().decodeToString()
+        assertTrue(sent, sent.contains(&quot;&quot;&quot;&quot;title&quot;:&quot;write&quot;&quot;&quot;&quot;) &amp;&amp; sent.contains(&quot;&quot;&quot;&quot;completed&quot;:true&quot;&quot;&quot;))
+    }
+
+    @Test
+    fun fetchTodos_ignoresUnknownKeys() = runTest {
+        val api = api {
+            respond(&quot;&quot;&quot;[{&quot;userId&quot;: 1, &quot;id&quot;: 1, &quot;title&quot;: &quot;a&quot;, &quot;completed&quot;: false, &quot;priority&quot;: &quot;high&quot;}]&quot;&quot;&quot;, HttpStatusCode.OK, json)
+        }
+
+        assertEquals(listOf(Todo(1, &quot;a&quot;)), api.fetchTodos())
+    }
+
+    // expectSuccess = true なので、2xx 以外は本文のデコードに進まず、ステータスの例外になる
+    @Test
+    fun fetchTodos_whenNotFound_throwsClientRequestException() = runTest {
+        val api = api { respond(&quot;&quot;&quot;{&quot;error&quot;: &quot;not found&quot;}&quot;&quot;&quot;, HttpStatusCode.NotFound, json) }
+
+        val e = failureOf&lt;ClientRequestException&gt; { api.fetchTodos() }
+
+        assertEquals(404, e.response.status.value)
+    }
+
+    @Test
+    fun fetchTodos_whenServerError_throwsServerResponseException() = runTest {
+        val api = api { respond(&quot;oops&quot;, HttpStatusCode.InternalServerError) }
+
+        val e = failureOf&lt;ServerResponseException&gt; { api.fetchTodos() }
+
+        assertEquals(500, e.response.status.value)
+    }
+
+    @Test
+    fun fetchTodos_whenJsonIsBroken_throwsJsonConvertException() = runTest {
+        val api = api { respond(&quot;&quot;&quot;[{&quot;userId&quot;: 1, &quot;id&quot;: 1, &quot;title&quot;:&quot;&quot;&quot;, HttpStatusCode.OK, json) }
+
+        failureOf&lt;JsonConvertException&gt; { api.fetchTodos() }
+    }
+
+    // 必須の項目（title）が無い JSON も、デコードの失敗になる
+    @Test
+    fun fetchTodos_whenRequiredFieldIsMissing_throwsJsonConvertException() = runTest {
+        val api = api { respond(&quot;&quot;&quot;[{&quot;userId&quot;: 1, &quot;id&quot;: 1, &quot;completed&quot;: false}]&quot;&quot;&quot;, HttpStatusCode.OK, json) }
+
+        failureOf&lt;JsonConvertException&gt; { api.fetchTodos() }
+    }
+
+    // Content-Type が JSON でないレスポンスは、ContentNegotiation が変換できない
+    @Test
+    fun fetchTodos_whenContentTypeIsMissing_throwsNoTransformationFoundException() = runTest {
+        val api = api { respond(body, HttpStatusCode.OK) }
+
+        failureOf&lt;NoTransformationFoundException&gt; { api.fetchTodos() }
+    }
+
+    // 応答が来ないとき: requestTimeoutMillis を過ぎると HttpRequestTimeoutException。応答の遅れは実時間（MockEngine は別のスレッドで動く）
+    @Test
+    fun fetchTodos_whenNoResponse_throwsTimeoutException() = runTest {
+        val api = api(requestTimeoutMillis = 100L) {
+            delay(5_000)
+            respond(body, HttpStatusCode.OK, json)
+        }
+
+        failureOf&lt;HttpRequestTimeoutException&gt; { api.fetchTodos() }
+    }
+
+    // block が E の例外で失敗することを確かめて、その例外を返す
+    private inline fun &lt;reified E : Throwable&gt; failureOf(block: () -&gt; Unit): E {
+        val e = runCatching(block).exceptionOrNull()
+        assertTrue(&quot;期待した例外: ${E::class.simpleName}、実際: $e&quot;, e is E)
+        return e as E
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoRepositoryTest.kt</code> の全文を見る（ファイル全体を差し替える）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/data/TodoRepositoryTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import com.handson.android01.kotlin.Todo
+import com.handson.android01.ui.screens.FakeDataStore
+import com.handson.android01.ui.screens.FakeTodoDao
+import com.handson.android01.ui.screens.FakeTodoServer
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Test
+
+// 「取得済み」の印（DataStore）で、初回の取得を 1 回だけにする判断のテスト。偽の DAO・偽のサーバー・偽の DataStore だけで動く
+class TodoRepositoryTest {
+
+    private val todos = listOf(Todo(1, &quot;write&quot;), Todo(2, &quot;test&quot;, done = true))
+
+    private val settings = SettingsRepository(FakeDataStore())
+    private val server = FakeTodoServer(todos)
+
+    // 取得済みの印があれば、DB が空でも取得しない（全件削除して再起動した場合）
+    @Test
+    fun fetchedMark_skipsFetchEvenWhenDbIsEmpty() = runTest {
+        settings.markInitialFetchDone()
+        val repository = TodoRepository(FakeTodoDao(), server.api, settings)
+
+        assertEquals(0, repository.fetchInitialTodosIfNeeded())
+
+        assertEquals(0, server.requestCount)
+    }
+
+    // 取得に成功したら保存して、印を付ける。2 回目は取得しない
+    @Test
+    fun successfulFetch_savesTodosAndMarksAsFetched() = runTest {
+        val repository = TodoRepository(FakeTodoDao(), server.api, settings)
+
+        assertEquals(2, repository.fetchInitialTodosIfNeeded())
+        assertEquals(0, repository.fetchInitialTodosIfNeeded())
+
+        assertTrue(settings.isInitialFetchDone())
+        assertEquals(1, server.requestCount)
+    }
+
+    // バックアップは、DB の全件を 1 回で送り、成功したら時刻を残す
+    @Test
+    fun backup_sendsAllTodosAndRecordsTime() = runTest {
+        val repository = TodoRepository(FakeTodoDao(todos), server.api, settings)
+
+        assertEquals(2, repository.backupTodos())
+
+        assertEquals(1, server.requestCount)
+        assertNotNull(settings.lastBackupAt.first())
+    }
+
+    // 失敗したら時刻を残さず、例外をそのまま投げる（やり直すかは Worker が決める）
+    @Test
+    fun failedBackup_doesNotRecordTime() = runTest {
+        server.status = HttpStatusCode.InternalServerError
+        val repository = TodoRepository(FakeTodoDao(todos), server.api, settings)
+
+        assertTrue(runCatching { repository.backupTodos() }.isFailure)
+
+        assertNull(settings.lastBackupAt.first())
+    }
+
+    // 取得に失敗したら、印を付けない（再試行でもう一度取得できる）
+    @Test
+    fun failedFetch_doesNotMarkAsFetched() = runTest {
+        server.status = HttpStatusCode.InternalServerError
+        val repository = TodoRepository(FakeTodoDao(), server.api, settings)
+
+        try {
+            repository.fetchInitialTodosIfNeeded()
+            fail(&quot;取得の失敗が例外で投げられるはず&quot;)
+        } catch (_: Exception) {
+            // 失敗は例外のまま投げられる（表示は ViewModel の仕事）
+        }
+
+        assertFalse(settings.isInitialFetchDone())
+    }
+
+    // 印が無くても DB に Todo があれば（印を付ける前の版で使っていた端末）、取得せずに印だけ付ける。API の一覧で上書きしないため
+    @Test
+    fun existingTodosWithoutMark_areKeptAndMarked() = runTest {
+        val repository = TodoRepository(FakeTodoDao(listOf(Todo(9, &quot;mine&quot;, done = true))), server.api, settings)
+
+        assertEquals(0, repository.fetchInitialTodosIfNeeded())
+
+        assertEquals(0, server.requestCount)
+        assertTrue(settings.isInitialFetchDone())
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <p>まとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 2s</span></pre>
+</div>
+          <p>単体テストは 79 件になりました。<code>@HiltWorker</code> から生成されたファイルも確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> find app/build/generated -name &#x27;TodoBackupWorker_*&#x27;</span><span class="terminal__line">app/build/generated/ksp/debug/java/com/handson/android01/work/TodoBackupWorker_AssistedFactory_Impl.java</span><span class="terminal__line">app/build/generated/ksp/debug/java/com/handson/android01/work/TodoBackupWorker_AssistedFactory.java</span><span class="terminal__line">app/build/generated/ksp/debug/java/com/handson/android01/work/TodoBackupWorker_Factory.java</span><span class="terminal__line">app/build/generated/ksp/debug/java/com/handson/android01/work/TodoBackupWorker_HiltModule.java</span></pre>
+</div>
+          <p><code>TodoBackupWorker_HiltModule</code> が、<code>HiltWorkerFactory</code> の一覧に Worker を登録する module です。<code>TodoBackupWorker_AssistedFactory</code> は、WorkManager が渡す 2 つの引数を受け取って Worker を作る工場です。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">WorkManager は内部で Room 2 を使う</p>
+              <p>WorkManager は、予約の記録に Room 2（<code>androidx.room:room-runtime</code> 2.7.0）を使います。アプリの Room 3（<code>androidx.room3:room3-runtime</code> 3.0.3）とはパッケージが別なので、両方が入っても共存できます。依存の解決では、Room 2 が使う <code>androidx.sqlite</code> 2.5.0 が、Room 3 の 2.7.1 に引き上げられました。この状態で、次の確認のとおり Worker は成功しました。</p>
+            </div>
+          </div>
+          <h4>アプリで確かめる</h4>
+          <p>アプリを入れ、データを消してから起動します。<code>pm clear</code> は DB と DataStore に加えて、WorkManager の予約の記録も消します。<code>KEEP</code> で前の予約が残らないように、エミュレータで確かめるときは毎回 <code>pm clear</code> から始めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm clear com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -c</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>数秒待ってから、WorkManager のログを見ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s WM-WorkerWrapper:I | grep &quot;Worker result&quot;</span><span class="terminal__line">10-04 13:23:07.887  5083  5108 I WM-WorkerWrapper: Worker result SUCCESS for Work [ id=abe26d64-d2f1-4e76-ad6a-33eed4e7e32f, class=com.handson.android01.work.TodoBackupWorker, tags={ com.handson.android01.work.TodoBackupWorker } ]</span></pre>
+</div>
+          <p><code>Worker result SUCCESS</code> と、Worker のクラス名が出ました。日時・番号・<code>id</code> は実行のたびに変わります。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: WorkManager の診断で、予約と実行の一覧を見る</summary>
+            <div class="disclosure__body">
+          <p>この実験は任意です。読むだけでもかまいません。WorkManager の診断の機能では、adb からブロードキャストを送ると、予約と実行の一覧がログに出ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am broadcast -a androidx.work.diagnostics.REQUEST_DIAGNOSTICS -p com.handson.android01</span><span class="terminal__line">Broadcasting: Intent { act=androidx.work.diagnostics.REQUEST_DIAGNOSTICS flg=0x400000 pkg=com.handson.android01 }</span><span class="terminal__line">Broadcast completed: result=0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s WM-DiagnosticsWrkr:I</span><span class="terminal__line">10-04 13:23:14.633  5083  5100 I WM-DiagnosticsWrkr: Recently completed work:</span><span class="terminal__line">10-04 13:23:14.633  5083  5100 I WM-DiagnosticsWrkr: </span><span class="terminal__line">10-04 13:23:14.634  5083  5100 I WM-DiagnosticsWrkr:  Id 	 Class Name	 Job Id	 State	 Unique Name	 Tags	</span><span class="terminal__line">10-04 13:23:14.634  5083  5100 I WM-DiagnosticsWrkr: abe26d64-d2f1-4e76-ad6a-33eed4e7e32f	 com.handson.android01.work.TodoBackupWorker	 null	 SUCCEEDED	 todo-backup	 com.handson.android01.work.TodoBackupWorker	</span><span class="terminal__line">10-04 13:23:14.634  5083  5100 I WM-DiagnosticsWrkr: Running work:</span><span class="terminal__line">10-04 13:23:14.634  5083  5100 I WM-DiagnosticsWrkr: </span><span class="terminal__line">10-04 13:23:14.634  5083  5100 I WM-DiagnosticsWrkr:  Id 	 Class Name	 Job Id	 State	 Unique Name	 Tags	</span><span class="terminal__line">10-04 13:23:14.634  5083  5100 I WM-DiagnosticsWrkr: badb2287-d56b-4924-a147-4f6bf8537ca6	 androidx.work.impl.workers.DiagnosticsWorker	 1	 RUNNING	 	 androidx.work.impl.workers.DiagnosticsWorker</span></pre>
+</div>
+          <p>「Recently completed work」（最近終わった作業）に、<code>todo-backup</code> の名前で <code>SUCCEEDED</code> と出ています。「Running work」の行は、診断そのものを行う Worker です。</p>
+
+            </div>
+          </details>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: WorkManager の初期化を間違えると</summary>
+            <div class="disclosure__body">
+          <p>この実験は任意です。読むだけでもかまいません。WorkManager の初期化を間違えたときの症状を 3 つ見ます（いずれも 1 回の実測。実験の後は元に戻しています）。</p>
+          <h4><code>setWorkerFactory</code> を書き忘れる</h4>
+          <p>筆者は、<code>TodoApplication</code> の <code>.setWorkerFactory(workerFactory)</code> をコメントアウトしました。そのうえで、インストールして <code>pm clear</code> の後に起動しました。アプリは普通に起動し、クラッシュも記録されません。作業だけが失敗します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -E &quot;WM-WorkerFactory|WM-WorkerWrapper&quot;</span><span class="terminal__line">10-04 13:23:49.662  5210  5226 E WM-WorkerFactory: Could not instantiate com.handson.android01.work.TodoBackupWorker</span><span class="terminal__line">10-04 13:23:49.662  5210  5226 E WM-WorkerFactory: java.lang.NoSuchMethodException: com.handson.android01.work.TodoBackupWorker.&lt;init&gt; [class android.content.Context, class androidx.work.WorkerParameters]</span><span class="terminal__line">10-04 13:23:49.662  5210  5226 E WM-WorkerFactory: 	at java.lang.Class.getConstructor0(Class.java:3385)</span><span class="terminal__line">10-04 13:23:49.662  5210  5226 E WM-WorkerFactory: 	at java.lang.Class.getDeclaredConstructor(Class.java:3067)</span><span class="terminal__line">10-04 13:23:49.662  5210  5226 E WM-WorkerFactory: 	at androidx.work.WorkerFactory.createWorkerWithDefaultFallback$fallbackToReflection(WorkerFactory.kt:87)</span><span class="terminal__line">10-04 13:23:49.662  5210  5226 E WM-WorkerFactory: 	at androidx.work.WorkerFactory.createWorkerWithDefaultFallback(WorkerFactory.kt:96)</span><span class="terminal__line">（中略: スタックトレースの続き）</span><span class="terminal__line">10-04 13:23:49.662  5210  5226 E WM-WorkerWrapper: Could not create Worker com.handson.android01.work.TodoBackupWorker</span><span class="terminal__line">10-04 13:23:49.664  5210  5226 I WM-WorkerWrapper: Worker result FAILURE for Work [ id=3931e578-3b3b-4e37-be6d-5e71320fcbd6, class=com.handson.android01.work.TodoBackupWorker, tags={ com.handson.android01.work.TodoBackupWorker } ]</span><span class="terminal__line">10-04 13:23:50.019  5210  5227 D WM-WorkerWrapper: com.handson.android01.work.TodoBackupWorker is not in ENQUEUED state. Nothing more to do</span><span class="terminal__line">10-04 13:23:50.019  5210  5227 D WM-WorkerWrapper: Status for 3931e578-3b3b-4e37-be6d-5e71320fcbd6 is FAILED ; not doing any work</span></pre>
+</div>
+          <p>既定の工場は、リフレクションで <code>(Context, WorkerParameters)</code> のコンストラクタを探します。<code>TodoRepository</code> も受け取るコンストラクタは見つからないので、Worker を作れません。作れなかった作業は <code>FAILURE</code> になり、やり直されません。診断の一覧でも <code>FAILED</code> でした。</p>
+          <h4>既定の初期化を外し忘れる</h4>
+          <p>筆者は、manifest に足した <code>&lt;provider&gt;</code> を消して <code>./gradlew assembleDebug lintDebug</code> を実行しました。lint の <code>RemoveWorkManagerInitializer</code> はエラーの扱いなので、ビルドが失敗します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">（中略）</span><span class="terminal__line">/（プロジェクトのパス）/app/src/main/AndroidManifest.xml:7: Error: Remove androidx.work.WorkManagerInitializer from your AndroidManifest.xml when using on-demand initialization. [RemoveWorkManagerInitializer from androidx.work]</span><span class="terminal__line">    &lt;application</span><span class="terminal__line">    ^</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD FAILED in 391ms</span></pre>
+</div>
+          <p>lint を除いて <code>assembleDebug</code> だけでインストールすると、<code>setWorkerFactory</code> の書き忘れと同じ <code>Could not instantiate</code> で作業が失敗しました。<code>Configuration.Provider</code> を実装していても、既定の初期化が先に動き、既定の設定で初期化されるためです。</p>
+          <h4><code>Configuration.Provider</code> を実装し忘れる</h4>
+          <p>逆に、manifest はそのままで、<code>TodoApplication</code> から <code>Configuration.Provider</code> を外しました。今度は起動した直後にクラッシュします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -b crash</span><span class="terminal__line">10-04 13:24:38.507  5469  5469 E AndroidRuntime: FATAL EXCEPTION: main</span><span class="terminal__line">10-04 13:24:38.507  5469  5469 E AndroidRuntime: Process: com.handson.android01, PID: 5469</span><span class="terminal__line">10-04 13:24:38.507  5469  5469 E AndroidRuntime: java.lang.RuntimeException: Unable to create application com.handson.android01.TodoApplication: java.lang.IllegalStateException: WorkManager is not initialized properly.  You have explicitly disabled WorkManagerInitializer in your manifest, have not manually called WorkManager#initialize at this point, and your Application does not implement Configuration.Provider.</span><span class="terminal__line">（中略: スタックトレースの途中）</span><span class="terminal__line">10-04 13:24:38.507  5469  5469 E AndroidRuntime: Caused by: java.lang.IllegalStateException: WorkManager is not initialized properly.  You have explicitly disabled WorkManagerInitializer in your manifest, have not manually called WorkManager#initialize at this point, and your Application does not implement Configuration.Provider.</span><span class="terminal__line">10-04 13:24:38.507  5469  5469 E AndroidRuntime: 	at androidx.work.impl.WorkManagerImpl.getInstance(WorkManagerImpl.java:179)</span><span class="terminal__line">10-04 13:24:38.507  5469  5469 E AndroidRuntime: 	at androidx.work.WorkManager$Companion.getInstance(WorkManager.kt:175)</span><span class="terminal__line">10-04 13:24:38.507  5469  5469 E AndroidRuntime: 	at com.handson.android01.work.TodoBackupScheduler.getWorkManager(TodoBackupScheduler.kt:15)</span><span class="terminal__line">10-04 13:24:38.507  5469  5469 E AndroidRuntime: 	at com.handson.android01.work.TodoBackupScheduler.backupOnce(TodoBackupScheduler.kt:21)</span><span class="terminal__line">10-04 13:24:38.507  5469  5469 E AndroidRuntime: 	at com.handson.android01.TodoApplication.onCreate(TodoApplication.kt:26)</span></pre>
+</div>
+          <p><code>TodoApplication.onCreate</code> から <code>backupOnce()</code> を経て、<code>WorkManager.getInstance</code>（<code>getWorkManager</code>）で例外になります。</p>
+          <p>3 つのうち、最初の 2 つはアプリが落ちないので、ログを見ないと気づけません。Worker の結果が出ないときは、<code>WM-WorkerFactory</code> の <code>Could not instantiate</code> を探します。</p>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 79 件と UI テスト 66 件がすべて成功すれば OK です。起動後のログに <code>Worker result SUCCESS</code> が出ることも確かめます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">条件とリトライを付ける</h3>
+        </div>
+        <div class="step__body">
+          <p>今の Worker は、通信できないときに動くと、すぐに失敗して終わります。「ネットワークにつながっていて、電池が少なくない」ときだけ動くように条件を付けます。通信の失敗やサーバーのエラーでは、時間をおいてやり直すようにします。</p>
+          <h4>条件とバックオフを付ける</h4>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/work/TodoBackupScheduler.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.work</span><span class="diff-line">  </span><span class="diff-line">  import android.content.Context</span><span class="diff-line diff-line--add">+ import androidx.work.BackoffPolicy</span><span class="diff-line diff-line--add">+ import androidx.work.Constraints</span><span class="diff-line">  import androidx.work.ExistingWorkPolicy</span><span class="diff-line diff-line--add">+ import androidx.work.NetworkType</span><span class="diff-line">  import androidx.work.OneTimeWorkRequestBuilder</span><span class="diff-line">  import androidx.work.WorkManager</span><span class="diff-line">  import dagger.hilt.android.qualifiers.ApplicationContext</span><span class="diff-line diff-line--add">+ import java.util.concurrent.TimeUnit</span><span class="diff-line">  import javax.inject.Inject</span><span class="diff-line">  </span><span class="diff-line">  // バックアップの予約の窓口。WorkManager への登録をここにまとめる</span><span class="diff-line">  ...</span><span class="diff-line">      // 1 回だけのバックアップ。同じ名前の作業が待ち・実行中なら、新しく入れない（KEEP）。</span><span class="diff-line">      // 終わった作業は数えないので、起動のたびに 1 回動く</span><span class="diff-line">      fun backupOnce() {</span><span class="diff-line diff-line--remove">-         val request = OneTimeWorkRequestBuilder&lt;TodoBackupWorker&gt;().build()</span><span class="diff-line diff-line--add">+         val request = OneTimeWorkRequestBuilder&lt;TodoBackupWorker&gt;()</span><span class="diff-line diff-line--add">+             .setConstraints(constraints)</span><span class="diff-line diff-line--add">+             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)</span><span class="diff-line diff-line--add">+             .build()</span><span class="diff-line">          workManager.enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.KEEP, request)</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      companion object {</span><span class="diff-line">          const val UNIQUE_NAME = &quot;todo-backup&quot;</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+         // ネットワークにつながっていて、電池が少なくないときだけ動かす。満たさないあいだは待ち、満たした時点で動く。</span><span class="diff-line diff-line--add">+         // 実行中に満たさなくなると止められ（doWork のコルーチンがキャンセルされる）、後でやり直される</span><span class="diff-line diff-line--add">+         val constraints = Constraints.Builder()</span><span class="diff-line diff-line--add">+             .setRequiredNetworkType(NetworkType.CONNECTED)</span><span class="diff-line diff-line--add">+             .setRequiresBatteryNotLow(true)</span><span class="diff-line diff-line--add">+             .build()</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+          <ul>
+            <li><code>Constraints</code> で条件を決めます。<code>NetworkType.CONNECTED</code> はネットワークにつながっていること、<code>setRequiresBatteryNotLow(true)</code> は電池残量が少なくないことです。条件を満たさない間は待ち、満たした時点で動きます。</li>
+            <li><code>setBackoffCriteria</code> は、<code>Result.retry()</code> の後に待つ時間（バックオフ）の決め方です。<code>EXPONENTIAL</code> で 30 秒から始め、やり直すたびに倍にします。WorkManager の既定値と同じですが、何が起きるかがコードから読めるように明示しました。</li>
+          </ul>
+          <h4>失敗の種類で結果を分ける</h4>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/work/TodoBackupWorker.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import com.handson.android01.data.TodoRepository</span><span class="diff-line">  import dagger.assisted.Assisted</span><span class="diff-line">  import dagger.assisted.AssistedInject</span><span class="diff-line diff-line--add">+ import io.ktor.client.plugins.ClientRequestException</span><span class="diff-line">  import kotlin.coroutines.cancellation.CancellationException</span><span class="diff-line">  </span><span class="diff-line">  // バックグラウンドで 1 回分のバックアップを行う Worker。</span><span class="diff-line">  ...</span><span class="diff-line">      } catch (e: CancellationException) {</span><span class="diff-line">          // 条件を満たさなくなったときなど、WorkManager に止められると、コルーチンがキャンセルされる。握りつぶさない</span><span class="diff-line">          throw e</span><span class="diff-line diff-line--add">+     } catch (e: ClientRequestException) {</span><span class="diff-line diff-line--add">+         // 4xx: 送り方が間違っている。何度送っても同じなので、やり直さない</span><span class="diff-line diff-line--add">+         Result.failure()</span><span class="diff-line">      } catch (e: Exception) {</span><span class="diff-line diff-line--remove">-         Result.failure()</span><span class="diff-line diff-line--add">+         // 通信の失敗・5xx・タイムアウト: 時間をおけば成功するかもしれない。</span><span class="diff-line diff-line--add">+         // retry を返すと、バックオフ（30 秒 → 60 秒 → 120 秒…）の後にもう一度実行される。上限を超えたらあきらめる</span><span class="diff-line diff-line--add">+         if (runAttemptCount &lt; MAX_RETRIES) Result.retry() else Result.failure()</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     companion object {</span><span class="diff-line diff-line--add">+         const val MAX_RETRIES = 3</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>起きたこと</th><th>例外</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>送信に成功した</td><td>なし</td><td><code>success()</code></td></tr>
+            <tr><td>4xx（送り方が間違っている）</td><td><code>ClientRequestException</code></td><td><code>failure()</code>。何度送っても同じなので、やり直さない</td></tr>
+            <tr><td>通信の失敗・5xx・タイムアウト</td><td>それ以外の <code>Exception</code></td><td><code>retry()</code>。ただし <code>runAttemptCount</code> が <code>MAX_RETRIES</code>（3）に達していたら <code>failure()</code></td></tr>
+            </tbody>
+          </table>
+          <ul>
+            <li><code>ClientRequestException</code> は <code>Exception</code> の子なので、<code>Exception</code> より前に書きます。後に書くと、その <code>catch</code> には届きません。</li>
+            <li><code>runAttemptCount</code> は、この作業を実行した回数です（1 回目は 0。条件を満たさなくなって止められた回も含みます）。上限を付けないと、直らない失敗を延々とやり直します。</li>
+          </ul>
+          <h4>Worker のテストを書く</h4>
+          <p>Worker を WorkManager へ登録せず直接作り、<code>doWork()</code> を呼んで結果を確かめます。Worker は <code>Context</code> を受け取るので、端末上のテスト（androidTest）にします。中心は、<code>TestListenableWorkerBuilder</code> に自前の工場を渡す部分です。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/work/TodoBackupWorkerTest.kt（抜粋）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">private fun worker(runAttemptCount: Int = 0): TodoBackupWorker =
+    TestListenableWorkerBuilder&lt;TodoBackupWorker&gt;(context)
+        .setRunAttemptCount(runAttemptCount)
+        .setWorkerFactory(object : WorkerFactory() {
+            override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters) =
+                TodoBackupWorker(appContext, workerParameters, TodoRepository(FakeTodoDao(demoTodos(3)), server.api, settings))
+        })
+        .build()</code></pre>
+</div>
+          <ul>
+            <li><code>HiltWorkerFactory</code> の代わりに、偽物（<code>FakeTodoDao</code>・<code>FakeTodoServer</code>・<code>FakeDataStore</code>）をつないだ <code>TodoRepository</code> を渡す工場を使います。偽物は、androidTest にある UI テスト用のものをそのまま使います。</li>
+            <li><code>setRunAttemptCount</code> で、何回目の実行かを決められます。上限に達したときの <code>failure()</code> を確かめるのに使います。</li>
+            <li>テストは 4 件です。成功（時刻が残る）・500 で <code>retry()</code>・400 で <code>failure()</code>・上限に達した 500 で <code>failure()</code>。</li>
+            <li><code>doWork()</code> を直接呼ぶだけなので、確かめられるのは結果の種類までです。バックオフの待ち時間は確かめられません。</li>
+          </ul>
+          <p><code>app/src/androidTest/java/com/handson/android01/work/TodoBackupWorkerTest.kt</code> を新規作成します。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoBackupWorkerTest.kt</code> の全文を見る（新規作成）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/work/TodoBackupWorkerTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.work
+
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.work.ListenableWorker
+import androidx.work.WorkerFactory
+import androidx.work.WorkerParameters
+import androidx.work.testing.TestListenableWorkerBuilder
+import com.handson.android01.data.SettingsRepository
+import com.handson.android01.data.TodoRepository
+import com.handson.android01.ui.screens.FakeDataStore
+import com.handson.android01.ui.screens.FakeTodoDao
+import com.handson.android01.ui.screens.FakeTodoServer
+import com.handson.android01.ui.screens.demoTodos
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Test
+import org.junit.runner.RunWith
+
+// Worker を、WorkManager に登録せずに直接作って doWork を呼ぶ。
+// HiltWorkerFactory の代わりに、偽物をつないだ TodoRepository を渡す工場を使う
+@RunWith(AndroidJUnit4::class)
+class TodoBackupWorkerTest {
+
+    private val context = ApplicationProvider.getApplicationContext&lt;Context&gt;()
+    private val settings = SettingsRepository(FakeDataStore())
+    private val server = FakeTodoServer(demoTodos(3))
+
+    private fun worker(runAttemptCount: Int = 0): TodoBackupWorker =
+        TestListenableWorkerBuilder&lt;TodoBackupWorker&gt;(context)
+            .setRunAttemptCount(runAttemptCount)
+            .setWorkerFactory(object : WorkerFactory() {
+                override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters) =
+                    TodoBackupWorker(appContext, workerParameters, TodoRepository(FakeTodoDao(demoTodos(3)), server.api, settings))
+            })
+            .build()
+
+    @Test
+    fun success_recordsBackupTime() {
+        val result = runBlocking { worker().doWork() }
+
+        assertEquals(ListenableWorker.Result.success(), result)
+        assertEquals(1, server.requestCount)
+        assertNotNull(runBlocking { settings.lastBackupAt.first() })
+    }
+
+    // 5xx は、時間をおけば直るかもしれないので retry
+    @Test
+    fun serverError_retries() {
+        server.status = HttpStatusCode.InternalServerError
+
+        val result = runBlocking { worker().doWork() }
+
+        assertEquals(ListenableWorker.Result.retry(), result)
+        assertNull(runBlocking { settings.lastBackupAt.first() })
+    }
+
+    // 4xx は、何度送っても同じなので failure
+    @Test
+    fun clientError_fails() {
+        server.status = HttpStatusCode.BadRequest
+
+        val result = runBlocking { worker().doWork() }
+
+        assertEquals(ListenableWorker.Result.failure(), result)
+    }
+
+    // retry は MAX_RETRIES 回まで。それを超えたらあきらめる
+    @Test
+    fun serverError_failsAfterMaxRetries() {
+        server.status = HttpStatusCode.InternalServerError
+
+        val result = runBlocking { worker(runAttemptCount = TodoBackupWorker.MAX_RETRIES).doWork() }
+
+        assertEquals(ListenableWorker.Result.failure(), result)
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <p><code>ApplicationProvider</code>（<code>androidx.test:core</code>）は、13 までに入っている <code>androidx.test.ext:junit</code> が一緒に持ち込むので、依存は足しません。androidTest には <code>kotlinx-coroutines-test</code> が無いので、<code>runBlocking</code> で呼びます。</p>
+          <p>まとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 44s</span></pre>
+</div>
+          <h4>条件がそろうまで待つことを確かめる</h4>
+          <p>機内モードにしてから起動し、作業が条件待ちになることを確かめます。UI テストの後はアプリがアンインストールされているので、入れ直します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm clear com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell dumpsys jobscheduler</span><span class="terminal__line">（このアプリのジョブの部分を抜粋）</span><span class="terminal__line">  JOB androidx.work.systemjobscheduler:u0a219/0: 8a8c444 @androidx.work.systemjobscheduler@com.handson.android01/androidx.work.impl.background.systemjob.SystemJobService</span><span class="terminal__line">    JobInfo:</span><span class="terminal__line">      Service: com.handson.android01/androidx.work.impl.background.systemjob.SystemJobService</span><span class="terminal__line">      Requires: charging=false batteryNotLow=true deviceIdle=false</span><span class="terminal__line">      Network type: NetworkRequest [ NONE id=0, [ Capabilities: INTERNET&amp;TRUSTED&amp;VALIDATED&amp;NOT_VCN_MANAGED&amp;NOT_BANDWIDTH_CONSTRAINED Uid: 10219 UnderlyingNetworks: Null] ]</span><span class="terminal__line">      Backoff: policy=1 initial=+30s0ms</span><span class="terminal__line">    Required constraints: BATTERY_NOT_LOW CONNECTIVITY FLEXIBILITY [0x10200002]</span><span class="terminal__line">    Satisfied constraints: BATTERY_NOT_LOW FLEXIBILITY DEVICE_NOT_DOZING BACKGROUND_NOT_RESTRICTED WITHIN_QUOTA [0x3600002]</span><span class="terminal__line">    Unsatisfied constraints: CONNECTIVITY [0x10000000]</span><span class="terminal__line">    Tracking: BATTERY CONNECTIVITY QUOTA</span><span class="terminal__line">    Run time: earliest=none, latest=none, original latest=none</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s WM-WorkerWrapper:I | grep -c TodoBackupWorker</span><span class="terminal__line">0</span></pre>
+</div>
+          <p><code>dumpsys jobscheduler</code> の出力は長いです。<code>JOB androidx.work.systemjobscheduler</code> で始まり、<code>com.handson.android01</code> を含む行を探します。</p>
+          <ul>
+            <li>見出しは <code>JOB &lt;名前空間&gt;:&lt;uid&gt;/&lt;ジョブ番号&gt;:</code> の形です。WorkManager のジョブは、名前空間 <code>androidx.work.systemjobscheduler</code> に入り、アプリの <code>SystemJobService</code> で実行されます。<code>u0a219</code> とジョブ番号（<code>/</code> の後ろの <code>0</code>）は環境と時点で変わります。</li>
+            <li><code>Required constraints</code> が必要な条件、<code>Satisfied constraints</code> が満たしている条件、<code>Unsatisfied constraints</code> が満たしていない条件です。機内モードなので <code>CONNECTIVITY</code> が満たされていません。<code>FLEXIBILITY</code> は JobScheduler が自分で付ける条件で、気にしなくてかまいません。</li>
+            <li><code>Backoff: policy=1 initial=+30s0ms</code> は、<code>EXPONENTIAL</code>（1。<code>LINEAR</code> は 0）で 30 秒から、という意味です。</li>
+            <li>Worker はまだ動いていないので、<code>Worker result</code> の行は 0 件です。</li>
+          </ul>
+          <p>機内モードを解除すると、条件がそろって作業が動きます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span><span class="terminal__line"><span class="terminal__prompt">$</span> sleep 10</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s WM-WorkerWrapper:I | grep &quot;Worker result&quot; | grep TodoBackupWorker</span><span class="terminal__line">10-04 13:27:02.541  6194  6270 I WM-WorkerWrapper: Worker result SUCCESS for Work [ id=75e6da43-0f76-43e7-8221-5cd814ec5ea8, class=com.handson.android01.work.TodoBackupWorker, tags={ com.handson.android01.work.TodoBackupWorker } ]</span></pre>
+</div>
+          <p>筆者の環境では、解除から約 6 秒で <code>SUCCESS</code> になりました（1 回の実測）。コマンドの <code>sleep 10</code> は余裕を見た待ち時間です。他のアプリの Worker の結果も同じログに出るので、<code>TodoBackupWorker</code> の行だけに絞っています。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">電池の条件も確かめられる</p>
+              <p>エミュレータでは、電池残量を adb で変えられます。筆者は <code>adb shell dumpsys battery unplug</code> と <code>adb shell dumpsys battery set level 5</code> の後に、<code>pm clear</code> して起動しました。今度は <code>BATTERY_NOT_LOW</code> が <code>Unsatisfied constraints</code> に出て、Worker は動きませんでした。<code>adb shell dumpsys battery reset</code> で戻すと、約 8 秒で <code>SUCCESS</code> が出ました（1 回の実測）。試したときは、最後に必ず <code>reset</code> してください。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: リトライとバックオフを adb で確かめる</summary>
+            <div class="disclosure__body">
+          <p>この実験は任意です。読むだけでもかまいません。待ち時間が合計で 4 分ほどかかります。機内モードのまま、JobScheduler に「今すぐ実行」を頼み、通信の失敗で <code>retry()</code> になるところを見ます（1 回の実測）。</p>
+          <p>「今すぐ実行」は <code>adb shell cmd jobscheduler run</code> です。<code>adb shell cmd jobscheduler help</code> によると、<code>-f</code> は通信などの条件を無視して実行し、<code>-s</code> は条件をすべて満たすときだけ実行します。<code>-n</code> はジョブの名前空間の指定で、省略すると名前空間なしになります。WorkManager のジョブは名前空間 <code>androidx.work.systemjobscheduler</code> の中にあるので、<code>-n</code> が必要です。無いと次のとおり見つかりません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd jobscheduler run -f com.handson.android01 0</span><span class="terminal__line">Could not find job 0 in package com.handson.android01 / user 0</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd jobscheduler run -f -n androidx.work.systemjobscheduler com.handson.android01 0</span><span class="terminal__line">Running job [FORCED]</span></pre>
+</div>
+          <p>結果は次のとおりでした。<code>earliest</code> は、<code>dumpsys jobscheduler</code> の <code>Run time: earliest=</code> の値（次に実行できる最も早い時刻までの残り）です。</p>
+
+          <table>
+            <thead>
+            <tr><th>操作</th><th>ジョブ番号</th><th><code>Worker result</code></th><th>直後の <code>earliest</code></th></tr>
+            </thead>
+            <tbody>
+            <tr><td>機内モードで起動した直後</td><td>0</td><td>（なし）</td><td><code>none</code>（条件待ち）</td></tr>
+            <tr><td><code>run -f</code>（1 回目の実行）</td><td>0 → 1</td><td><code>RETRY</code></td><td><code>+26s945ms</code>（約 30 秒後）</td></tr>
+            <tr><td>待たずにもう一度 <code>run -f</code></td><td>1 → 2</td><td>増えない</td><td><code>+20s26ms</code>（同じ時刻のまま）</td></tr>
+            <tr><td>30 秒待って <code>run -f</code>（2 回目の実行）</td><td>2 → 3</td><td><code>RETRY</code></td><td><code>+56s962ms</code>（約 60 秒後）</td></tr>
+            <tr><td>待って <code>run -f</code>（3 回目の実行）</td><td>3 → 4</td><td><code>RETRY</code></td><td><code>+1m56s931ms</code>（約 120 秒後）</td></tr>
+            <tr><td>約 120 秒待って <code>run -f</code>（4 回目の実行）</td><td>4</td><td><code>FAILURE</code></td><td>—</td></tr>
+            </tbody>
+          </table>
+          <ul>
+            <li><code>RETRY</code> のたびに、WorkManager はジョブを登録し直すので、ジョブ番号が 1 つずつ増えます。<code>run</code> の前に、毎回 <code>dumpsys</code> で番号を読み直します。</li>
+            <li><code>RETRY</code> の後は、<code>Required constraints</code> に <code>TIMING_DELAY</code>（待ち時間）が加わります。<code>CONNECTIVITY</code> の条件は残ったままです。</li>
+            <li>待ち時間が過ぎる前に <code>run -f</code> しても、<code>Running job [FORCED]</code> とは出ますが、Worker は実行されません。WorkManager が「予定より早い実行」として見送り、ジョブだけを登録し直します。<code>earliest</code> の時刻も変わりません（残りが経過したぶん短くなっただけです）。</li>
+            <li>待ち時間は約 30 秒・60 秒・120 秒と倍になりました。4 回目の実行では <code>runAttemptCount</code> が 3（<code>MAX_RETRIES</code>）なので <code>failure()</code> になり、診断の一覧でも <code>FAILED</code> で終わりました。</li>
+          </ul>
+          <p>最後に機内モードを解除します（<code>adb shell cmd connectivity airplane-mode disable</code>）。</p>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 79 件と UI テスト 70 件がすべて成功すれば OK です。機内モードでは <code>CONNECTIVITY</code> が未充足で Worker が動かず、解除すると成功することも確かめます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">毎日のバックアップにして、最後に送った時刻を表示する</h3>
+        </div>
+        <div class="step__body">
+          <p>1 回だけの作業（OneTime）を、周期的な作業（Periodic）に置き換えて、1 日 1 回のバックアップにします。最後に送った時刻を一覧の上部に出し、アプリを終了しても動くことを確かめます。</p>
+          <h4>毎日の予約に置き換える</h4>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/work/TodoBackupScheduler.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import android.content.Context</span><span class="diff-line">  import androidx.work.BackoffPolicy</span><span class="diff-line">  import androidx.work.Constraints</span><span class="diff-line diff-line--remove">- import androidx.work.ExistingWorkPolicy</span><span class="diff-line diff-line--add">+ import androidx.work.ExistingPeriodicWorkPolicy</span><span class="diff-line">  import androidx.work.NetworkType</span><span class="diff-line diff-line--remove">- import androidx.work.OneTimeWorkRequestBuilder</span><span class="diff-line diff-line--add">+ import androidx.work.PeriodicWorkRequestBuilder</span><span class="diff-line">  import androidx.work.WorkManager</span><span class="diff-line">  import dagger.hilt.android.qualifiers.ApplicationContext</span><span class="diff-line">  import java.util.concurrent.TimeUnit</span><span class="diff-line">  ...</span><span class="diff-line">      // コンストラクタで取ると、TodoApplication への注入の途中で読まれる。今は workerFactory が先に注入されるので問題ないが、</span><span class="diff-line">      // フィールドの宣言の順に頼ることになるので、使うときに取る</span><span class="diff-line">      private val workManager: WorkManager get() = WorkManager.getInstance(context)</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // 1 回だけのバックアップ。同じ名前の作業が待ち・実行中なら、新しく入れない（KEEP）。</span><span class="diff-line diff-line--remove">-     // 終わった作業は数えないので、起動のたびに 1 回動く</span><span class="diff-line diff-line--remove">-     fun backupOnce() {</span><span class="diff-line diff-line--remove">-         val request = OneTimeWorkRequestBuilder&lt;TodoBackupWorker&gt;()</span><span class="diff-line diff-line--add">+     // 1 日に 1 回のバックアップ。周期は「この間に 1 回」で、時刻は決まらない（Doze などで後ろにずれる）。最短は 15 分。</span><span class="diff-line diff-line--add">+     // 起動のたびに呼ぶが、同じ名前の予約があれば何もしない（KEEP）。CANCEL_AND_REENQUEUE（旧 REPLACE）にすると、起動のたびに周期が最初からになる</span><span class="diff-line diff-line--add">+     fun schedulePeriodicBackup() {</span><span class="diff-line diff-line--add">+         val request = PeriodicWorkRequestBuilder&lt;TodoBackupWorker&gt;(1, TimeUnit.DAYS)</span><span class="diff-line">              .setConstraints(constraints)</span><span class="diff-line">              .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)</span><span class="diff-line">              .build()</span><span class="diff-line diff-line--remove">-         workManager.enqueueUniqueWork(UNIQUE_NAME, ExistingWorkPolicy.KEEP, request)</span><span class="diff-line diff-line--add">+         workManager.enqueueUniquePeriodicWork(UNIQUE_NAME, ExistingPeriodicWorkPolicy.KEEP, request)</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      companion object {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/TodoApplication.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      @Inject</span><span class="diff-line">      lateinit var backupScheduler: TodoBackupScheduler</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // 起動のたびに、バックアップを予約する。super.onCreate() で注入が終わるので、その後で使う</span><span class="diff-line diff-line--add">+     // 起動のたびに、毎日のバックアップを予約する（同じ名前の予約があれば何もしない）。super.onCreate() で注入が終わるので、その後で使う</span><span class="diff-line">      override fun onCreate() {</span><span class="diff-line">          super.onCreate()</span><span class="diff-line diff-line--remove">-         backupScheduler.backupOnce()</span><span class="diff-line diff-line--add">+         backupScheduler.schedulePeriodicBackup()</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      // get() にして、読まれるたびに作る（注入より前に読まれないことは、WorkManager を onCreate 以降で使うことで守る）</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>PeriodicWorkRequestBuilder&lt;TodoBackupWorker&gt;(1, TimeUnit.DAYS)</code> で、1 日周期の依頼を作ります。周期は「この間に 1 回」で、時刻は決まりません。周期の最短は 15 分です。</li>
+            <li>Periodic は <code>enqueueUniquePeriodicWork</code> で予約します。<code>ExistingPeriodicWorkPolicy.KEEP</code> は、同じ名前の予約があれば何もしません。起動のたびに呼んでも、予約は 1 つのままで、周期も最初からになりません。</li>
+            <li><code>CANCEL_AND_REENQUEUE</code> にすると、起動のたびに予約が作り直され、周期が最初からになります。以前の <code>REPLACE</code> と同じ動きで、<code>REPLACE</code> は WorkManager 2.8 から非推奨です。</li>
+            <li><code>UPDATE</code> は、既存の予約の中身を新しい依頼で更新します。登録した時刻は引き継ぐので、周期は最初からになりません。</li>
+            <li>条件とバックオフは、ステップ 3 と同じものを付けます。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">最初の 1 回は、登録の直後に動く</p>
+              <p>1 日周期でも、最初の 1 回目は、条件がそろえば登録の直後に動きました（1 日後ではありません）。2 回目以降は、前の実行から約 1 日後です。<code>Result.failure()</code> を返しても、Periodic の作業は次の周期にまた動きます。<code>retry()</code> は、同じ周期の中でのやり直しです。</p>
+            </div>
+          </div>
+          <h4>最後に送った時刻を表示する</h4>
+          <p>画面の状態に、最後に送った時刻（エポックミリ秒）を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListUiState.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      // 読み込みに失敗したときの、画面に出すメッセージ。null なら失敗していない。</span><span class="diff-line">      // 失敗中（isLoading = false かつ errorMessage != null）は、一覧の代わりにエラー表示と「再試行」を出す</span><span class="diff-line">      val errorMessage: String? = null,</span><span class="diff-line diff-line--add">+     // 最後にバックアップした時刻（エポックミリ秒）。null はまだ一度も無い</span><span class="diff-line diff-line--add">+     val lastBackupAt: Long? = null,</span><span class="diff-line">  )</span></pre>
+</div>
+          <p>ViewModel は、画面の状態を <code>combine</code> で作っています。そこに、DataStore の <code>lastBackupAt</code> を 4 つ目の Flow として足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListViewModel.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      private val loadState = MutableStateFlow(LoadState())</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // 画面の状態は、3 つの Flow を combine して作る: DB の一覧（Room）・絞り込み（DataStore）・読み込みの状態。</span><span class="diff-line diff-line--remove">-     // combine は、3 つがすべて 1 回は値を出すまで何も流さない。DataStore の読み込みは非同期だが、保存した絞り込みが届くまでは</span><span class="diff-line diff-line--add">+     // 画面の状態は、4 つの Flow を combine して作る: DB の一覧（Room）・絞り込み（DataStore）・読み込みの状態・最終バックアップの時刻（DataStore）。</span><span class="diff-line diff-line--add">+     // combine は、4 つがすべて 1 回は値を出すまで何も流さない。DataStore の読み込みは非同期だが、保存した絞り込みが届くまでは</span><span class="diff-line">      // 初期値（読み込み中）のままなので、既定の「すべて」が一瞬見えることはない</span><span class="diff-line">      // どれかが変わるたびに作り直されるので、一覧を書き換える処理は ViewModel に要らない（DAO に書けば、Flow で届く）。</span><span class="diff-line">      // stateIn: 冷たい Flow を、現在の値を持つ StateFlow にする。Eagerly は、ViewModel が作られた時点から購読を始める</span><span class="diff-line">  ...</span><span class="diff-line">          repository.todos,</span><span class="diff-line">          settings.filter,</span><span class="diff-line">          loadState,</span><span class="diff-line diff-line--remove">-     ) { todos, filter, load -&gt;</span><span class="diff-line diff-line--remove">-         TodoListUiState(todos = todos, filter = filter, isLoading = load.isLoading, errorMessage = load.errorMessage)</span><span class="diff-line diff-line--add">+         settings.lastBackupAt,</span><span class="diff-line diff-line--add">+     ) { todos, filter, load, lastBackupAt -&gt;</span><span class="diff-line diff-line--add">+         TodoListUiState(</span><span class="diff-line diff-line--add">+             todos = todos,</span><span class="diff-line diff-line--add">+             filter = filter,</span><span class="diff-line diff-line--add">+             isLoading = load.isLoading,</span><span class="diff-line diff-line--add">+             errorMessage = load.errorMessage,</span><span class="diff-line diff-line--add">+             lastBackupAt = lastBackupAt,</span><span class="diff-line diff-line--add">+         )</span><span class="diff-line">      }.stateIn(viewModelScope, SharingStarted.Eagerly, TodoListUiState(isLoading = true))</span><span class="diff-line">  </span><span class="diff-line">      init {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          todos = uiState.todos,</span><span class="diff-line">          isLoading = uiState.isLoading,</span><span class="diff-line">          errorMessage = uiState.errorMessage,</span><span class="diff-line diff-line--add">+         lastBackupAt = uiState.lastBackupAt,</span><span class="diff-line">          onRetry = viewModel::retry,</span><span class="diff-line">          snackbarHostState = snackbarHostState,</span><span class="diff-line">          filter = uiState.filter,</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>TodoListScreen</code> の <code>TopAppBar</code> のタイトルを 2 行にし、「Todo」の下に小さく時刻を出します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import com.handson.android01.ui.components.TodoRow</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  import kotlinx.coroutines.launch</span><span class="diff-line diff-line--add">+ import java.time.Instant</span><span class="diff-line diff-line--add">+ import java.time.ZoneId</span><span class="diff-line diff-line--add">+ import java.time.format.DateTimeFormatter</span><span class="diff-line">  </span><span class="diff-line">  // TopAppBar は Material3 1.4 時点で実験的 API。使うには @OptIn が必要（未指定だとコンパイルエラー）</span><span class="diff-line">  @OptIn(ExperimentalMaterial3Api::class)</span><span class="diff-line">  ...</span><span class="diff-line">      // 読み込みに失敗したときのメッセージ。null でなければ、一覧の代わりにエラー表示と「再試行」を出す</span><span class="diff-line">      errorMessage: String? = null,</span><span class="diff-line">      onRetry: () -&gt; Unit = {},</span><span class="diff-line diff-line--add">+     // 最後にバックアップした時刻（エポックミリ秒）。null はまだ一度も無い。TopAppBar のタイトルの下に出す</span><span class="diff-line diff-line--add">+     lastBackupAt: Long? = null,</span><span class="diff-line">      onOpenDetail: (id: Int) -&gt; Unit = {},</span><span class="diff-line">  ) {</span><span class="diff-line">      // 読み込み中と失敗中は、まだ一覧が無いので、一覧に対する操作（一括削除・追加・件数）を出さない</span><span class="diff-line">  ...</span><span class="diff-line">          modifier = modifier,</span><span class="diff-line">          topBar = {</span><span class="diff-line">              TopAppBar(</span><span class="diff-line diff-line--remove">-                 title = { Text(&quot;Todo&quot;) },</span><span class="diff-line diff-line--add">+                 title = {</span><span class="diff-line diff-line--add">+                     Column {</span><span class="diff-line diff-line--add">+                         Text(&quot;Todo&quot;)</span><span class="diff-line diff-line--add">+                         Text(backupLabel(lastBackupAt), style = MaterialTheme.typography.labelSmall)</span><span class="diff-line diff-line--add">+                     }</span><span class="diff-line diff-line--add">+                 },</span><span class="diff-line">                  actions = {</span><span class="diff-line">                      // 読み込み中・失敗中は、一括削除も件数バッジも出さない（操作できず、「0 件」と誤解させるため）</span><span class="diff-line">                      if (hasList) {</span><span class="diff-line">  ...</span><span class="diff-line">          TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ // 最終バックアップの表示文言。時刻は端末のタイムゾーンで、月/日 時:分 にする</span><span class="diff-line diff-line--add">+ internal fun backupLabel(epochMillis: Long?, zone: ZoneId = ZoneId.systemDefault()): String =</span><span class="diff-line diff-line--add">+     if (epochMillis == null) {</span><span class="diff-line diff-line--add">+         &quot;最終バックアップ: なし&quot;</span><span class="diff-line diff-line--add">+     } else {</span><span class="diff-line diff-line--add">+         &quot;最終バックアップ: &quot; + DateTimeFormatter.ofPattern(&quot;M/d HH:mm&quot;).withZone(zone).format(Instant.ofEpochMilli(epochMillis))</span><span class="diff-line diff-line--add">+     }</span></pre>
+</div>
+          <ul>
+            <li>Worker は DataStore に時刻を書くだけで、画面は DataStore の値を読んで表示します。Worker から画面へ直接知らせる仕組みは作りません。</li>
+            <li>時刻は端末のタイムゾーンで、<code>M/d HH:mm</code>（例: <code>10/4 12:00</code>）にします。まだ一度も送っていなければ「最終バックアップ: なし」です。</li>
+          </ul>
+          <h4>テストを足す</h4>
+          <p>UI テストを 2 件足します。<code>TodoBackupSchedulerTest.kt</code> は新規作成し、<code>TodoListScreenTest.kt</code> はファイル全体を差し替えます。</p>
+          <ul>
+            <li><code>periodicBackup_waitsForConstraintsThenRuns</code>: テスト用の WorkManager に予約し、2 回呼んでも一意な名前で 1 つになり、条件と周期（1 日）が付いていること、条件がそろうまで送らないことを確かめます。その後 <code>TestDriver</code> で「条件がそろった」を起こし、1 回送られることを確かめます。</li>
+            <li><code>lastBackupAt_isShownInTopBar</code>: <code>lastBackupAt</code> が <code>null</code> なら「最終バックアップ: なし」、時刻を渡すと「最終バックアップ: 10/4 12:00」と出ること。期待する時刻も端末のタイムゾーンで作るので、端末の設定に左右されません。</li>
+          </ul>
+          <p><code>TodoBackupSchedulerTest</code> の中心は、テスト用の WorkManager の初期化です。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/work/TodoBackupSchedulerTest.kt（抜粋）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">val config = Configuration.Builder()
+    .setExecutor(SynchronousExecutor())
+    .setWorkerFactory(object : WorkerFactory() {
+        override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters) =
+            TodoBackupWorker(appContext, workerParameters, repository)
+    })
+    .build()
+WorkManagerTestInitHelper.initializeTestWorkManager(context, config)</code></pre>
+</div>
+          <ul>
+            <li><code>WorkManagerTestInitHelper.initializeTestWorkManager</code> の後は、<code>WorkManager.getInstance(context)</code> がテスト用の WorkManager を返します。UI テストのアプリ（<code>HiltTestApplication</code>）は <code>Configuration.Provider</code> ではありませんが、この初期化で使えました。</li>
+            <li><code>SynchronousExecutor</code> を渡すと、WorkManager の内部の処理と <code>CoroutineWorker</code> の <code>doWork</code> が、テストのスレッドで始まります。ただし、<code>doWork</code> の中の Ktor（<code>MockEngine</code>）の通信の後は、別のスレッドで続きが動きます。そのため、テストは時刻が記録されるまで <code>withTimeout</code> で待ちます。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoBackupSchedulerTest.kt</code> の全文を見る（新規作成）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/work/TodoBackupSchedulerTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.work
+
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.work.Configuration
+import androidx.work.NetworkType
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import androidx.work.WorkerFactory
+import androidx.work.WorkerParameters
+import androidx.work.testing.SynchronousExecutor
+import androidx.work.testing.WorkManagerTestInitHelper
+import com.handson.android01.data.SettingsRepository
+import com.handson.android01.data.TodoRepository
+import com.handson.android01.ui.screens.FakeDataStore
+import com.handson.android01.ui.screens.FakeTodoDao
+import com.handson.android01.ui.screens.FakeTodoServer
+import com.handson.android01.ui.screens.demoTodos
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.util.concurrent.TimeUnit
+
+// 予約（Periodic・条件）を、テスト用の WorkManager で確かめる。TestDriver で「条件がそろった」を起こす
+@RunWith(AndroidJUnit4::class)
+class TodoBackupSchedulerTest {
+
+    private val context = ApplicationProvider.getApplicationContext&lt;Context&gt;()
+
+    @Test
+    fun periodicBackup_waitsForConstraintsThenRuns() {
+        val settings = SettingsRepository(FakeDataStore())
+        val server = FakeTodoServer(demoTodos(3))
+        val repository = TodoRepository(FakeTodoDao(demoTodos(3)), server.api, settings)
+        val config = Configuration.Builder()
+            .setExecutor(SynchronousExecutor())
+            .setWorkerFactory(object : WorkerFactory() {
+                override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters) =
+                    TodoBackupWorker(appContext, workerParameters, repository)
+            })
+            .build()
+        WorkManagerTestInitHelper.initializeTestWorkManager(context, config)
+
+        TodoBackupScheduler(context).schedulePeriodicBackup()
+        TodoBackupScheduler(context).schedulePeriodicBackup() // 2 回呼んでも、一意な名前で 1 つ
+
+        val workManager = WorkManager.getInstance(context)
+        val info = workManager.getWorkInfosForUniqueWork(TodoBackupScheduler.UNIQUE_NAME).get().single()
+        assertEquals(WorkInfo.State.ENQUEUED, info.state)
+        assertEquals(NetworkType.CONNECTED, info.constraints.requiredNetworkType)
+        assertTrue(info.constraints.requiresBatteryNotLow())
+        assertEquals(TimeUnit.DAYS.toMillis(1), info.periodicityInfo?.repeatIntervalMillis)
+        assertEquals(0, server.requestCount) // 条件がそろうまで動かない
+
+        val driver = WorkManagerTestInitHelper.getTestDriver(context)!!
+        driver.setAllConstraintsMet(info.id)
+
+        // doWork はテストのスレッドで始まるが、Ktor（MockEngine）の通信の後は別のスレッドで再開するので、記録が付くまで待つ
+        runBlocking { withTimeout(5_000) { settings.lastBackupAt.first { it != null } } }
+        assertEquals(1, server.requestCount)
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoListScreenTest.kt</code> の全文を見る（ファイル全体を差し替える）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListScreenTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.printToLog
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.theme.HandsonAndroid01Theme
+import org.junit.Assert.assertEquals
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.time.ZoneId
+import java.time.ZonedDateTime
+
+@RunWith(AndroidJUnit4::class)
+class TodoListScreenTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun titleAndSummary_areDisplayed() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;Todo&quot;).assertIsDisplayed()
+        composeTestRule.onNodeWithText(&quot;3 件中 2 件完了&quot;).assertIsDisplayed()
+    }
+
+    // 最終バックアップの表示。時刻は端末のタイムゾーンで整形されるので、期待値も systemDefault で作る
+    @Test
+    fun lastBackupAt_isShownInTopBar() {
+        val at = ZonedDateTime.of(2026, 10, 4, 12, 0, 0, 0, ZoneId.systemDefault()).toInstant().toEpochMilli()
+        var lastBackupAt by mutableStateOf&lt;Long?&gt;(null)
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(
+                    todos = demoTodoList,
+                    inputState = rememberTextFieldState(),
+                    onToggle = { _, _ -&gt; },
+                    onAddClick = {},
+                    lastBackupAt = lastBackupAt,
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;最終バックアップ: なし&quot;).assertIsDisplayed()
+
+        lastBackupAt = at
+
+        composeTestRule.onNodeWithText(&quot;最終バックアップ: 10/4 12:00&quot;).assertIsDisplayed()
+    }
+
+    @Test
+    fun todoRows_countMatchesData() {
+        // testTag(&quot;todo_row&quot;) を持つ行の数で、一覧に全件が並んでいるかを確かめる
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})
+            }
+        }
+
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(3)
+    }
+
+    @Test
+    fun doneStatus_appearsOncePerDoneTodo() {
+        // テキストの完全一致で数える。「未完了」は「完了」と一致しないので数えられない。
+        // 見出し（「未完了」「完了」）とフィルタのチップにも同じ文字があるので、行（todo_row）の中だけを数える
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})
+            }
+        }
+
+        composeTestRule.onAllNodes(hasText(&quot;完了&quot;) and hasAnyAncestor(hasTestTag(&quot;todo_row&quot;))).assertCountEquals(2)
+        composeTestRule.onAllNodes(hasText(&quot;未完了&quot;) and hasAnyAncestor(hasTestTag(&quot;todo_row&quot;))).assertCountEquals(1)
+    }
+
+    @Test
+    fun emptyList_showsZeroRows() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = emptyList(), inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;0 件中 0 件完了&quot;).assertIsDisplayed()
+        composeTestRule.onAllNodesWithTag(&quot;todo_row&quot;).assertCountEquals(0)
+    }
+
+    @Test
+    fun addButton_callsOnAddClick() {
+        // 状態を持たない画面なので、クリックの回数はテスト側の変数で受け取る
+        var clickCount = 0
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = { clickCount++ }, showAddSheet = true)
+            }
+        }
+
+        // 空のままでは追加ボタンは無効（後述のテスト）。文字を入れてから押す
+        composeTestRule.onNodeWithTag(&quot;todo_input&quot;).performTextInput(&quot;buy milk&quot;)
+        // キーボードが出るとシートが持ち上がり、タップの座標がずれることがある。
+        // 位置に関係なくクリックの処理を呼ぶ
+        composeTestRule.onNodeWithText(&quot;追加&quot;).performSemanticsAction(SemanticsActions.OnClick)
+
+        assertEquals(1, clickCount)
+    }
+
+    @Test
+    fun addButton_isDisabledWhenInputIsEmpty() {
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {}, showAddSheet = true)
+            }
+        }
+
+        composeTestRule.onNodeWithText(&quot;追加&quot;).assertIsNotEnabled()
+    }
+
+    @Test
+    fun semanticsTree_canBePrintedToLog() {
+        // printToLog: セマンティクスツリーを Logcat に出す。どのノードにどのテキストがあるかを確かめる時に使う
+        composeTestRule.setContent {
+            HandsonAndroid01Theme {
+                TodoListScreen(todos = demoTodoList, inputState = rememberTextFieldState(), onToggle = { _, _ -&gt; }, onAddClick = {})
+            }
+        }
+
+        composeTestRule.onRoot().printToLog(&quot;TodoListScreenTree&quot;)
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <p>まとめて実行し、<code>backupOnce</code> が残っていないことも確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 46s</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rn backupOnce app/src | wc -l</span><span class="terminal__line">       0</span></pre>
+</div>
+          <h4>アプリを終了しても動くことを確かめる</h4>
+          <p>最初の 1 回は登録の直後に動くので、通信できる状態で起動すると、すぐに時刻に変わります。そこで、機内モードで起動して条件待ちにし、アプリのプロセスを終了してから機内モードを解除します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm clear com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -c</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>画面の「Todo」の下に「最終バックアップ: なし」と出ます。<code>dumpsys jobscheduler</code> のこのアプリのジョブは、次のとおり <code>CONNECTIVITY</code> 待ちです。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">dumpsys jobscheduler（このアプリのジョブの抜粋）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">    Required constraints: BATTERY_NOT_LOW CONNECTIVITY FLEXIBILITY [0x10200002]
+    Unsatisfied constraints: CONNECTIVITY [0x10000000]
+    Run time: earliest=none, latest=none, original latest=none</code></pre>
+</div>
+          <p>ホームに戻ってから 5 秒ほど待ち、プロセスを終了します。すぐに終了させると、プロセスの残る場合があります。<code>pidof</code> の出力が空なら、プロセスは終了しています。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell input keyevent KEYCODE_HOME</span><span class="terminal__line"><span class="terminal__prompt">$</span> sleep 5</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am kill com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span></pre>
+</div>
+          <p>機内モードを解除し、10 秒待ちます。他のアプリの Worker の結果も同じログに出るので、<code>TodoBackupWorker</code> の行に絞ります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span><span class="terminal__line"><span class="terminal__prompt">$</span> sleep 10</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line">7893</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s WM-WorkerWrapper:I | grep &quot;Worker result&quot; | grep TodoBackupWorker</span><span class="terminal__line">10-04 13:34:15.458  7893  7913 I WM-WorkerWrapper: Worker result SUCCESS for Work [ id=87e0ae21-cd33-4f79-8e6f-199e6ab62570, class=com.handson.android01.work.TodoBackupWorker, tags={ com.handson.android01.work.TodoBackupWorker } ]</span></pre>
+</div>
+          <p>アプリは起動していないのに、<code>pidof</code> に新しいプロセスの番号が出て、Worker が成功しました。条件がそろったので、OS がアプリのプロセスを起動して Worker を動かしています。ジョブは、次の周期の待ち時間（<code>TIMING_DELAY</code>）付きのものに置き換わりました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">dumpsys jobscheduler（このアプリのジョブの抜粋）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">    Required constraints: BATTERY_NOT_LOW TIMING_DELAY CONNECTIVITY FLEXIBILITY [0x90200002]
+    Unsatisfied constraints: TIMING_DELAY [0x80000000]
+    Run time: earliest=+23h59m56s228ms, latest=none, original latest=none</code></pre>
+</div>
+          <p><code>earliest</code> は約 24 時間後です。WorkManager は Periodic の作業を、JobScheduler に「待ち時間付きの 1 回のジョブ」として登録し、実行のたびに次のジョブを登録し直します。最後に画面を開きます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line">Warning: Activity not started, its current task has been brought to the front</span></pre>
+</div>
+          <p>画面には「最終バックアップ: 10/4 13:34」のように、Worker の送った時刻が出ます（日時は実行した時刻になります）。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>am force-stop</code> すると予約が消える</p>
+              <p><code>am force-stop</code>（強制停止）すると、アプリは停止状態になり、JobScheduler のジョブも消えます。筆者の環境では、<code>adb shell am force-stop com.handson.android01</code> の後、<code>dumpsys jobscheduler</code> にこのアプリのジョブがありませんでした。次にアプリを起動すると、約 24 時間後の <code>TIMING_DELAY</code> 付きのジョブが戻りました。WorkManager の記録は残っているので、起動したときに登録し直されます。端末を再起動した場合は、WorkManager の <code>RescheduleReceiver</code> が起動完了の通知（<code>BOOT_COMPLETED</code>）を受けて登録し直します。アプリを開かなくても予約が戻ります（筆者は再起動では試していません）。「アプリを終了しても動くか」は、<code>am force-stop</code> ではなく <code>am kill</code> で確かめます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">Periodic の 2 回目以降は adb で前倒しできない</p>
+              <p>ステップ 3 の実験で使った <code>cmd jobscheduler run</code> は、Periodic の 2 回目以降には使えませんでした。<code>-s</code> は <code>TIMING_DELAY</code> を満たさないので「<code>has functional constraints but --force not specified</code>」で断られます。<code>-f</code> は <code>Running job [FORCED]</code> と出ますが、予定より早いので WorkManager が実行を見送り、ジョブを登録し直すだけでした。Periodic は、<code>dumpsys</code> で予約を確かめ、最初の 1 回を機内モードの切り替えで動かして確かめます。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: 15 分の下限と、<code>KEEP</code>・<code>UPDATE</code> の違い</summary>
+            <div class="disclosure__body">
+          <p>この実験は任意です。読むだけでもかまいません。筆者は周期を 1 分（<code>PeriodicWorkRequestBuilder&lt;TodoBackupWorker&gt;(1, TimeUnit.MINUTES)</code>）に変えて試しました。1 回の実測で、実験の後は 1 日・<code>KEEP</code> に戻しています。</p>
+
+          <table>
+            <thead>
+            <tr><th>手順</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1 分に変え、<code>pm clear</code> せずに入れ直して起動する</td><td>予約は 1 日のまま（<code>earliest=+23h59m18s289ms</code>）。<code>KEEP</code> なので、新しい周期は使われない</td></tr>
+            <tr><td><code>pm clear</code> してから起動する</td><td>15 分で登録される（<code>earliest=+14m57s827ms</code>）</td></tr>
+            <tr><td>15 分の予約が残った状態で、周期を 1 日に戻し、<code>ExistingPeriodicWorkPolicy.UPDATE</code> に変えて入れ直し、起動する</td><td>既存の予約が 1 日（<code>earliest=+23h59m50s563ms</code>）に更新される</td></tr>
+            </tbody>
+          </table>
+          <p>15 分より短い周期を渡すと、起動のたびに次の警告がログに出ました（<code>KEEP</code> で予約が変わらないときも、依頼を作るたびに出ます）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">logcat</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">10-04 13:34:53.984  8029  8029 W WM-WorkSpec: Interval duration lesser than minimum allowed value; Changed to 900000</code></pre>
+</div>
+          <ul>
+            <li><code>900000</code> ミリ秒が 15 分です。周期は 15 分に切り上げられます。</li>
+            <li>lint の <code>InvalidPeriodicWorkRequestInterval</code>（周期が 15 分未満）は出ませんでした。<code>PeriodicWorkRequestBuilder&lt;W&gt;()</code> の書き方では検出されず、手がかりはこのログだけです。</li>
+            <li>配布済みのアプリで周期を変えるときは、<code>KEEP</code> のままだと古い予約が残ります。<code>UPDATE</code> を使うと、既存の予約を新しい周期に更新できます。</li>
+          </ul>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 79 件と UI テスト 72 件がすべて成功すれば OK です。機内モードで起動すると「最終バックアップ: なし」と出て、プロセスを終了してから機内モードを解除すると Worker が成功し、画面に時刻が出ることも確かめます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>完成状態でビルド・lint・単体テスト・UI テストをまとめて実行します。続けて、UI テストがネットワークに出ないことと、release ビルドでも Worker が動くことを確かめます。コードはステップ 4 の完成状態のままです。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 40s</span></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト（<code>test</code>）</td><td>79 件すべて成功（13 から 3 件増えた）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>72 件すべて成功（13 から 6 件増えた）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 9 件・ヒント 1 件（13 と同じ）。警告の内訳は <code>UnusedResources</code> 7 件・<code>RedundantLabel</code> 1 件・<code>AndroidGradlePluginVersion</code> 1 件。ヒントは <code>AutoboxingStateCreation</code> 1 件。WorkManager の検査（<code>RemoveWorkManagerInitializer</code>・<code>BadPeriodicWorkRequestEnqueue</code>・<code>InvalidPeriodicWorkRequestInterval</code>）は 1 件も出ていません</td></tr>
+            <tr><td>debug APK</td><td>約 16.1MB（16,139,960 バイト）。13 は 15,511,580 バイト（<code>./gradlew clean</code> の後のビルド）で、条件が少し違いますが、約 0.6MB 増えました。WorkManager の本体と、Room 2・<code>startup-runtime</code> などの依存のぶんです</td></tr>
+            </tbody>
+          </table>
+          <h4>機内モードでも UI テストが通ることを確かめる</h4>
+          <p>新しいテストも偽物の API を使うので、ネットワークに出ません。機内モードにして UI テストを実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings get global airplane_mode_on</span><span class="terminal__line">1</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 53s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings get global airplane_mode_on</span><span class="terminal__line">0</span></pre>
+</div>
+          <p>筆者の環境では、機内モードのまま UI テスト 72 件がすべて成功しました。<code>airplane_mode_on</code> の <code>1</code> が機内モード、<code>0</code> が解除です。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">機内モードの解除を忘れない</p>
+              <p>解除しないまま次の release の確認に進むと、最初の一覧を API から取得できません。Worker も <code>CONNECTIVITY</code> の条件を満たさないので動きません。</p>
+            </div>
+          </div>
+          <h4>release ビルドでも動くことを確かめる</h4>
+          <p>release ビルドでは R8 がコードを縮小し、名前を短く変えます。WorkManager は、予約した Worker のクラス名を自分の DB に記録し、実行するときにその名前で <code>HiltWorkerFactory</code> から工場を探します。名前が変わると Worker を作れないので、release でも動くことを確かめます。手順の詳しい説明は、09 のステップ 3「release ビルドでも動くことを確かめる」を参照してください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 31s</span></pre>
+</div>
+          <p>できた <code>app-release-unsigned.apk</code> は約 2.0MB（1,999,003 バイト）でした。13 は 1,891,504 バイトで、増えたのは約 107KB です。</p>
+          <p>13 と同じ手順で、作業用ディレクトリにコピーし、debug 用の鍵で <code>apksigner sign</code> します。次のコマンドの <code>build-tools/37.0.0</code> は、筆者の環境の版です。<code>~/Library/Android/sdk/build-tools/</code> にインストール済みの版に読み替えてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp app/build/outputs/apk/release/app-release-unsigned.apk &lt;作業用ディレクトリ&gt;/rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd &lt;作業用ディレクトリ&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out rel-signed.apk rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner verify --verbose rel-signed.apk</span><span class="terminal__line">Verifies</span><span class="terminal__line">Verified using v1 scheme (JAR signing): false</span><span class="terminal__line">Verified using v2 scheme (APK Signature Scheme v2): true</span><span class="terminal__line">Verified using v3 scheme (APK Signature Scheme v3): true</span><span class="terminal__line">Verified using v3.1 scheme (APK Signature Scheme v3.1): false</span><span class="terminal__line">Verified using v3.2 scheme (APK Signature Scheme v3.2): false</span><span class="terminal__line">Verified using v4 scheme (APK Signature Scheme v4): false</span><span class="terminal__line">Verified for SourceStamp: false</span><span class="terminal__line">Number of signers: 1</span></pre>
+</div>
+          <p><code>apksigner sign</code> は、成功すると何も表示しません。<code>connectedDebugAndroidTest</code> はテストの後にアプリをアンインストールするので、端末にはアプリが残っていません。そのまま release 版を入れて起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb install rel-signed.apk</span><span class="terminal__line">Serving...</span><span class="terminal__line">All files should be loaded. Notifying the device.</span><span class="terminal__line">Performing Incremental Install</span><span class="terminal__line">Success</span><span class="terminal__line">Install command complete in 46 ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -c</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>数秒待ってから、Worker の結果とクラッシュの有無を見ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s WM-WorkerWrapper:I | grep &quot;Worker result&quot; | grep TodoBackupWorker</span><span class="terminal__line">10-04 13:39:48.907  9717  9742 I WM-WorkerWrapper: Worker result SUCCESS for Work [ id=d8f5c211-507c-4acb-81d7-1b25289c9111, class=com.handson.android01.work.TodoBackupWorker, tags={ com.handson.android01.work.TodoBackupWorker } ]</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -c &quot;FATAL EXCEPTION&quot;</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -b crash | wc -l</span><span class="terminal__line">       0</span></pre>
+</div>
+          <p>release でも <code>Worker result SUCCESS</code> と出て、画面には「最終バックアップ: 10/4 13:39」のように時刻が出ました。クラッシュは記録されていません。</p>
+          <p>release の確認はここまでです。以降のコマンドはプロジェクトのディレクトリで実行するので、先に作業用ディレクトリから戻ります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd -</span><span class="terminal__line">&lt;プロジェクトのディレクトリ&gt;</span></pre>
+</div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: R8 のあとで Worker のクラス名がどうなったかを mapping.txt で見る</summary>
+            <div class="disclosure__body">
+          <p>この確認は任意です。読むだけでもかまいません。R8 が名前をどう変えたかは、<code>mapping.txt</code> に書かれています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -nE &quot;^com.handson.android01.work.TodoBackup[A-Za-z_]* -&gt;&quot; app/build/outputs/mapping/release/mapping.txt</span><span class="terminal__line">256136:com.handson.android01.work.TodoBackupScheduler -&gt; zr2:</span><span class="terminal__line">256156:com.handson.android01.work.TodoBackupWorker -&gt; com.handson.android01.work.TodoBackupWorker:</span></pre>
+</div>
+          <ul>
+            <li><code>TodoBackupWorker</code> は、元の名前のまま残っています。<code>work-runtime</code> と <code>hilt-work</code> のライブラリに入っている keep ルールが、Worker のクラス名とコンストラクタを残すためです。</li>
+            <li><code>TodoBackupScheduler</code> は <code>zr2</code> に変わっていますが、WorkManager が記録するのは Worker のクラス名だけなので、問題ありません。</li>
+            <li>自前の keep ルール（<code>app/src/main/keepRules/rules.keep</code>）は 13 のままで、足す必要はありませんでした。</li>
+            <li>行番号と短い名前（<code>zr2</code>）は、ビルドによって変わります。</li>
+          </ul>
+
+            </div>
+          </details>
+
+          <p>確認が終わったら、作業用ディレクトリの APK を削除し、アプリをアンインストールします。アンインストールすると、1 日 1 回の送信も止まります。エミュレータと Gradle デーモンも止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm &lt;作業用ディレクトリ&gt;/rel.apk &lt;作業用ディレクトリ&gt;/rel-signed.apk &lt;作業用ディレクトリ&gt;/rel-signed.apk.idsig</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>単体テスト 79 件と UI テスト 72 件が成功し、機内モードのままでも UI テストが通り、機内モードを解除していて、release の APK でも <code>Worker result SUCCESS</code> が出て、画面に最終バックアップの時刻が出れば OK です。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="not-covered">この項目で扱わなかったこと</h2>
+          <ul>
+            <li>すぐに始めて、すぐに終えたい作業に使う expedited work（優先して実行する作業）と、フォアグラウンドでの長時間の作業（<code>setForeground</code>）。API 31 未満では通知が必要になるため、通知と合わせてこのトラックでは扱いません。</li>
+            <li>作業の状態（<code>WorkInfo</code>）を画面から観察し、Snackbar などで知らせること。この項目の画面は、Worker が DataStore に書いた時刻だけを表示します。</li>
+            <li>画面から「今すぐバックアップ」する機能と、Todo を変えるたびに少し待ってから送る（<code>REPLACE</code> と <code>setInitialDelay</code>）作り方。</li>
+            <li>バックアップから復元する機能。練習用の API は、送った内容を保存しません。</li>
+            <li>充電中だけ（<code>setRequiresCharging</code>）や Wi-Fi だけ（<code>NetworkType.UNMETERED</code>）の条件。</li>
+            <li>Doze・App Standby で実行がずれる様子の実験と、15 分の周期を実際に待つ確認。</li>
+            <li>WorkManager 2.12.0 で入った実験的な Work Metrics（<code>work-analytics</code>）。</li>
+            <li>Hilt の組み立てごと Worker を作るテスト（<code>@HiltAndroidTest</code> で <code>HiltWorkerFactory</code> を注入する）。この項目のテストは、自前の工場で Worker を作りました。</li>
+          </ul>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid14</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">WorkManager が向いている処理と、向いていない処理（時刻を指定した実行や、画面が出ている間だけの処理）を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">manifest で <code>WorkManagerInitializer</code> だけを外し、<code>TodoApplication</code> に <code>Configuration.Provider</code> を実装した理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>@HiltWorker</code> の <code>CoroutineWorker</code> を書き、<code>@Assisted</code> の引数と Hilt が渡す引数の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>Result.success()</code>・<code>failure()</code>・<code>retry()</code> を使い分け、4xx とそれ以外の失敗で結果を分けた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>dumpsys jobscheduler</code> で、このアプリのジョブの <code>Required constraints</code> と <code>Unsatisfied constraints</code> を読める</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>enqueueUniquePeriodicWork</code> と <code>KEEP</code> で 1 日 1 回の予約にし、<code>CANCEL_AND_REENQUEUE</code>（旧 <code>REPLACE</code>）にしない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">アプリのプロセスを終了しても、条件がそろうと Worker が動くことを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>TestListenableWorkerBuilder</code> と <code>WorkManagerTestInitHelper</code> で、Worker と予約をテストした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-10" class="checklist__input">
+          <label for="check-10" class="checklist__label">単体テスト 79 件・UI テスト 72 件を通し、機内モードでも UI テストが通ること、release の APK でも Worker が動くことを確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">Worker の結果が <code>FAILURE</code> で、<code>Could not instantiate</code> が出る</p>
+              <p>既定の工場で Worker を作ろうとしています。<code>TodoApplication</code> の <code>setWorkerFactory(workerFactory)</code> と、manifest で <code>WorkManagerInitializer</code> を外しているかを確かめます。アプリは落ちないので、<code>WM-WorkerFactory</code> のログで気づきます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">lint が <code>RemoveWorkManagerInitializer</code> のエラーで失敗する</p>
+              <p><code>Configuration.Provider</code> を実装しているのに、既定の初期化が残っています。manifest の <code>&lt;provider&gt;</code> の記述を確かめます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">起動した直後に <code>WorkManager is not initialized properly</code> で落ちる</p>
+              <p>既定の初期化を外したのに、<code>TodoApplication</code> が <code>Configuration.Provider</code> を実装していません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>'getWorkManagerConfiguration' overrides nothing</code> でコンパイルできない</p>
+              <p>WorkManager 2.9 以降は <code>override val workManagerConfiguration: Configuration</code> と書きます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>cmd jobscheduler run</code> が <code>Could not find job</code> になる</p>
+              <p><code>-n androidx.work.systemjobscheduler</code> を付けます。ジョブ番号は登録し直すたびに変わるので、<code>dumpsys jobscheduler</code> で読み直します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">「最終バックアップ: なし」が一瞬で時刻に変わる</p>
+              <p>最初の 1 回は、条件がそろえば登録の直後に動きます。「なし」を見たいときは、機内モードで起動します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">予約が消えた</p>
+              <p><code>am force-stop</code> すると、次にアプリを起動するまでジョブが消えます。アプリを終了しても動くかは、<code>am kill</code> で確かめます。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        Todo 一覧を 1 日 1 回サーバーへ送るバックアップを、WorkManager で作りました。
+        WorkManager の既定の初期化を外し、<code>TodoApplication</code> の <code>Configuration.Provider</code> で <code>HiltWorkerFactory</code> を渡しました。これで、<code>@HiltWorker</code> の Worker が Hilt の <code>TodoRepository</code> を受け取れます。
+        予約には「ネットワークにつながっている」「電池が少なくない」の条件と、30 秒から倍になるバックオフを付けました。4xx はあきらめ、通信の失敗と 5xx は 3 回までやり直します。
+        <code>enqueueUniquePeriodicWork</code> と <code>KEEP</code> で、起動のたびに呼んでも予約は 1 つのままです。アプリのプロセスを終了していても、条件がそろうと OS がアプリを起動して Worker を実行しました。
+        送った時刻は DataStore に残し、ViewModel の <code>combine</code> を通して一覧の上部に出しています。</p>
+      <p>次の項目（15: テストとリリースビルド）では、テストとリリースビルドを仕上げる予定です。13 から持ち越した Hilt のテストの書き方（<code>@UninstallModules</code>・<code>@BindValue</code>・<code>hiltRule.inject()</code> など）を扱います。この項目の Worker も、<code>hiltRule.inject()</code> で注入した <code>HiltWorkerFactory</code> を使い、Hilt の組み立てごとテストする候補です。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">完成コード</p>
+              <p>このレッスンの完成コードは、ブランチ <code>android/14-workmanager</code> の <code>android/14-workmanager/</code> ディレクトリにあります。</p>
+            </div>
+          </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../13-hilt/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">13: Hilt で依存性注入</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">15: テストとリリースビルド</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>

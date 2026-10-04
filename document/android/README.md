@@ -43,5 +43,5 @@ Kotlin + Jetpack Compose を使った Android アプリ開発を学ぶトラッ�
 | 11 | [Room 3 でローカル保存](./11-room/index.html) | Room 3 の Entity・DAO・Database と Repository で、一覧の追加・完了・削除を端末の DB に保存し、アプリを終了しても残るようにできる | 60分 |
 | 12 | [DataStore で設定を保存](./12-datastore/index.html) | Preferences DataStore に「最初の一覧を取得済み」の印と絞り込みを保存し、全件削除しても API から取り直さず、アプリを再起動しても絞り込みが保たれるようにできる | 60分 |
 | 13 | [Hilt で依存性注入](./13-hilt/index.html) | `AppContainer` を Hilt の module・`@Inject` constructor・`@HiltViewModel` に置き換え、UI テストの偽物を `@TestInstallIn` で差し込める | 60分 |
-| 14 | WorkManager | WorkManager を使ったバックグラウンド処理を実装できる | 45分 |
+| 14 | [WorkManager で定期バックアップ](./14-workmanager/index.html) | `@HiltWorker` の Worker を `Configuration.Provider` で動かし、条件・リトライ付きの定期バックアップを `enqueueUniquePeriodicWork` で予約して、adb とテストで実行を確かめられる | 60分 |
 | 15 | テストとリリースビルド | ユニットテストを書き、リリースビルドを作成できる | 45分 |
