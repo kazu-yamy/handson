@@ -1213,7 +1213,7 @@ class TodoErrorTest {
       <p>
         <code>MockEngine</code> を <code>createTodoHttpClient</code> に渡し、アプリと同じ設定の <code>HttpClient</code> で <code>TodoApi</code> をテストしました。<code>respond</code> でステータス・本文・<code>Content-Type</code> を決めると、本物の API では起こせない失敗を、ネットワークへ出ずに再現できます。
         ViewModel のテストでは、<code>MockEngine</code> にテスト用のディスパッチャーを渡して、待ち時間を仮想時間にしました。失敗の文言・再試行・キャンセルを確かめました。UI テストでは、別のスレッドから届く応答を <code>waitUntil</code> で待ち、失敗表示から再試行で一覧に戻る流れを確かめました。機内モードのままでも UI テスト 66 件が通り、テストがネットワークに出ていないことも確かめました。</p>
-      <p>次の項目（11: Room 3 と DataStore）では、Room 3 でのローカル DB と、DataStore での設定の保存を扱います。</p>
+      <p>次の項目（11: Room 3 でローカル保存）では、Room 3 で一覧を端末の DB に保存し、アプリを終了しても変更が残るようにします。</p>
 
       <div class="callout callout--note">
         <span class="callout__icon" aria-hidden="true">ℹ️</span>
@@ -1229,10 +1229,10 @@ class TodoErrorTest {
           <span class="lesson-nav__direction">← 前のレッスン</span>
           <span class="lesson-nav__title">09: Ktor と serialization で API 取得</span>
         </a>
-        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
-          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
-          <span class="lesson-nav__title">11: Room 3 と DataStore</span>
-        </span>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../11-room/index.html">
+          <span class="lesson-nav__direction">次のレッスン →</span>
+          <span class="lesson-nav__title">11: Room 3 でローカル保存</span>
+        </a>
       </nav>
 
     </div>
