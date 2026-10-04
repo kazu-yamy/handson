@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>14: 可観測性と graceful shutdown | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">14</li>
+        </ol>
+        <h1 class="lesson-title">可観測性と graceful shutdown</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: 13 までの API に、本番で調べやすいログ、ヘルスチェック、安全な停止を足したい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法、04 のミドルウェア、08 の結合テスト、12 の <code>layers::apply</code>（層の順番）、13 の CORS とセキュリティヘッダー</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../13-http-security/index.html">13: HTTP の防御層</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>println!</code> を tracing に置き換え、<code>RUST_LOG</code> で出力量を、<code>LOG_FORMAT=json</code> で形式を切り替える</li>
+          <li>tower-http の <code>TraceLayer</code> とリクエスト ID の層で、エラーやプリフライトを含む全ての応答に <code>x-request-id</code> を付け、ログと突き合わせる</li>
+          <li>層の順番（ID の発行 → 応答への付与 → 機密ヘッダーの伏せ字 → ログ）を、実測を元に説明できる</li>
+          <li><code>/health</code>（プロセスが生きているか）と <code>/ready</code>（DB に届くか）を使い分ける</li>
+          <li>SIGTERM と <kbd>Ctrl</kbd> + <kbd>C</kbd> で、処理中のリクエストを終えてから止まるようにする</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>13 までのサーバーは、<code>println!</code> で 1 リクエスト 1 行のログを出していました。例えば <code>POST /auth/login -&gt; 500 Internal Server Error (67.292µs)</code> のような行です。これでは、次のことができません。</p>
+      <ul>
+        <li><strong>出力量を変える</strong>: 調査のときだけ詳しく出す、普段は警告だけにする、といった切り替えができない。</li>
+        <li><strong>機械で読む</strong>: ログ収集の基盤（Cloud Logging など）に渡しやすい JSON で出せない。</li>
+        <li><strong>1 件のリクエストを追う</strong>: 利用者から「さっきのリクエストが 500 になった」と言われても、どのログの行か特定できない。</li>
+      </ul>
+      <p>また、サーバーを止める方法は <kbd>Ctrl</kbd> + <kbd>C</kbd> でプロセスを殺すことだけでした。処理中のリクエストがあっても、その場で打ち切られます。</p>
+      <p>このレッスンでは、ログ・リクエスト ID・ヘルスチェック・停止の 4 つを整えます。直す前と直した後は次のとおりです。</p>
+
+      <table>
+        <thead>
+          <tr><th>観点</th><th>直す前（13 のまま）</th><th>直した後</th><th>ステップ</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>ログの出し方</td><td><code>println!</code> / <code>eprintln!</code></td><td>tracing。<code>RUST_LOG</code> で量、<code>LOG_FORMAT=json</code> で形式を切り替える</td><td>2</td></tr>
+          <tr><td>リクエスト ID</td><td>なし</td><td>全ての応答に <code>x-request-id</code>。ログの <code>request_id</code> と同じ値</td><td>3</td></tr>
+          <tr><td>ヘルスチェック</td><td><code>/health</code> だけ</td><td><code>/health</code> に加えて、DB に届くかを見る <code>/ready</code></td><td>4</td></tr>
+          <tr><td>SIGTERM を受けたとき</td><td>その場で終わる（終了コード 143）</td><td>処理中のリクエストを終えてから終わる（終了コード 0）</td><td>5</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>Rust（rustc）1.99.0 / cargo 1.99.0（Rust edition 2024）で動作を確認しています。</p>
+          <p>このレッスンでは、tracing 0.1.44 と tracing-subscriber 0.3.23（feature <code>env-filter</code>・<code>json</code>）を追加します。</p>
+          <p>tower-http 0.7.1 には feature <code>trace</code>・<code>request-id</code>・<code>sensitive-headers</code>・<code>util</code> を足します。tokio 1.53.1 には feature <code>signal</code> を足します。axum 0.8.9・sqlx 0.9.0 などは 13 と同じです。バージョンは執筆時点（2026年10月）のものです。</p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">13 をコピーし、テストが通ることを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>13 の完成コードを出発点としてコピーします。<code>13-http-security</code> ディレクトリがある場所で、次のコマンドを実行してください。<code>target/</code>・<code>app.db*</code>・<code>.env</code> はコピーせず、<code>.env</code> は <code>.env.example</code> から作り直します。コマンドは何も表示せずに終わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p 14-observability</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 13-http-security</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp Cargo.toml Cargo.lock .gitignore .env.example ../14-observability/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R src migrations tests ../14-observability/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd ../14-observability</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp .env.example .env</span></pre>
+</div>
+          <p><code>Cargo.toml</code> の <code>name</code> を <code>observability</code> に変えます。<code>[lib]</code> の <code>name = "app"</code> と <code>[[bin]]</code> の <code>name = "server"</code> は 13 のままにします。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "http-security"</span><span class="diff-line diff-line--add">+ name = "observability"</span><span class="diff-line">  version = "0.1.0"</span><span class="diff-line">  edition = "2024"</span><span class="diff-line"> </span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>変更を確かめます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n "^name" Cargo.toml</span><span class="terminal__line">2:name = "observability"</span><span class="terminal__line">7:name = "app"</span><span class="terminal__line">11:name = "server"</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -A</span><span class="terminal__line">.env</span><span class="terminal__line">.env.example</span><span class="terminal__line">.gitignore</span><span class="terminal__line">Cargo.lock</span><span class="terminal__line">Cargo.toml</span><span class="terminal__line">migrations</span><span class="terminal__line">src</span><span class="terminal__line">tests</span></pre>
+</div>
+          <p>ビルドとテストが 13 と同じように通ることを確かめます。<code>cargo build</code> の出力は一部を省略しています。<code>cargo test</code> の出力は、テストバイナリーごとに <code>Running</code> の行と集計（<code>test result</code>）の行だけを残し、ほかを「…」で省略しています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   …</span><span class="terminal__line">   Compiling sqlx v0.9.0</span><span class="terminal__line">   Compiling observability v0.1.0 (/path/to/14-observability)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.70s</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling observability v0.1.0 (/path/to/14-observability)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.08s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-6f6d3b8f2dd2d8c1)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.61s</span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-f22ac76b98adf7e1)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-715c0bb7eb0403c4)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s</span><span class="terminal__line">     Running tests/errors.rs (target/debug/deps/errors-265901cd26854886)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s</span><span class="terminal__line">     Running tests/hash_limit.rs (target/debug/deps/hash_limit-765d952ef65c99c4)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-caa0670127abe908)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-9377f77a4ae3011c)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.05s</span><span class="terminal__line">     Running tests/rate_limit.rs (target/debug/deps/rate_limit-a231f4cd2ecafcd1)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s</span><span class="terminal__line">     Running tests/security.rs (target/debug/deps/security-648fa10479d332fb)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-a41f0c302e27eda0)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s</span><span class="terminal__line">   Doc-tests app</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+          <p>13 と同じ 93 件が成功しました。ほかに、計測用の <code>#[ignore]</code> のテストが 1 件あります。<code>target/debug/deps/</code> の後ろのハッシュと時間は、環境ごとに変わります。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>93 件のテストが成功すれば OK です。以降のコマンドは全て <code>14-observability</code> ディレクトリで実行します。</p>
+          </div>
+        </div>
+      </section>
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">tracing でログを出す</h3>
+        </div>
+        <div class="step__body">
+          <h4>クレートを追加する</h4>
+          <p>tracing は、ログを「出す側」の API です（<code>tracing::info!</code> など）。tracing-subscriber は、出されたログを「受け取って書き出す側」（subscriber）です。tracing は axum や sqlx が依存として既に <code>Cargo.lock</code> に入れていますが、自分のコードから呼ぶので直接の依存に加えます。<code>Features:</code> の一覧は省略しています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add tracing@0.1.44</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding tracing v0.1.44 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             …</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add tracing-subscriber@0.3.23 --features env-filter,json</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding tracing-subscriber v0.3.23 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             …</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">     Locking 12 packages to highest Rust 1.99.0 compatible versions</span><span class="terminal__line">      Adding aho-corasick v1.1.5</span><span class="terminal__line">      Adding lazy_static v1.5.1</span><span class="terminal__line">      Adding matchers v0.2.0</span><span class="terminal__line">      Adding nu-ansi-term v0.50.3</span><span class="terminal__line">      Adding regex-automata v0.4.18</span><span class="terminal__line">      Adding regex-syntax v0.8.11</span><span class="terminal__line">      Adding sharded-slab v0.1.7</span><span class="terminal__line">      Adding thread_local v1.1.10</span><span class="terminal__line">      Adding tracing-log v0.2.0</span><span class="terminal__line">      Adding tracing-serde v0.2.0</span><span class="terminal__line">      Adding tracing-subscriber v0.3.23</span><span class="terminal__line">      Adding valuable v0.1.1</span></pre>
+</div>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }</span><span class="diff-line">  tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }</span><span class="diff-line">  tower-http = { version = "0.7.1", features = ["cors", "set-header", "timeout"] }</span><span class="diff-line diff-line--add">+ tracing = "0.1.44"</span><span class="diff-line diff-line--add">+ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }</span><span class="diff-line"> </span><span class="diff-line">  [dev-dependencies]</span><span class="diff-line">  http-body-util = "0.1.5"</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>env-filter</code> は <code>RUST_LOG</code> の書式を解釈する機能、<code>json</code> は 1 行 1 JSON で書き出す機能です。</p>
+
+          <h4>subscriber を初期化する</h4>
+          <p>新しいファイル <code>src/telemetry.rs</code> を作ります。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">src/telemetry.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">use std::io::IsTerminal;
+use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
+
+// ログの出力先（subscriber）を作って、プロセスに 1 つだけ登録する。
+// 2 回呼ぶと panic するので、main からだけ呼ぶ（テストからは呼ばない）
+pub fn init() {
+    // RUST_LOG が無い、または書式が壊れているときは info 以上を出す
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let registry = tracing_subscriber::registry().with(filter);
+
+    if std::env::var("LOG_FORMAT").is_ok_and(|value| value == "json") {
+        // 1 行 1 JSON。ログ収集の基盤（Cloud Logging や Datadog など）に渡しやすい形
+        registry.with(fmt::layer().json()).init();
+    } else {
+        // 色の escape sequence は、出力先が端末のときだけ付ける（ファイルにリダイレクトしたときに混ざらないように）
+        registry
+            .with(fmt::layer().with_ansi(std::io::stdout().is_terminal()))
+            .init();
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li><code>EnvFilter::try_from_default_env()</code> は、環境変数 <code>RUST_LOG</code> を読みます。無いときは <code>info</code> 以上を出します。ただし、空の値（<code>RUST_LOG=</code>）は「無い」扱いにならず、ログが 1 行も出なくなります。<code>.env</code> にも空の値で書かないでください（<a href="#troubleshooting">つまずきポイント</a>）。</li>
+            <li><code>LOG_FORMAT=json</code> のときだけ JSON で出します。それ以外は人が読むテキストです。</li>
+            <li>色（ANSI の escape sequence）は、出力先が端末のときだけ付けます。ファイルにリダイレクトしたログに制御文字が混ざらないようにするためです。</li>
+            <li><code>init()</code> は、プロセスに 1 つだけの subscriber を登録します。2 回呼ぶと panic するので、<code>main</code> からだけ呼びます（<a href="#troubleshooting">つまずきポイント</a>）。</li>
+          </ul>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/lib.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  pub mod rate_limit;</span><span class="diff-line">  pub mod routes;</span><span class="diff-line">  pub mod state;</span><span class="diff-line diff-line--add">+ pub mod telemetry;</span><span class="diff-line">  pub mod token;</span><span class="diff-line"> </span><span class="diff-line">  use axum::Router;</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>main.rs</code> では、<code>.env</code> に書いた <code>RUST_LOG</code> / <code>LOG_FORMAT</code> も効くよう、<code>dotenvy::dotenv()</code> の後で初期化します。<code>println!</code> は <code>tracing::info!</code> に置き換えます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/main.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">- use app::{build_app, config::Config, password, rate_limit::RateLimits, state::AppState};</span><span class="diff-line diff-line--add">+ use app::{</span><span class="diff-line diff-line--add">+     build_app, config::Config, password, rate_limit::RateLimits, state::AppState, telemetry,</span><span class="diff-line diff-line--add">+ };</span><span class="diff-line">  use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};</span><span class="diff-line">  use std::net::SocketAddr;</span><span class="diff-line">  use std::str::FromStr;</span><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {</span><span class="diff-line diff-line--add">+     // .env に書いた RUST_LOG / LOG_FORMAT も効くよう、dotenv の後で初期化する</span><span class="diff-line">      dotenvy::dotenv().ok();</span><span class="diff-line diff-line--add">+     telemetry::init();</span><span class="diff-line">      let config = Config::from_env()?;</span><span class="diff-line diff-line--remove">-     println!("config: {config:?}");</span><span class="diff-line diff-line--add">+     tracing::info!(?config, "config loaded");</span><span class="diff-line">      password::warm_up();</span><span class="diff-line"> </span><span class="diff-line">      let options = SqliteConnectOptions::from_str(&amp;config.database_url)?</span><span class="diff-line">  ...</span><span class="diff-line">      let app = build_app(state);</span><span class="diff-line"> </span><span class="diff-line">      let listener = tokio::net::TcpListener::bind(&amp;addr).await?;</span><span class="diff-line diff-line--remove">-     println!("listening on {}", listener.local_addr()?);</span><span class="diff-line diff-line--add">+     tracing::info!(addr = %listener.local_addr()?, "listening");</span><span class="diff-line">      // ConnectInfo（接続元のアドレス）を取り出せるようにして serve する。これが無いと IP 単位の制限が 500 になる</span><span class="diff-line">      axum::serve(</span><span class="diff-line">          listener,</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>?config</code> は <code>Debug</code> で、<code>%addr</code> は <code>Display</code> で書き出すフィールドの書き方です。値を文章に埋め込まず、名前の付いたフィールドとして渡します。こうすると、JSON で出したときに項目として取り出せます。</p>
+          <p><code>error.rs</code> の <code>eprintln!</code> 3 か所も <code>tracing::error!</code> にします。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/error.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">                  response</span><span class="diff-line">              }</span><span class="diff-line">              AppError::Database(error) =&gt; {</span><span class="diff-line diff-line--remove">-                 eprintln!("database error: {error}");</span><span class="diff-line diff-line--add">+                 tracing::error!(%error, "database error");</span><span class="diff-line">                  error_response(</span><span class="diff-line">                      StatusCode::INTERNAL_SERVER_ERROR,</span><span class="diff-line">                      "internal",</span><span class="diff-line">  ...</span><span class="diff-line">                  )</span><span class="diff-line">              }</span><span class="diff-line">              AppError::Internal(message) =&gt; {</span><span class="diff-line diff-line--remove">-                 eprintln!("internal error: {message}");</span><span class="diff-line diff-line--add">+                 tracing::error!(%message, "internal error");</span><span class="diff-line">                  error_response(</span><span class="diff-line">                      StatusCode::INTERNAL_SERVER_ERROR,</span><span class="diff-line">                      "internal",</span><span class="diff-line">  ...</span><span class="diff-line">                  let status = rejection.status();</span><span class="diff-line">                  if status.is_server_error() {</span><span class="diff-line">                      // ルート定義の誤り（パラメーターの数や名前の不一致）。利用者の入力は含まないのでログに残してよい</span><span class="diff-line diff-line--remove">-                     eprintln!("path rejection: {}", rejection.body_text());</span><span class="diff-line diff-line--add">+                     tracing::error!(detail = %rejection.body_text(), "path rejection");</span><span class="diff-line">                      return error_response(status, "internal", "internal server error");</span><span class="diff-line">                  }</span><span class="diff-line">                  error_response(status, code_for_status(status), "invalid path parameter")</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>layers.rs</code> の <code>log_request</code> の <code>println!</code> も置き換えます。この関数は、次のステップで tower-http の <code>TraceLayer</code> に置き換えて消します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/layers.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      let response = next.run(req).await;</span><span class="diff-line"> </span><span class="diff-line">      let elapsed: Duration = start.elapsed();</span><span class="diff-line diff-line--remove">-     println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());</span><span class="diff-line diff-line--add">+     tracing::info!(%method, %uri, status = response.status().as_u16(), ?elapsed, "request");</span><span class="diff-line">      response</span><span class="diff-line">  }</span></pre>
+</div>
+          <p>これで、サーバー側の <code>println!</code> / <code>eprintln!</code> は無くなりました。<code>src/password.rs</code> のテストの中にある <code>println!</code> は、計測用のテストが値を表示するためのもので、サーバーのログではないので残します。</p>
+          <p><code>.env.example</code> にも、2 つの環境変数の説明を足しておきます（どちらもコメント行です。省略すると既定の動きになります）。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">.env.example</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  # 信用するプロキシ（リバースプロキシや BFF）の後ろで動かすときだけ true にする。省略すると false</span><span class="diff-line">  # true のときだけ、IP 単位のレート制限で X-Forwarded-For の右端を使う</span><span class="diff-line">  TRUST_FORWARDED_FOR=false</span><span class="diff-line diff-line--add">+ # ログの出力量（tracing-subscriber の EnvFilter の書式。カンマ区切りで「対象=レベル」）。省略すると info</span><span class="diff-line diff-line--add">+ # 例: RUST_LOG=warn（警告以上だけ）、RUST_LOG=info,tower_http=debug（リクエストの開始ログも出す）</span><span class="diff-line diff-line--add">+ # RUST_LOG=info</span><span class="diff-line diff-line--add">+ # ログの形式。json にすると 1 行 1 JSON（ログ収集の基盤向け）。省略すると人が読むテキスト</span><span class="diff-line diff-line--add">+ # LOG_FORMAT=json</span></pre>
+</div>
+
+          <h4>動かして確かめる</h4>
+          <p><code>cargo build</code> が警告なしで終わったら、1 つ目のターミナルでサーバーを起動します。DB は空の状態から始めます。端末では、各行に色が付きます。タイムスタンプと <code>elapsed=</code> の値は、実行ごとに変わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   …</span><span class="terminal__line"><span class="terminal__prompt">$</span> rm -f app.db app.db-shm app.db-wal</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">2026-10-04T10:01:12.050922Z  INFO server: config loaded config=Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", session_ttl_secs: 604800, request_timeout: 10s, trust_forwarded_for: false, cors_allowed_origins: [] }</span><span class="terminal__line">2026-10-04T10:01:12.268365Z  INFO server: listening addr=127.0.0.1:8080</span></pre>
+</div>
+          <p>2 つ目のターミナルから、3 つのリクエストを送ります。<code>-w '%{http_code}\n'</code> で、ステータスコードだけを表示します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/health</span><span class="terminal__line">200</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8080/auth/register -H 'content-type: application/json' -d '{"name":"alice","email":"alice@example.com","password":"password12345678"}'</span><span class="terminal__line">201</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/nope</span><span class="terminal__line">404</span></pre>
+</div>
+          <p>1 つ目のターミナルには、次のログが出ます（起動の 2 行の後に、リクエストごとに 1 行）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">2026-10-04T10:01:12.050922Z  INFO server: config loaded config=Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", session_ttl_secs: 604800, request_timeout: 10s, trust_forwarded_for: false, cors_allowed_origins: [] }</span><span class="terminal__line">2026-10-04T10:01:12.268365Z  INFO server: listening addr=127.0.0.1:8080</span><span class="terminal__line">2026-10-04T10:01:12.393347Z  INFO app::layers: request method=GET uri=/health status=200 elapsed=57.042µs</span><span class="terminal__line">2026-10-04T10:01:12.415554Z  INFO app::layers: request method=POST uri=/auth/register status=201 elapsed=13.718042ms</span><span class="terminal__line">2026-10-04T10:01:12.424093Z  INFO app::layers: request method=GET uri=/nope status=404 elapsed=49.833µs</span></pre>
+</div>
+          <p>各行は「時刻・レベル・対象（target）・メッセージ・フィールド」の順です。対象は、ログを出したモジュールのパスです。<code>server</code> は bin クレート（<code>main.rs</code>）、<code>app::layers</code> は lib クレート <code>app</code> の <code>layers</code> モジュールです。</p>
+          <p>次に、<code>RUST_LOG</code> で出力量を変えます。1 つ目のターミナルでサーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止め、DB を消して、<code>RUST_LOG</code> を付けて起動し直します。2 つ目のターミナルから同じ 3 つのリクエストを送ると、次のようになります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -f app.db app.db-shm app.db-wal</span><span class="terminal__line"><span class="terminal__prompt">$</span> RUST_LOG=warn,app::layers=info ./target/debug/server</span><span class="terminal__line">2026-10-04T10:01:15.408213Z  INFO app::layers: request method=GET uri=/health status=200 elapsed=57.75µs</span><span class="terminal__line">2026-10-04T10:01:15.427975Z  INFO app::layers: request method=POST uri=/auth/register status=201 elapsed=12.509625ms</span><span class="terminal__line">2026-10-04T10:01:15.435873Z  INFO app::layers: request method=GET uri=/nope status=404 elapsed=43.833µs</span></pre>
+</div>
+          <p><code>warn,app::layers=info</code> は「全体は警告以上、<code>app::layers</code> だけは info 以上」という意味です。<code>server</code> の起動ログ（info）は出なくなりました。<code>RUST_LOG=warn</code> だけにすると、info のログは全て消え、何も出ません。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: <code>RUST_LOG=debug</code> と <code>LOG_FORMAT=json</code> の出力</summary>
+            <div class="disclosure__body">
+              <p>どちらも、空の DB から起動して同じ 3 つのリクエストを送った結果です。</p>
+              <p><code>RUST_LOG=debug</code> では、sqlx が実行する SQL まで出ます。ログは 21 行になり、対象ごとの行数は次のとおりでした（<code>uniq -c</code> の出力は先頭が行数）。<code>app::layers</code> の 3 行は、3 つのリクエストに 1 行ずつです。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> wc -l &lt; s2-debug.log</span><span class="terminal__line">      21</span><span class="terminal__line"><span class="terminal__prompt">$</span> awk '{print $2, $3}' s2-debug.log | sed 's/:$//' | sort | uniq -c | sort -rn</span><span class="terminal__line">  16 DEBUG sqlx::query</span><span class="terminal__line">   3 INFO app::layers</span><span class="terminal__line">   2 INFO server</span></pre>
+</div>
+              <p>行数と集計は、ログを <code>s2-debug.log</code> にリダイレクトして取りました。</p>
+              <p><code>LOG_FORMAT=json</code> では、1 行が 1 つの JSON になります。5 行とも JSON として読めることを確かめました。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -f app.db app.db-shm app.db-wal</span><span class="terminal__line"><span class="terminal__prompt">$</span> LOG_FORMAT=json ./target/debug/server</span><span class="terminal__line">{"timestamp":"2026-10-04T10:01:16.583565Z","level":"INFO","fields":{"message":"config loaded","config":"Config { host: \"127.0.0.1\", port: 8080, database_url: \"sqlite://app.db\", session_ttl_secs: 604800, request_timeout: 10s, trust_forwarded_for: false, cors_allowed_origins: [] }"},"target":"server"}</span><span class="terminal__line">{"timestamp":"2026-10-04T10:01:16.803357Z","level":"INFO","fields":{"message":"listening","addr":"127.0.0.1:8080"},"target":"server"}</span><span class="terminal__line">{"timestamp":"2026-10-04T10:01:16.918364Z","level":"INFO","fields":{"message":"request","method":"GET","uri":"/health","status":200,"elapsed":"57.5µs"},"target":"app::layers"}</span><span class="terminal__line">{"timestamp":"2026-10-04T10:01:16.938937Z","level":"INFO","fields":{"message":"request","method":"POST","uri":"/auth/register","status":201,"elapsed":"12.969708ms"},"target":"app::layers"}</span><span class="terminal__line">{"timestamp":"2026-10-04T10:01:16.947275Z","level":"INFO","fields":{"message":"request","method":"GET","uri":"/nope","status":404,"elapsed":"45.292µs"},"target":"app::layers"}</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>確認できたら、サーバーを止めます。テストも 13 のまま通ります（出力は折りたたみの中）。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>cargo test</code> の出力</summary>
+            <div class="disclosure__body">
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling observability v0.1.0 (/path/to/14-observability)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.15s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-411b67e4fa001096)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.61s</span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-13f6ee5e47e9da8c)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-9c3459fec264f48c)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s</span><span class="terminal__line">     Running tests/errors.rs (target/debug/deps/errors-4f6fc935e0c99bd9)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s</span><span class="terminal__line">     Running tests/hash_limit.rs (target/debug/deps/hash_limit-f7015846b695e959)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-3509bbb708f751e8)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-cdf83b92608bc61f)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s</span><span class="terminal__line">     Running tests/rate_limit.rs (target/debug/deps/rate_limit-2135fe8c63414d0c)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s</span><span class="terminal__line">     Running tests/security.rs (target/debug/deps/security-75865df9fc55cd28)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-5782f370e1f83a29)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s</span><span class="terminal__line">   Doc-tests app</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ログが「時刻・レベル・対象・メッセージ・フィールド」の形で出て、<code>RUST_LOG</code> で出力量が変わり、93 件のテストが成功すれば OK です。</p>
+          </div>
+        </div>
+      </section>
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">TraceLayer とリクエスト ID</h3>
+        </div>
+        <div class="step__body">
+          <h4>クレートの feature を足す</h4>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add tower-http --features trace,request-id,sensitive-headers,util</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding tower-http v0.7.1 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             + cors</span><span class="terminal__line">             + request-id</span><span class="terminal__line">             + sensitive-headers</span><span class="terminal__line">             + set-header</span><span class="terminal__line">             + timeout</span><span class="terminal__line">             + tower</span><span class="terminal__line">             + trace</span><span class="terminal__line">             + tracing</span><span class="terminal__line">             + util</span><span class="terminal__line">             + uuid</span><span class="terminal__line">             34 deactivated features</span><span class="terminal__line">     Locking 1 package to highest Rust 1.99.0 compatible version</span><span class="terminal__line">      Adding uuid v1.27.0</span></pre>
+</div>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  sha2 = "0.11.0"</span><span class="diff-line">  sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }</span><span class="diff-line">  tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }</span><span class="diff-line diff-line--remove">- tower-http = { version = "0.7.1", features = ["cors", "set-header", "timeout"] }</span><span class="diff-line diff-line--add">+ tower-http = { version = "0.7.1", features = ["cors", "request-id", "sensitive-headers", "set-header", "timeout", "trace", "util"] }</span><span class="diff-line">  tracing = "0.1.44"</span><span class="diff-line">  tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }</span><span class="diff-line"> </span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>request-id</code> feature は、ID を作るための <code>uuid</code> クレートを連れてきます（出力の <code>Adding uuid v1.27.0</code>）。<code>uuid</code> を自分で依存に足す必要はありません。<code>util</code> は、このレッスンのコードでは使っていません。</p>
+
+          <h4>層を組む</h4>
+          <p><code>src/layers.rs</code> の <code>log_request</code> を消し、一番外側に 4 つの層を足します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/layers.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      Router,</span><span class="diff-line">      extract::{DefaultBodyLimit, Request},</span><span class="diff-line">      http::{</span><span class="diff-line diff-line--remove">-         HeaderValue, Method, StatusCode,</span><span class="diff-line diff-line--add">+         HeaderName, HeaderValue, Method, StatusCode,</span><span class="diff-line">          header::{</span><span class="diff-line">              AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_SECURITY_POLICY, CONTENT_TYPE,</span><span class="diff-line">              REFERRER_POLICY, RETRY_AFTER, X_CONTENT_TYPE_OPTIONS,</span><span class="diff-line">          },</span><span class="diff-line">      },</span><span class="diff-line diff-line--remove">-     middleware::{self, Next},</span><span class="diff-line diff-line--add">+     middleware,</span><span class="diff-line">      response::Response,</span><span class="diff-line">  };</span><span class="diff-line diff-line--remove">- use std::time::{Duration, Instant};</span><span class="diff-line diff-line--add">+ use std::time::Duration;</span><span class="diff-line">  use tower_http::{</span><span class="diff-line">      cors::{AllowOrigin, CorsLayer},</span><span class="diff-line diff-line--add">+     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},</span><span class="diff-line diff-line--add">+     sensitive_headers::SetSensitiveRequestHeadersLayer,</span><span class="diff-line">      set_header::SetResponseHeaderLayer,</span><span class="diff-line">      timeout::TimeoutLayer,</span><span class="diff-line diff-line--add">+     trace::{DefaultOnResponse, TraceLayer},</span><span class="diff-line">  };</span><span class="diff-line diff-line--add">+ use tracing::{Level, Span};</span><span class="diff-line"> </span><span class="diff-line">  use crate::config::Config;</span><span class="diff-line">  use crate::error::{code_for_status, error_response, message_for_status};</span><span class="diff-line">  ...</span><span class="diff-line">      // 内側を呼ばずに返す CORS のプリフライト応答や、本文を補った 408、ルーターが返す 404・405 にも付く</span><span class="diff-line">      let router = security_headers(router);</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">-     // 一番外側: タイムアウトで捨てられたリクエストもログに残す</span><span class="diff-line diff-line--remove">-     router.layer(middleware::from_fn(log_request))</span><span class="diff-line diff-line--add">+     // ここから外側は「見える化」の層。内側から順に書く（後に書いたものほど外側）</span><span class="diff-line diff-line--add">+     router</span><span class="diff-line diff-line--add">+         // リクエストごとの span を作り、応答が返ったときに 1 行ログを出す。</span><span class="diff-line diff-line--add">+         // セキュリティヘッダーの外側に置くので、タイムアウトで捨てられたリクエストや CORS のプリフライトも記録される</span><span class="diff-line diff-line--add">+         .layer(</span><span class="diff-line diff-line--add">+             TraceLayer::new_for_http()</span><span class="diff-line diff-line--add">+                 .make_span_with(make_span)</span><span class="diff-line diff-line--add">+                 .on_response(DefaultOnResponse::new().level(Level::INFO)),</span><span class="diff-line diff-line--add">+         )</span><span class="diff-line diff-line--add">+         // リクエストの x-request-id を、応答にも同じ値で付ける。Trace の外側に置くので、内側のどの層が返した応答にも付く</span><span class="diff-line diff-line--add">+         .layer(PropagateRequestIdLayer::x_request_id())</span><span class="diff-line diff-line--add">+         // x-request-id が無いリクエストには UUID を割り当てる。Trace より外側に置かないと、span に ID が入らない</span><span class="diff-line diff-line--add">+         .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))</span><span class="diff-line diff-line--add">+         // authorization ヘッダーの値を「機密」と印付けする。Debug 出力では値の代わりに Sensitive と出る。</span><span class="diff-line diff-line--add">+         // Trace より外側に置かないと、Trace がヘッダーを読む時点で印が付いていない</span><span class="diff-line diff-line--add">+         .layer(SetSensitiveRequestHeadersLayer::new([AUTHORIZATION]))</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // リクエスト 1 件ぶんの span。この span の中で出したログ（ハンドラの tracing::error! など）には、</span><span class="diff-line diff-line--add">+ // すべて method・path・request_id が付く。</span><span class="diff-line diff-line--add">+ // path だけを記録するのは、クエリ文字列（?token=... のような値）をログに残さないため。</span><span class="diff-line diff-line--add">+ // ヘッダーは丸ごとは記録しない（記録するなら、上の SetSensitiveRequestHeadersLayer が authorization を伏せる）</span><span class="diff-line diff-line--add">+ fn make_span(request: &amp;Request) -&gt; Span {</span><span class="diff-line diff-line--add">+     let request_id = request</span><span class="diff-line diff-line--add">+         .headers()</span><span class="diff-line diff-line--add">+         .get(X_REQUEST_ID)</span><span class="diff-line diff-line--add">+         .and_then(|value| value.to_str().ok())</span><span class="diff-line diff-line--add">+         .unwrap_or("-");</span><span class="diff-line diff-line--add">+     tracing::info_span!(</span><span class="diff-line diff-line--add">+         "request",</span><span class="diff-line diff-line--add">+         method = %request.method(),</span><span class="diff-line diff-line--add">+         path = request.uri().path(),</span><span class="diff-line diff-line--add">+         request_id,</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line">  // API の応答向けの組み合わせ（OWASP REST Security Cheat Sheet）。</span><span class="diff-line">  ...</span><span class="diff-line">      filled.headers_mut().extend(parts.headers);</span><span class="diff-line">      filled</span><span class="diff-line">  }</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">- async fn log_request(req: Request, next: Next) -&gt; Response {</span><span class="diff-line diff-line--remove">-     let method = req.method().clone();</span><span class="diff-line diff-line--remove">-     let uri = req.uri().clone();</span><span class="diff-line diff-line--remove">-     let start = Instant::now();</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">-     let response = next.run(req).await;</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">-     let elapsed: Duration = start.elapsed();</span><span class="diff-line diff-line--remove">-     tracing::info!(%method, %uri, status = response.status().as_u16(), ?elapsed, "request");</span><span class="diff-line diff-line--remove">-     response</span><span class="diff-line diff-line--remove">- }</span></pre>
+</div>
+          <p><code>Router::layer</code> は「後に書いたものほど外側」です。リクエストは外側から内側へ、応答は内側から外側へ通ります。完成後の並びは、外側から次のとおりです。</p>
+          <table>
+            <thead>
+              <tr><th>順</th><th>層</th><th>役割</th><th>この位置に置く理由</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>1</td><td><code>SetSensitiveRequestHeadersLayer</code></td><td><code>authorization</code> の値に「機密」の印を付ける</td><td>Trace より外側に置かないと、Trace がヘッダーを読む時点で印が付いていない</td></tr>
+              <tr><td>2</td><td><code>SetRequestIdLayer</code></td><td><code>x-request-id</code> が無いリクエストに UUID を割り当てる</td><td>Trace が span を作るときに ID が要る</td></tr>
+              <tr><td>3</td><td><code>PropagateRequestIdLayer</code></td><td>リクエストの <code>x-request-id</code> を、応答にも同じ値で付ける</td><td>CORS とセキュリティヘッダーの外側に置かないと、CORS が内側を呼ばずに返すプリフライトの応答に付かない</td></tr>
+              <tr><td>4</td><td><code>TraceLayer</code></td><td>リクエストごとに span を作り、応答が返ったら 1 行のログを出す</td><td>セキュリティヘッダーと CORS の外側なので、プリフライトやタイムアウトの応答も記録される</td></tr>
+              <tr><td>5〜</td><td>セキュリティヘッダー → CORS → 安全網 → <code>TimeoutLayer</code> → <code>DefaultBodyLimit</code></td><td>13 までの層</td><td>13 のまま</td></tr>
+            </tbody>
+          </table>
+          <p>Propagate の位置は、実際に内側へ動かして確かめました（下の読み物）。「ID を付ける層は最後」と考えて、CORS より内側に置くと、プリフライトの応答にだけ <code>x-request-id</code> が付きません。</p>
+          <p><code>make_span</code> は自作しています。tower-http の <code>DefaultMakeSpan</code> は、method・uri・version と（指定すれば）ヘッダー全部を span に入れる作りです。<code>x-request-id</code> だけを入れることはできません。自作の <code>make_span</code> では、次の 3 つだけを span に入れます。</p>
+          <ul>
+            <li><code>method</code></li>
+            <li><code>path</code>: パスだけで、クエリ文字列は入れません。13 の <code>log_request</code> はクエリ付きの URI を出していました。<code>?token=...</code> のような値をログに残さないために、パスだけにします。</li>
+            <li><code>request_id</code>: <code>SetRequestIdLayer</code> が付けた（またはクライアントが送った）値です。</li>
+          </ul>
+          <p>この span の中で出したログには、ハンドラの <code>tracing::error!</code> も含めて、全てこの 3 つが付きます。ヘッダーは span に入れないので、<code>SetSensitiveRequestHeadersLayer</code> は「あとでヘッダーを記録するようにしたときの保険」です。この API は Cookie を使わないので、伏せるのは <code>authorization</code> だけです。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: <code>DefaultMakeSpan</code> のままでは、<code>RUST_LOG=info</code> で span が出ない</summary>
+            <div class="disclosure__body">
+              <p>最初に <code>DefaultMakeSpan::new().include_headers(true)</code>（<code>level</code> を指定しない）で試しました。すると、<code>RUST_LOG</code> が既定の info では、span の中身がログに出ませんでした。<code>DefaultMakeSpan</code> の span の既定のレベルが DEBUG だからです。次のログには <code>request{...}:</code> の部分が無く、どのリクエストの行か分かりません（3 行目が <code>POST /auth/register</code>、4 行目が <code>GET /auth/me</code>）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">サーバーのログ（試しただけ）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">2026-10-04T10:02:47.731741Z  INFO server: config loaded config=Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", session_ttl_secs: 604800, request_timeout: 10s, trust_forwarded_for: false, cors_allowed_origins: [] }</span><span class="terminal__line">2026-10-04T10:02:47.973849Z  INFO server: listening addr=127.0.0.1:8080</span><span class="terminal__line">2026-10-04T10:02:48.248570Z  INFO tower_http::trace::on_response: finished processing request latency=13 ms status=201</span><span class="terminal__line">2026-10-04T10:02:48.279168Z  INFO tower_http::trace::on_response: finished processing request latency=0 ms status=200</span></pre>
+</div>
+              <p><code>DefaultMakeSpan::new().level(Level::INFO)</code> とすれば出ます。このレッスンでは、自作の <code>make_span</code> で <code>info_span!</code> を使っています。</p>
+            </div>
+          </details>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: <code>SetSensitiveRequestHeadersLayer</code> が無いと、Bearer トークンがログに出る</summary>
+            <div class="disclosure__body">
+              <p>span にヘッダー全部を入れる設定で試しました（<code>DefaultMakeSpan::new().level(Level::INFO).include_headers(true)</code>）。<code>SetSensitiveRequestHeadersLayer</code> を外した版と付けた版の比較です。空の DB に alice を登録し、返ってきたトークンで <code>GET /auth/me</code> を呼んでいます。トークンは使い捨ての DB のもので、実行ごとに変わります。</p>
+              <p>外した版では、<code>authorization</code> の値がそのまま出ます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">サーバーのログ（試しただけ）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">2026-10-04T10:03:03.347468Z  INFO request{method=POST uri=/auth/register version=HTTP/1.1 headers={"host": "localhost:8080", "user-agent": "curl/8.7.1", "accept": "*/*", "content-type": "application/json", "content-length": "74", "x-request-id": "3af0b3d4-4c80-429a-bd5f-e89950df134c"}}: tower_http::trace::on_response: finished processing request latency=13 ms status=201</span><span class="terminal__line">2026-10-04T10:03:03.381995Z  INFO request{method=GET uri=/auth/me version=HTTP/1.1 headers={"host": "localhost:8080", "user-agent": "curl/8.7.1", "accept": "*/*", "authorization": "Bearer Nj6Axi06to834Jb56cR_sjTk0R4lmPdXXCmQCmAOhZQ", "x-request-id": "90416e94-bf97-4655-a061-292eb73728eb"}}: tower_http::trace::on_response: finished processing request latency=0 ms status=200</span></pre>
+</div>
+              <p>付けた版では、値が <code>Sensitive</code> になります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">サーバーのログ（試しただけ）</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">2026-10-04T10:03:07.281963Z  INFO request{method=POST uri=/auth/register version=HTTP/1.1 headers={"host": "localhost:8080", "user-agent": "curl/8.7.1", "accept": "*/*", "content-type": "application/json", "content-length": "74", "x-request-id": "17a27386-670a-43e9-8bc8-8b2512bf7713"}}: tower_http::trace::on_response: finished processing request latency=13 ms status=201</span><span class="terminal__line">2026-10-04T10:03:07.312001Z  INFO request{method=GET uri=/auth/me version=HTTP/1.1 headers={"host": "localhost:8080", "user-agent": "curl/8.7.1", "accept": "*/*", "authorization": Sensitive, "x-request-id": "624deb39-67d9-45a5-9936-b8b6634183d2"}}: tower_http::trace::on_response: finished processing request latency=0 ms status=200</span></pre>
+</div>
+              <p>トークンがログに残ると、ログを読める人が誰でも、そのトークンで本人になりすませます。<code>Authorization</code>・パスワード・トークンはログに出さないでください。ヘッダーを記録するなら、この層を Trace より外側に置きます。</p>
+            </div>
+          </details>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: Propagate を CORS の内側に置くと、プリフライトに ID が付かない</summary>
+            <div class="disclosure__body">
+              <p><code>PropagateRequestIdLayer</code> を外側の並びから外し、CORS より内側に置いて試しました。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/layers.rs（試しただけで、元に戻しています）</span>
+    <span class="code-block__spacer"></span>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          // 本文の無いエラー応答を契約の JSON に補う。TimeoutLayer より外側に置かないと 408 が素通りする</span><span class="diff-line">          .layer(middleware::map_response(fill_empty_error_body));</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+     let router = router.layer(PropagateRequestIdLayer::x_request_id());</span><span class="diff-line">      // CORS は設定があるときだけ掛ける。ログの内側、エラー補完の外側に置くので、</span><span class="diff-line">      // 429・413・408 などのエラー応答にも access-control-* ヘッダーが付く</span><span class="diff-line">      // （ブラウザは access-control-allow-origin の無いエラー応答を JavaScript に渡さない）</span><span class="diff-line">  ...</span><span class="diff-line">                  .on_response(DefaultOnResponse::new().level(Level::INFO)),</span><span class="diff-line">          )</span><span class="diff-line">          // リクエストの x-request-id を、応答にも同じ値で付ける。Trace の外側に置くので、内側のどの層が返した応答にも付く</span><span class="diff-line diff-line--remove">-         .layer(PropagateRequestIdLayer::x_request_id())</span><span class="diff-line">          // x-request-id が無いリクエストには UUID を割り当てる。Trace より外側に置かないと、span に ID が入らない</span><span class="diff-line">          .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))</span><span class="diff-line">          // authorization ヘッダーの値を「機密」と印付けする。Debug 出力では値の代わりに Sensitive と出る。</span><span class="diff-line">  ...</span></pre>
+</div>
+              <p>CORS を有効にして（<code>CORS_ALLOWED_ORIGINS=http://localhost:3000</code>）、各リクエストの応答から状態行と <code>x-request-id</code> を抜き出した結果です。プリフライトの応答にだけ <code>x-request-id</code> がありません。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">執筆時の記録</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">== preflight: HTTP/1.1 200 OK </span><span class="terminal__line">== get-health: HTTP/1.1 200 OK x-request-id: 7e322f9f-c55a-4a36-8ddf-d76517d46122 </span><span class="terminal__line">== 404: HTTP/1.1 404 Not Found x-request-id: 8525b2c2-1e1e-4439-8adc-6d2229d6bfd7 </span><span class="terminal__line">== 405: HTTP/1.1 405 Method Not Allowed x-request-id: 2588df9e-3ab8-4e44-9b4a-6e23fcb091a3 </span><span class="terminal__line">== 429: HTTP/1.1 429 Too Many Requests x-request-id: a662486c-43db-4046-8c64-10060e2c3c7e </span></pre>
+</div>
+              <p>プリフライトは CORS の層が内側を呼ばずに返すので、CORS より内側の層は通りません。Propagate は Set の直後（Trace・CORS・セキュリティヘッダーの外側）に置きます。</p>
+            </div>
+          </details>
+
+          <h4>テストを足す</h4>
+          <p>新しいファイル <code>tests/observability.rs</code> に、5 件のテストを書きます。ID が UUID であること、毎回違うこと、クライアントの ID を維持すること、404・405・422 とプリフライトにも付くことを確かめます。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">tests/observability.rs の全文（新しいファイル）</summary>
+            <div class="disclosure__body">
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Rust</span>
+    <span class="code-block__filename">tests/observability.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-rust">mod common;
+
+use axum::{
+    body::Body,
+    http::{HeaderValue, Request, StatusCode},
+};
+use common::{get, json_request, send_raw, test_app, test_app_with_config, test_config};
+use sqlx::SqlitePool;
+
+#[sqlx::test]
+async fn every_response_gets_a_uuid_request_id(pool: SqlitePool) {
+    let (status, headers, _) = send_raw(test_app(pool), get("/health")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let id = headers["x-request-id"].to_str().unwrap();
+    // UUID v4 の文字列は 36 文字（8-4-4-4-12）
+    assert_eq!(id.len(), 36);
+    assert_eq!(id.matches('-').count(), 4);
+}
+
+#[sqlx::test]
+async fn each_request_gets_a_different_id(pool: SqlitePool) {
+    let app = test_app(pool);
+    let (_, first, _) = send_raw(app.clone(), get("/health")).await;
+    let (_, second, _) = send_raw(app, get("/health")).await;
+
+    assert_ne!(first["x-request-id"], second["x-request-id"]);
+}
+
+#[sqlx::test]
+async fn a_request_id_sent_by_the_client_is_kept(pool: SqlitePool) {
+    let request = Request::get("/health")
+        .header("x-request-id", "from-the-client-123")
+        .body(Body::empty())
+        .unwrap();
+    let (_, headers, _) = send_raw(test_app(pool), request).await;
+
+    assert_eq!(headers["x-request-id"], "from-the-client-123");
+}
+
+#[sqlx::test]
+async fn error_responses_from_the_router_and_extractors_also_have_a_request_id(pool: SqlitePool) {
+    let app = test_app(pool);
+
+    // 404（未定義のルート）、405（定義の無いメソッド）、422（検証エラー）
+    let (status, headers, _) = send_raw(app.clone(), get("/nope")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(headers.contains_key("x-request-id"));
+
+    let delete = Request::delete("/health").body(Body::empty()).unwrap();
+    let (status, headers, _) = send_raw(app.clone(), delete).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert!(headers.contains_key("x-request-id"));
+
+    let invalid = json_request("POST", "/auth/register", None, r#"{"name":""}"#);
+    let (status, headers, _) = send_raw(app, invalid).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(headers.contains_key("x-request-id"));
+}
+
+#[sqlx::test]
+async fn the_cors_preflight_response_also_has_a_request_id(pool: SqlitePool) {
+    let mut config = test_config();
+    config.cors_allowed_origins = vec![HeaderValue::from_static("http://localhost:3000")];
+    let preflight = Request::builder()
+        .method("OPTIONS")
+        .uri("/posts")
+        .header("origin", "http://localhost:3000")
+        .header("access-control-request-method", "POST")
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, _) = send_raw(test_app_with_config(pool, config), preflight).await;
+
+    // 内側の層を呼ばずに CORS が返す応答にも付く（PropagateRequestIdLayer が CORS の外側にあるため）
+    assert_eq!(status, StatusCode::OK);
+    assert!(headers.contains_key("x-request-id"));
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>cargo test</code> の出力</summary>
+            <div class="disclosure__body">
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling observability v0.1.0 (/path/to/14-observability)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.01s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-d3c0e9893679394e)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.61s</span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-1ed2683a2cc2a3db)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-80eea492cb2529ef)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s</span><span class="terminal__line">     Running tests/errors.rs (target/debug/deps/errors-b64307cec399f8c1)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s</span><span class="terminal__line">     Running tests/hash_limit.rs (target/debug/deps/hash_limit-45df520195761157)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-df1e8c0a19060f6f)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s</span><span class="terminal__line">     Running tests/observability.rs (target/debug/deps/observability-e54c314d4fa9bf12)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-0bd320d36accec61)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s</span><span class="terminal__line">     Running tests/rate_limit.rs (target/debug/deps/rate_limit-777cb2321c610043)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s</span><span class="terminal__line">     Running tests/security.rs (target/debug/deps/security-ce910ce53718c084)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-359375bb42d2471f)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s</span><span class="terminal__line">   Doc-tests app</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>98 件が成功します（93 件 + 新しい 5 件）。</p>
+
+          <h4>動かして確かめる</h4>
+          <p>1 つ目のターミナルで起動し直します（前の起動で使ったレート制限の回数を持ち越さないよう、必ず起動し直してください）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   …</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">2026-10-04T10:03:48.798676Z  INFO server: config loaded config=Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", session_ttl_secs: 604800, request_timeout: 10s, trust_forwarded_for: false, cors_allowed_origins: [] }</span><span class="terminal__line">2026-10-04T10:03:49.030564Z  INFO server: listening addr=127.0.0.1:8080</span></pre>
+</div>
+          <p>2 つ目のターミナルから、ID を付けずに 1 回、自分で ID を付けて 1 回、未定義のルートに 1 回送ります。<code>x-request-id</code> と <code>date</code> の値は、実行ごとに変わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:8080/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: 71deb6ee-2f86-451e-a105-306886529aaa</span><span class="terminal__line">content-length: 15</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:03:49 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:8080/health -H 'x-request-id: my-trace-id-123'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: my-trace-id-123</span><span class="terminal__line">content-length: 15</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:03:49 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:8080/nope</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: f9c736ba-4786-48e0-9393-c1c78029ae55</span><span class="terminal__line">content-length: 58</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:03:49 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"route not found"}}</span></pre>
+</div>
+          <p>1 つ目のターミナルのログです。応答の <code>x-request-id</code> と、ログの <code>request_id</code> が同じ値になっています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">2026-10-04T10:03:49.285441Z  INFO request{method=GET path="/health" request_id="71deb6ee-2f86-451e-a105-306886529aaa"}: tower_http::trace::on_response: finished processing request latency=0 ms status=200</span><span class="terminal__line">2026-10-04T10:03:49.294605Z  INFO request{method=GET path="/health" request_id="my-trace-id-123"}: tower_http::trace::on_response: finished processing request latency=0 ms status=200</span><span class="terminal__line">2026-10-04T10:03:49.302746Z  INFO request{method=GET path="/nope" request_id="f9c736ba-4786-48e0-9393-c1c78029ae55"}: tower_http::trace::on_response: finished processing request latency=0 ms status=404</span></pre>
+</div>
+          <p>クライアントが送った <code>x-request-id</code>（<code>my-trace-id-123</code>）は、そのまま採用されます。BFF やロードバランサーが付けた ID を引き継げる代わりに、誰でもログの <code>request_id</code> に好きな文字列を入れられます。ヘッダーの値にはタブ以外の制御文字（改行など）を入れられないので、1 行のログが分かれることはありません。ただし、長さや文字種は検証していません。値を信用せず、ログを突き合わせる用途だけに使ってください（<a href="#remaining">まだ残っていること</a>）。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">405・CORS 無効のプリフライト・429 にも付くことを確かめる</summary>
+            <div class="disclosure__body">
+              <p>続けて、次のリクエストを送ります。どの応答にも <code>x-request-id</code> と 4 つのセキュリティヘッダーが付きます。429 は、同じ email へのログインを続けて 6 回送ると、6 回目で返ります（13 の email 単位の制限。成否を問わず 1 分に 5 回まで）。<code>retry-after</code> の秒数も、実行ごとに変わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X DELETE localhost:8080/health</span><span class="terminal__line">HTTP/1.1 405 Method Not Allowed</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: 7a33eb93-a4f2-4934-b36e-d43d2e94a7da</span><span class="terminal__line">allow: GET,HEAD</span><span class="terminal__line">content-length: 70</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:03:49 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"method_not_allowed","message":"method not allowed"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X OPTIONS localhost:8080/posts -H 'origin: http://localhost:3000' -H 'access-control-request-method: POST'</span><span class="terminal__line">HTTP/1.1 405 Method Not Allowed</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: b8b13870-2a37-415e-8392-499829d5dc5c</span><span class="terminal__line">allow: GET,HEAD,POST</span><span class="terminal__line">content-length: 70</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:03:49 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"method_not_allowed","message":"method not allowed"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8080/auth/login -H 'content-type: application/json' -d '{"email":"bob@example.com","password":"wrong-password-123"}'; done</span><span class="terminal__line">401</span><span class="terminal__line">401</span><span class="terminal__line">401</span><span class="terminal__line">401</span><span class="terminal__line">401</span><span class="terminal__line">429</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST localhost:8080/auth/login -H 'content-type: application/json' -d '{"email":"bob@example.com","password":"wrong-password-123"}'</span><span class="terminal__line">HTTP/1.1 429 Too Many Requests</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">retry-after: 12</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: 5aebeed8-2551-405d-ba35-bbb67860901c</span><span class="terminal__line">content-length: 63</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:03:49 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"rate_limited","message":"too many requests"}}</span></pre>
+</div>
+              <p>ログにも、同じ ID の行が出ます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">2026-10-04T10:03:49.391929Z  INFO request{method=DELETE path="/health" request_id="7a33eb93-a4f2-4934-b36e-d43d2e94a7da"}: tower_http::trace::on_response: finished processing request latency=0 ms status=405</span><span class="terminal__line">2026-10-04T10:03:49.401994Z  INFO request{method=OPTIONS path="/posts" request_id="b8b13870-2a37-415e-8392-499829d5dc5c"}: tower_http::trace::on_response: finished processing request latency=0 ms status=405</span><span class="terminal__line">2026-10-04T10:03:49.485076Z  INFO request{method=POST path="/auth/login" request_id="960d2ed3-d70a-439a-b6eb-9578bf91b2e9"}: tower_http::trace::on_response: finished processing request latency=12 ms status=401</span><span class="terminal__line">2026-10-04T10:03:49.506940Z  INFO request{method=POST path="/auth/login" request_id="39bff101-fe40-4c93-971f-d123fcfe5fe3"}: tower_http::trace::on_response: finished processing request latency=12 ms status=401</span><span class="terminal__line">2026-10-04T10:03:49.528538Z  INFO request{method=POST path="/auth/login" request_id="9895cfd3-7547-47ce-af97-0d40db875750"}: tower_http::trace::on_response: finished processing request latency=12 ms status=401</span><span class="terminal__line">2026-10-04T10:03:49.549897Z  INFO request{method=POST path="/auth/login" request_id="a651c82c-d4d2-4aeb-9412-9979350ee89b"}: tower_http::trace::on_response: finished processing request latency=12 ms status=401</span><span class="terminal__line">2026-10-04T10:03:49.571489Z  INFO request{method=POST path="/auth/login" request_id="087f6777-fc16-41c6-8063-ed868fd7fe5e"}: tower_http::trace::on_response: finished processing request latency=12 ms status=401</span><span class="terminal__line">2026-10-04T10:03:49.580591Z  INFO request{method=POST path="/auth/login" request_id="1e617d1f-9405-40ad-92c8-a77068eae08b"}: tower_http::trace::on_response: finished processing request latency=0 ms status=429</span><span class="terminal__line">2026-10-04T10:03:49.589679Z  INFO request{method=POST path="/auth/login" request_id="5aebeed8-2551-405d-ba35-bbb67860901c"}: tower_http::trace::on_response: finished processing request latency=0 ms status=429</span></pre>
+</div>
+              <p>執筆時は、このほかに 201（登録）・200（<code>GET /auth/me</code>）・422（検証エラー）・413（本文が 64 KiB を超える）も確かめました。全ての応答の <code>x-request-id</code> が、ログの <code>request_id</code> とそれぞれ 1 行だけ一致しました。</p>
+            </div>
+          </details>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: CORS を有効にしたときと、JSON のログ</summary>
+            <div class="disclosure__body">
+          <p>サーバーを止め、CORS を有効にし、ログを JSON にして起動し直します。2 つ目のターミナルから、プリフライトと、<code>origin</code> 付きの <code>GET /health</code> を送ります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> CORS_ALLOWED_ORIGINS=http://localhost:3000 LOG_FORMAT=json ./target/debug/server</span><span class="terminal__line">{"timestamp":"2026-10-04T10:04:10.057475Z","level":"INFO","fields":{"message":"config loaded","config":"Config { host: \"127.0.0.1\", port: 8080, database_url: \"sqlite://app.db\", session_ttl_secs: 604800, request_timeout: 10s, trust_forwarded_for: false, cors_allowed_origins: [\"http://localhost:3000\"] }"},"target":"server"}</span><span class="terminal__line">{"timestamp":"2026-10-04T10:04:10.275691Z","level":"INFO","fields":{"message":"listening","addr":"127.0.0.1:8080"},"target":"server"}</span><span class="terminal__line">{"timestamp":"2026-10-04T10:04:10.395908Z","level":"INFO","fields":{"message":"finished processing request","latency":"0 ms","status":200},"target":"tower_http::trace::on_response","span":{"method":"OPTIONS","path":"/posts","request_id":"09f6148e-9840-41b4-b74b-7335aea84b57","name":"request"},"spans":[{"method":"OPTIONS","path":"/posts","request_id":"09f6148e-9840-41b4-b74b-7335aea84b57","name":"request"}]}</span><span class="terminal__line">{"timestamp":"2026-10-04T10:04:10.403802Z","level":"INFO","fields":{"message":"finished processing request","latency":"0 ms","status":200},"target":"tower_http::trace::on_response","span":{"method":"GET","path":"/health","request_id":"884b2603-ae5b-49c6-94cd-31bcfcfea41a","name":"request"},"spans":[{"method":"GET","path":"/health","request_id":"884b2603-ae5b-49c6-94cd-31bcfcfea41a","name":"request"}]}</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X OPTIONS localhost:8080/posts -H 'origin: http://localhost:3000' -H 'access-control-request-method: POST'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">vary: origin</span><span class="terminal__line">access-control-allow-methods: GET,POST,PATCH,DELETE</span><span class="terminal__line">access-control-allow-headers: authorization,content-type</span><span class="terminal__line">access-control-max-age: 600</span><span class="terminal__line">access-control-allow-origin: http://localhost:3000</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: 09f6148e-9840-41b4-b74b-7335aea84b57</span><span class="terminal__line">allow: GET,HEAD,POST</span><span class="terminal__line">content-length: 0</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:04:10 GMT</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:8080/health -H 'origin: http://localhost:3000'</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">vary: origin</span><span class="terminal__line">access-control-allow-origin: http://localhost:3000</span><span class="terminal__line">access-control-expose-headers: retry-after</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: 884b2603-ae5b-49c6-94cd-31bcfcfea41a</span><span class="terminal__line">content-length: 15</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:04:10 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span></pre>
+</div>
+          <p>CORS の層が内側を呼ばずに返すプリフライトにも、<code>x-request-id</code> が付いています。プリフライトの 200 に <code>allow</code> が付いているのは、13 のステップ 6 で見た <code>allow</code> と同じ仕組みです。JSON のログでは、<code>request_id</code> が <code>span</code> の中に入っています。<code>span</code>（今の span）と <code>spans</code>（親からの span の並び）の両方に同じ内容が出るのは、このアプリでは span が 1 つしかないからです。</p>
+          <p><code>GET /health</code> の応答の <code>access-control-expose-headers</code> は <code>retry-after</code> だけです。ブラウザの JavaScript（別のオリジンからの <code>fetch</code>）は、expose されていないヘッダーを読めません。つまり、CORS を使うブラウザのアプリからは、<code>x-request-id</code> を読めません。<code>curl</code> や、サーバー側で呼ぶ BFF からは読めます。</p>
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ID を付けない応答に UUID の <code>x-request-id</code> が付き、自分で付けた ID はそのまま返り、ログの <code>request_id</code> と一致すれば OK です。98 件のテストが成功することも確かめます。</p>
+          </div>
+        </div>
+      </section>
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>/ready</code> で DB に届くかを返す</h3>
+        </div>
+        <div class="step__body">
+          <p>ヘルスチェックを 2 つに分けます。</p>
+          <table>
+            <thead>
+              <tr><th>エンドポイント</th><th>見ること</th><th>失敗したときに期待する対応</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>GET /health</code>（liveness）</td><td>プロセスがリクエストに答えられるか。DB には触れない</td><td>プロセスを再起動する</td></tr>
+              <tr><td><code>GET /ready</code>（readiness）</td><td>DB に <code>SELECT 1</code> が通るか</td><td>このインスタンスにリクエストを回さない（再起動はしない）</td></tr>
+            </tbody>
+          </table>
+          <p>DB が落ちているとき、<code>/health</code> が 200 のままなので、プロセスは再起動されません。一方、<code>/ready</code> は 503 になるので、ロードバランサーはこのインスタンスを外せます。プロセスを再起動しても DB は直らないので、<code>/health</code> に DB の確認を混ぜないのがポイントです。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/health.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">- use axum::Json;</span><span class="diff-line diff-line--add">+ use axum::{</span><span class="diff-line diff-line--add">+     Json,</span><span class="diff-line diff-line--add">+     extract::State,</span><span class="diff-line diff-line--add">+     http::StatusCode,</span><span class="diff-line diff-line--add">+     response::{IntoResponse, Response},</span><span class="diff-line diff-line--add">+ };</span><span class="diff-line">  use serde_json::json;</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ use crate::error::{code_for_status, error_response};</span><span class="diff-line diff-line--add">+ use crate::state::AppState;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // 生存確認（liveness）。プロセスがリクエストに答えられるかだけを返す。DB には触れない</span><span class="diff-line">  pub async fn health() -&gt; Json&lt;serde_json::Value&gt; {</span><span class="diff-line">      Json(json!({ "status": "ok" }))</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // 準備確認（readiness）。DB に実際にクエリが通るときだけ 200 を返す。</span><span class="diff-line diff-line--add">+ // ロードバランサーやオーケストレーターは、これが 503 の間はこのインスタンスにリクエストを回さない</span><span class="diff-line diff-line--add">+ pub async fn ready(State(state): State&lt;AppState&gt;) -&gt; Response {</span><span class="diff-line diff-line--add">+     match sqlx::query("SELECT 1").execute(&amp;state.pool).await {</span><span class="diff-line diff-line--add">+         Ok(_) =&gt; Json(json!({ "status": "ok" })).into_response(),</span><span class="diff-line diff-line--add">+         Err(error) =&gt; {</span><span class="diff-line diff-line--add">+             // 原因（接続エラーの詳細など）はログにだけ出し、応答には固定の文言だけを返す</span><span class="diff-line diff-line--add">+             tracing::error!(%error, "readiness check failed");</span><span class="diff-line diff-line--add">+             let status = StatusCode::SERVICE_UNAVAILABLE;</span><span class="diff-line diff-line--add">+             error_response(status, code_for_status(status), "service unavailable")</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <p>503 の本文は <code>{"error":{"code":"unavailable","message":"service unavailable"}}</code> です。接続エラーの詳細はログにだけ出し、応答には固定の文言を返します。<code>message</code> は、12 の安全網（<code>message_for_status</code>）を使わず、ハンドラで直接渡しています。安全網に 503 の文言を足すと、本文の無い 503 を補うときの文言（<code>internal server error</code>）を確かめている既存のテストが失敗するからです。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/routes/mod.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  pub fn router(state: AppState) -&gt; Router {</span><span class="diff-line">      Router::new()</span><span class="diff-line">          .route("/health", get(health::health))</span><span class="diff-line diff-line--add">+         .route("/ready", get(health::ready))</span><span class="diff-line">          // route_layer を MethodRouter（post(..) の戻り値）に掛けると、そのルートの、そのメソッドだけに効く。</span><span class="diff-line">          // Router に掛けると、それまでに登録した全ルートに掛かってしまう</span><span class="diff-line">          .route(</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>tests/health.rs</code> に 2 件足します。プールを <code>close()</code> すると、DB に届かない状態を作れます。<code>pool.clone()</code> は同じプールを指すので、<code>test_app</code> に渡した側のプールも閉じます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">tests/health.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      assert_eq!(status, StatusCode::OK);</span><span class="diff-line">      assert_eq!(body, serde_json::json!({ "status": "ok" }));</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn ready_returns_ok_while_the_database_answers(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let (status, body) = send(test_app(pool), get("/ready")).await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::OK);</span><span class="diff-line diff-line--add">+     assert_eq!(body, serde_json::json!({ "status": "ok" }));</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ #[sqlx::test]</span><span class="diff-line diff-line--add">+ async fn ready_returns_503_once_the_pool_is_closed(pool: SqlitePool) {</span><span class="diff-line diff-line--add">+     let app = test_app(pool.clone());</span><span class="diff-line diff-line--add">+     // プールを閉じると、DB に届かない状態になる（clone も同じプールを指すので全体が閉じる）</span><span class="diff-line diff-line--add">+     pool.close().await;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     let (status, body) = send(app.clone(), get("/ready")).await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);</span><span class="diff-line diff-line--add">+     assert_eq!(</span><span class="diff-line diff-line--add">+         body,</span><span class="diff-line diff-line--add">+         serde_json::json!({ "error": { "code": "unavailable", "message": "service unavailable" } })</span><span class="diff-line diff-line--add">+     );</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // /health はプロセスが生きているかだけを見るので、DB が落ちていても 200 のまま</span><span class="diff-line diff-line--add">+     let (status, _) = send(app, get("/health")).await;</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::OK);</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>cargo test</code> の出力</summary>
+            <div class="disclosure__body">
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling observability v0.1.0 (/path/to/14-observability)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.38s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-d3c0e9893679394e)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.61s</span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-1ed2683a2cc2a3db)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-80eea492cb2529ef)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s</span><span class="terminal__line">     Running tests/errors.rs (target/debug/deps/errors-b64307cec399f8c1)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s</span><span class="terminal__line">     Running tests/hash_limit.rs (target/debug/deps/hash_limit-45df520195761157)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-df1e8c0a19060f6f)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s</span><span class="terminal__line">     Running tests/observability.rs (target/debug/deps/observability-e54c314d4fa9bf12)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-0bd320d36accec61)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s</span><span class="terminal__line">     Running tests/rate_limit.rs (target/debug/deps/rate_limit-777cb2321c610043)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s</span><span class="terminal__line">     Running tests/security.rs (target/debug/deps/security-ce910ce53718c084)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.38s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-359375bb42d2471f)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s</span><span class="terminal__line">   Doc-tests app</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>100 件が成功します（98 件 + 新しい 2 件）。</p>
+          <p>サーバーを止めてビルドし、起動し直して、2 つを呼びます。ログの時刻と <code>request_id</code>、応答の <code>x-request-id</code> と <code>date</code> は、実行ごとに変わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   …</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">2026-10-04T10:06:27.378871Z  INFO server: config loaded config=Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", session_ttl_secs: 604800, request_timeout: 10s, trust_forwarded_for: false, cors_allowed_origins: [] }</span><span class="terminal__line">2026-10-04T10:06:27.622022Z  INFO server: listening addr=127.0.0.1:8080</span><span class="terminal__line">2026-10-04T10:06:27.793742Z  INFO request{method=GET path="/health" request_id="ae111ca6-682b-42fd-8bb8-39a8f7e847c9"}: tower_http::trace::on_response: finished processing request latency=0 ms status=200</span><span class="terminal__line">2026-10-04T10:06:27.802330Z  INFO request{method=GET path="/ready" request_id="6074fc60-b647-456f-ae19-7aa0e947f491"}: tower_http::trace::on_response: finished processing request latency=0 ms status=200</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:8080/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: ae111ca6-682b-42fd-8bb8-39a8f7e847c9</span><span class="terminal__line">content-length: 15</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:06:27 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:8080/ready</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: 6074fc60-b647-456f-ae19-7aa0e947f491</span><span class="terminal__line">content-length: 15</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:06:27 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span></pre>
+</div>
+          <p>DB が動いている間は、どちらも 200 です。503 はテスト（<code>ready_returns_503_once_the_pool_is_closed</code>）で確かめたもので、実際のサーバーでは再現していません。動いているサーバーのプールを外から閉じる手段が無いためです。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/health</code> と <code>/ready</code> がどちらも 200 を返し、100 件のテストが成功すれば OK です。</p>
+          </div>
+        </div>
+      </section>
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">graceful shutdown で安全に止める</h3>
+        </div>
+        <div class="step__body">
+          <p>今のサーバーは、SIGTERM（<code>docker stop</code> や Kubernetes が停止のときに送るシグナル）を受けると、その場で終わります。処理中のリクエストは打ち切られます。シグナルを受けたら新しい接続を止め、処理中のリクエストが終わってから止まるようにします（graceful shutdown）。</p>
+          <p>サーバーを止めてから、tokio にシグナルを扱う feature を足します。<code>Features:</code> の一覧は省略しています。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add tokio --features signal</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding tokio v1.53.1 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             …</span><span class="terminal__line">     Locking 2 packages to highest Rust 1.99.0 compatible versions</span><span class="terminal__line">      Adding errno v0.3.14</span><span class="terminal__line">      Adding signal-hook-registry v1.4.8</span></pre>
+</div>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">Cargo.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  serde_json = "1.0.151"</span><span class="diff-line">  sha2 = "0.11.0"</span><span class="diff-line">  sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }</span><span class="diff-line diff-line--remove">- tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }</span><span class="diff-line diff-line--add">+ tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }</span><span class="diff-line">  tower-http = { version = "0.7.1", features = ["cors", "request-id", "sensitive-headers", "set-header", "timeout", "trace", "util"] }</span><span class="diff-line">  tracing = "0.1.44"</span><span class="diff-line">  tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>main.rs</code> で、<code>axum::serve</code> に <code>with_graceful_shutdown</code> を付けます。<code>shutdown_signal</code> は axum の公式の例（<code>examples/graceful-shutdown</code>）と同じ形です。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">src/main.rs</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  use std::str::FromStr;</span><span class="diff-line">  use std::sync::Arc;</span><span class="diff-line">  use std::time::Duration;</span><span class="diff-line diff-line--add">+ use tokio::signal;</span><span class="diff-line"> </span><span class="diff-line">  #[tokio::main]</span><span class="diff-line">  async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {</span><span class="diff-line">  ...</span><span class="diff-line">              limits.sweep();</span><span class="diff-line">          }</span><span class="diff-line">      });</span><span class="diff-line diff-line--add">+     // 停止の最後にプールを閉じるため、AppState（Router の中に移る）とは別に持っておく。SqlitePool の clone は同じプールを指す</span><span class="diff-line diff-line--add">+     let pool = state.pool.clone();</span><span class="diff-line">      let app = build_app(state);</span><span class="diff-line"> </span><span class="diff-line">      let listener = tokio::net::TcpListener::bind(&amp;addr).await?;</span><span class="diff-line">      tracing::info!(addr = %listener.local_addr()?, "listening");</span><span class="diff-line">      // ConnectInfo（接続元のアドレス）を取り出せるようにして serve する。これが無いと IP 単位の制限が 500 になる</span><span class="diff-line diff-line--add">+     // with_graceful_shutdown: シグナルを受けたら新しい接続を受け付けず、処理中のリクエストが終わってから serve が戻る</span><span class="diff-line">      axum::serve(</span><span class="diff-line">          listener,</span><span class="diff-line">          app.into_make_service_with_connect_info::&lt;SocketAddr&gt;(),</span><span class="diff-line">      )</span><span class="diff-line diff-line--add">+     .with_graceful_shutdown(shutdown_signal())</span><span class="diff-line">      .await?;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // 処理中のリクエストが無くなってから DB 接続を閉じる。WAL の書き込みを残さずに終わる</span><span class="diff-line diff-line--add">+     pool.close().await;</span><span class="diff-line diff-line--add">+     tracing::info!("server stopped");</span><span class="diff-line">      Ok(())</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ // Ctrl+C（SIGINT）と、Unix では SIGTERM（docker stop や Kubernetes が送る）のどちらかを待つ</span><span class="diff-line diff-line--add">+ async fn shutdown_signal() {</span><span class="diff-line diff-line--add">+     let ctrl_c = async {</span><span class="diff-line diff-line--add">+         signal::ctrl_c()</span><span class="diff-line diff-line--add">+             .await</span><span class="diff-line diff-line--add">+             .expect("failed to install Ctrl+C handler");</span><span class="diff-line diff-line--add">+     };</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     #[cfg(unix)]</span><span class="diff-line diff-line--add">+     let terminate = async {</span><span class="diff-line diff-line--add">+         signal::unix::signal(signal::unix::SignalKind::terminate())</span><span class="diff-line diff-line--add">+             .expect("failed to install SIGTERM handler")</span><span class="diff-line diff-line--add">+             .recv()</span><span class="diff-line diff-line--add">+             .await;</span><span class="diff-line diff-line--add">+     };</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     // Unix 以外には SIGTERM が無いので、永遠に完了しない future に置き換える</span><span class="diff-line diff-line--add">+     #[cfg(not(unix))]</span><span class="diff-line diff-line--add">+     let terminate = std::future::pending::&lt;()&gt;();</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+     tokio::select! {</span><span class="diff-line diff-line--add">+         _ = ctrl_c =&gt; {},</span><span class="diff-line diff-line--add">+         _ = terminate =&gt; {},</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+     tracing::info!("shutdown signal received");</span><span class="diff-line diff-line--add">+ }</span></pre>
+</div>
+          <ul>
+            <li><code>shutdown_signal</code> は、<kbd>Ctrl</kbd> + <kbd>C</kbd>（SIGINT）か SIGTERM のどちらかが来るまで待つ future です。Unix 以外には SIGTERM が無いので、そこは永遠に終わらない future に置き換えます。</li>
+            <li><code>with_graceful_shutdown</code> は、この future が完了したら新しい接続の受け付けをやめ、処理中のリクエストが全て終わってから <code>serve</code> を返します。</li>
+            <li><code>serve</code> が戻ったら、DB のプールを閉じます。<code>state</code> は <code>build_app</code> に渡すと Router の中に移るので、その前にプールを clone しておきます（clone は同じプールを指します）。</li>
+          </ul>
+
+          <h4>止めてみる</h4>
+          <p>ビルドして起動し、2 つ目のターミナルから <code>/health</code> と <code>/ready</code> を呼んだ後、SIGTERM を送ります。<code>lsof -t</code> は、8080 番ポートで待ち受けているプロセスの PID だけを表示します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal 2</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s localhost:8080/health</span><span class="terminal__line">{"status":"ok"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s localhost:8080/ready</span><span class="terminal__line">{"status":"ok"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> kill -TERM $(lsof -nP -iTCP:8080 -sTCP:LISTEN -t)</span></pre>
+</div>
+          <p>1 つ目のターミナルでは、<code>shutdown signal received</code> と <code>server stopped</code> が出て、プロセスが終わります。<code>echo $?</code> で終了コードを確かめます。起動と 2 つのリクエストのログはステップ 4 と同じ形なので「…」で省略し、停止に関わる行だけを載せます。時刻は実行ごとに変わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">…</span><span class="terminal__line">2026-10-04T10:06:27.805285Z  INFO server: shutdown signal received</span><span class="terminal__line">2026-10-04T10:06:27.805954Z  INFO server: server stopped</span><span class="terminal__line"><span class="terminal__prompt">$</span> echo $?</span><span class="terminal__line">0</span></pre>
+</div>
+          <p>終了コードは 0 です。<kbd>Ctrl</kbd> + <kbd>C</kbd> と同じシグナル（<code>kill -INT</code>）でも、終了コード 0 で同じ 2 行が出ました。graceful shutdown を付ける前の <code>main.rs</code> で同じことをすると、終了コードは 143（128 + 15。SIGTERM で殺された）になり、この 2 行は出ません。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">読み物: 処理中のリクエストは完了し、新しい接続は拒否される</summary>
+            <div class="disclosure__body">
+              <p>この API には、時間のかかるエンドポイントがありません。そこで、本文を途中まで送って止めた <code>POST /auth/register</code> を「処理中のリクエスト」にして、Python のソケットで次の順に操作しました（スクリプトは省略します）。</p>
+              <ol>
+                <li>ヘッダーと本文の最初の 20 バイトを送る</li>
+                <li>1 秒後に SIGTERM を送る</li>
+                <li>1 秒後に新しい接続を試す</li>
+                <li>残りの本文を送り、応答を読む</li>
+              </ol>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">執筆時の記録</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"> 0.00s headers と本文の途中（20 バイト）まで送った（サーバー側ではリクエスト処理中）</span><span class="terminal__line"> 1.02s kill -TERM 60442</span><span class="terminal__line"> 2.03s 新しい接続: ConnectionRefusedError [Errno 61] Connection refused</span><span class="terminal__line"> 2.11s サーバープロセス（8080 を LISTEN している PID）: なし</span><span class="terminal__line"> 2.11s 残りの本文を送った</span><span class="terminal__line"> 2.13s 応答を受け取った:</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">x-content-type-options: nosniff</span><span class="terminal__line">content-security-policy: default-src 'none'; frame-ancestors 'none'</span><span class="terminal__line">referrer-policy: no-referrer</span><span class="terminal__line">cache-control: no-store</span><span class="terminal__line">x-request-id: 6ea33d4d-0f8b-468b-85a3-64ec30d2b6fb</span><span class="terminal__line">content-length: 110</span><span class="terminal__line">connection: close</span><span class="terminal__line">date: Sun, 04 Oct 2026 10:06:54 GMT</span><span class="terminal__line"></span><span class="terminal__line">{"user":{"id":1,"name":"carol"},"token":"ygND-zpu1f6mhNSnxUwijdRQNvCaUrl5b-YF9lwh1jg","expires_at":1791713214}</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">サーバーのログ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">2026-10-04T10:06:51.649291Z  INFO server: config loaded config=Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", session_ttl_secs: 604800, request_timeout: 10s, trust_forwarded_for: false, cors_allowed_origins: [] }</span><span class="terminal__line">2026-10-04T10:06:51.878062Z  INFO server: listening addr=127.0.0.1:8080</span><span class="terminal__line">2026-10-04T10:06:53.192670Z  INFO server: shutdown signal received</span><span class="terminal__line">2026-10-04T10:06:54.305959Z  INFO request{method=POST path="/auth/register" request_id="6ea33d4d-0f8b-468b-85a3-64ec30d2b6fb"}: tower_http::trace::on_response: finished processing request latency=2131 ms status=201</span><span class="terminal__line">2026-10-04T10:06:54.307123Z  INFO server: server stopped</span></pre>
+</div>
+              <p>SIGTERM の後、新しい接続は拒否されました（<code>Connection refused</code>）。待ち受けは閉じていますが、プロセスはまだ生きています。処理中だったリクエストは、残りの本文を送ると 201 で完了しました。ログの <code>latency=2131 ms</code> は、SIGTERM の後もリクエストの完了を待ったことを示しています。<code>server stopped</code> はその後に出て、終了コードは 0 でした。時刻・PID・トークンは実行ごとに変わります。</p>
+            </div>
+          </details>
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">閉じない接続があると、いつまでも終わらない</p>
+              <p><code>with_graceful_shutdown</code> には、待ち時間の上限がありません。ヘッダーを送り終えない（ヘッダーの終わりの空行を送らない）接続を 1 本残したまま SIGTERM を送ると、その接続が閉じるまでプロセスは終わりませんでした。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">執筆時の記録</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"> 0.00s ヘッダーを途中まで送った（空行を送っていない）</span><span class="terminal__line"> 0.52s kill -TERM 60857</span><span class="terminal__line"> 1.53s プロセス: 生きている</span><span class="terminal__line"> 2.56s プロセス: 生きている</span><span class="terminal__line"> 3.58s プロセス: 生きている</span><span class="terminal__line"> 4.60s プロセス: 生きている</span><span class="terminal__line"> 5.64s プロセス: 生きている</span><span class="terminal__line"> 6.65s プロセス: 生きている</span><span class="terminal__line"> 7.68s プロセス: 生きている</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">サーバーのログ</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line">2026-10-04T10:07:03.909911Z  INFO server: config loaded config=Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db", session_ttl_secs: 604800, request_timeout: 10s, trust_forwarded_for: false, cors_allowed_origins: [] }</span><span class="terminal__line">2026-10-04T10:07:04.127707Z  INFO server: listening addr=127.0.0.1:8080</span><span class="terminal__line">2026-10-04T10:07:04.779326Z  INFO server: shutdown signal received</span><span class="terminal__line">2026-10-04T10:07:11.960741Z  INFO server: server stopped</span></pre>
+</div>
+              <p>接続を閉じた後に <code>server stopped</code> が出て、終了コードは 0 でした。時刻と PID は実行ごとに変わります。待ち時間に上限を付ける処理は、このレッスンでは実装していません。コンテナで動かすときの停止の猶予時間との関係は、16 のコンテナ化で触れます。</p>
+            </div>
+          </div>
+
+          <h4>わざと壊してみる: <code>signal</code> feature を付け忘れる</h4>
+          <p><code>Cargo.toml</code> の tokio の features から <code>"signal"</code> を消してビルドすると、次のエラーになります（終了コード 101）。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">Cargo.toml（試しただけで、元に戻します）</span>
+    <span class="code-block__spacer"></span>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  serde_json = "1.0.151"</span><span class="diff-line">  sha2 = "0.11.0"</span><span class="diff-line">  sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }</span><span class="diff-line diff-line--remove">- tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }</span><span class="diff-line diff-line--add">+ tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }</span><span class="diff-line">  tower-http = { version = "0.7.1", features = ["cors", "request-id", "sensitive-headers", "set-header", "timeout", "trace", "util"] }</span><span class="diff-line">  tracing = "0.1.44"</span><span class="diff-line">  tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }</span><span class="diff-line">  ...</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling observability v0.1.0 (/path/to/14-observability)</span><span class="terminal__line">error[E0432]: unresolved import `tokio::signal`</span><span class="terminal__line">   --&gt; src/main.rs:9:5</span><span class="terminal__line">    |</span><span class="terminal__line">  9 | use tokio::signal;</span><span class="terminal__line">    |     ^^^^^^^------</span><span class="terminal__line">    |            |</span><span class="terminal__line">    |            no `signal` in the root</span><span class="terminal__line">    |</span><span class="terminal__line">note: found an item that was configured out</span><span class="terminal__line">   --&gt; ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/lib.rs:553:13</span><span class="terminal__line">    |</span><span class="terminal__line">553 |     pub mod signal;</span><span class="terminal__line">    |             ^^^^^^</span><span class="terminal__line">    |</span><span class="terminal__line">   ::: ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/macros/cfg.rs:426:19</span><span class="terminal__line">    |</span><span class="terminal__line">426 |             #[cfg(feature = "signal")]</span><span class="terminal__line">    |                   ------------------ the item is gated behind the `signal` feature</span><span class="terminal__line">note: found an item that was configured out</span><span class="terminal__line">   --&gt; ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/lib.rs:560:20</span><span class="terminal__line">    |</span><span class="terminal__line">560 |     pub(crate) mod signal;</span><span class="terminal__line">    |                    ^^^^^^</span><span class="terminal__line">    |</span><span class="terminal__line">   ::: ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tokio-1.53.1/src/macros/cfg.rs:438:22</span><span class="terminal__line">    |</span><span class="terminal__line">438 |             #[cfg(any(feature = "signal", all(unix, feature = "process")))]</span><span class="terminal__line">    |                      ---------------------------------------------------- the item is gated here</span><span class="terminal__line"></span><span class="terminal__line">For more information about this error, try `rustc --explain E0432`.</span><span class="terminal__line">error: could not compile `observability` (bin "server") due to 1 previous error</span></pre>
+</div>
+          <p><code>tokio::signal</code> は <code>signal</code> feature を付けたときだけ有効になるモジュールです。エラーは「見つからない」だけでなく、<code>the item is gated behind the `signal` feature</code> と原因まで示しています。確かめたら <code>"signal"</code> を戻してください。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>cargo test</code> の出力</summary>
+            <div class="disclosure__body">
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   Compiling observability v0.1.0 (/path/to/14-observability)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.73s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-f1072aab62865c63)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.61s</span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-e8bd741d912738e7)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-0ba05c5e8997f626)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s</span><span class="terminal__line">     Running tests/errors.rs (target/debug/deps/errors-af3beeddb4a01e26)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s</span><span class="terminal__line">     Running tests/hash_limit.rs (target/debug/deps/hash_limit-26e61cb1532916f9)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-3c8ba96237321c25)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s</span><span class="terminal__line">     Running tests/observability.rs (target/debug/deps/observability-e8da9f4496c58b1c)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-ec4794a91c3f7830)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s</span><span class="terminal__line">     Running tests/rate_limit.rs (target/debug/deps/rate_limit-fce861d810cc7c51)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s</span><span class="terminal__line">     Running tests/security.rs (target/debug/deps/security-6f16a4bf11443025)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-05abc152d72f7166)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s</span><span class="terminal__line">   Doc-tests app</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>テストは 100 件のままです。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>SIGTERM を送ると <code>shutdown signal received</code> と <code>server stopped</code> が出て、終了コードが 0 になれば OK です。</p>
+          </div>
+        </div>
+      </section>
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">フォーマット・clippy・テストで仕上げる</h3>
+        </div>
+        <div class="step__body">
+          <p>サーバーが止まっていることを確かめてから、フォーマット・clippy・ビルド・テストをまとめて実行します。<code>lsof</code> は、8080 番ポートで待ち受けているプロセスが無ければ、何も表示しません。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> lsof -nP -iTCP:8080 -sTCP:LISTEN</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check &amp;&amp; cargo clippy --all-targets -- -D warnings &amp;&amp; cargo build --locked &amp;&amp; cargo test</span><span class="terminal__line">    Checking observability v0.1.0 (/path/to/14-observability)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.49s</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-f1072aab62865c63)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.61s</span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-e8bd741d912738e7)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line">     Running tests/auth.rs (target/debug/deps/auth-0ba05c5e8997f626)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s</span><span class="terminal__line">     Running tests/errors.rs (target/debug/deps/errors-af3beeddb4a01e26)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s</span><span class="terminal__line">     Running tests/hash_limit.rs (target/debug/deps/hash_limit-26e61cb1532916f9)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-3c8ba96237321c25)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s</span><span class="terminal__line">     Running tests/observability.rs (target/debug/deps/observability-e8da9f4496c58b1c)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s</span><span class="terminal__line">     Running tests/posts.rs (target/debug/deps/posts-ec4794a91c3f7830)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.96s</span><span class="terminal__line">     Running tests/rate_limit.rs (target/debug/deps/rate_limit-fce861d810cc7c51)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s</span><span class="terminal__line">     Running tests/security.rs (target/debug/deps/security-6f16a4bf11443025)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-05abc152d72f7166)</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s</span><span class="terminal__line">   Doc-tests app</span><span class="terminal__line">…</span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+</div>
+          <p>合計 100 件が成功しました。13 の 93 件から 7 件増えました。<code>tests/observability.rs</code> の 5 件と、<code>tests/health.rs</code> の 2 件です。ほかに、計測用の <code>#[ignore]</code> のテストが 1 件あります。<code>cargo build --locked</code> が通るので、<code>Cargo.lock</code> は <code>Cargo.toml</code> と食い違っていません。</p>
+          <p>13 から変わったファイルは次のとおりです（<code>target/</code> と、変わっていないファイルは省略）。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">14-observability/
+  .env.example         # RUST_LOG・LOG_FORMAT の説明（コメント行）を追加
+  Cargo.toml           # name = "observability"、tracing・tracing-subscriber を追加、
+                       # tower-http に trace・request-id・sensitive-headers・util、tokio に signal
+  Cargo.lock
+  src/
+    main.rs              # telemetry::init、with_graceful_shutdown、停止後にプールを閉じる
+    lib.rs               # telemetry を追加
+    telemetry.rs         # subscriber の初期化（新規）
+    error.rs             # eprintln! を tracing::error! に
+    layers.rs            # log_request を消し、機密ヘッダー・リクエスト ID・TraceLayer の層
+    routes/
+      mod.rs             # /ready を追加
+      health.rs          # ready ハンドラ
+  tests/
+    health.rs            # 3 件（/ready の 2 件を追加）
+    observability.rs     # 5 件（新規）</code></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo fmt --check</code> と clippy が何も指摘せずに終わり、100 件のテストが成功すれば完成です。</p>
+          </div>
+        </div>
+      </section>
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>RUST_LOG=warn,app::layers=info</code> が何を出し、何を出さないかを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">ログのフィールドを、文章に埋め込まず <code>?config</code> や <code>%addr</code> のように渡す理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">応答の <code>x-request-id</code> と、ログの <code>request_id</code> が一致することを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>PropagateRequestIdLayer</code> を CORS より外側に置く理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>SetSensitiveRequestHeadersLayer</code> を <code>TraceLayer</code> より外側に置く理由と、ログに <code>Authorization</code>・パスワード・トークンを出してはいけない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">クライアントが送った <code>x-request-id</code> がそのまま採用されることと、その注意点を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>/health</code> と <code>/ready</code> の違いと、<code>/health</code> に DB の確認を混ぜない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">SIGTERM で終了コードが 0 になり、<code>shutdown signal received</code> と <code>server stopped</code> が出ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>cargo test</code> の 100 件が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">テストで <code>failed to set global default subscriber</code> の panic になる</p>
+          <p>subscriber はプロセスに 1 つだけです。<code>telemetry::init()</code> を 2 回呼ぶと panic します。執筆時に、一時的なテストで <code>app::telemetry::init()</code> を 2 回呼んだ結果です（確かめた後に消しています）。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test tmp_double_init</span><span class="terminal__line">   Compiling observability v0.1.0 (/path/to/14-observability)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s</span><span class="terminal__line">     Running tests/tmp_double_init.rs (target/debug/deps/tmp_double_init-c05db5471f11e641)</span><span class="terminal__line"></span><span class="terminal__line">running 1 test</span><span class="terminal__line">test init_twice ... FAILED</span><span class="terminal__line"></span><span class="terminal__line">failures:</span><span class="terminal__line"></span><span class="terminal__line">---- init_twice stdout ----</span><span class="terminal__line"></span><span class="terminal__line">thread 'init_twice' (11057047) panicked at ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tracing-subscriber-0.3.23/src/util.rs:94:14:</span><span class="terminal__line">failed to set global default subscriber: SetGlobalDefaultError("a global default trace dispatcher has already been set")</span><span class="terminal__line">note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line">failures:</span><span class="terminal__line">    init_twice</span><span class="terminal__line"></span><span class="terminal__line">test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line"></span><span class="terminal__line">error: test failed, to rerun pass `--test tmp_double_init`</span></pre>
+</div>
+          <p><code>thread 'init_twice'</code> の後ろの数字は、実行ごとに変わります。このプロジェクトでは <code>main</code> からだけ <code>init()</code> を呼び、<code>build_app</code> やテストからは呼びません。1 つのテストバイナリーの中のテストは同じプロセスで動くので、テストの中で初期化すると、2 つ目のテストで panic します。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>RUST_LOG</code> を変えたのに、出力が変わらない</p>
+          <p><code>RUST_LOG</code> の書式が壊れていると、エラーや警告を出さずに、黙って既定の info に戻ります。これは tracing-subscriber の性質ではありません。<code>src/telemetry.rs</code> が <code>try_from_default_env()</code> の <code>Err</code> を <code>unwrap_or_else</code> で info のフィルターに置き換えているためです。執筆時に <code>RUST_LOG='app::layers=bogus[['</code> で起動したところ、出力は既定と同じでした。対象の名前を間違えたときは、何も言われず出力が出ないだけです。このプロジェクトの名前は、lib クレートが <code>app</code>、bin が <code>server</code>、tower-http が <code>tower_http</code> です。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ログが 1 行も出ない</p>
+          <p><code>RUST_LOG</code> が空の値（<code>RUST_LOG=</code>）になっていないか確かめてください。空の値は書式の誤りとは扱われないので、既定の info に戻りません。何も指定しないフィルターになり、既定の ERROR だけが通るので、起動ログもリクエストのログも出ません。執筆時に <code>RUST_LOG=</code> で起動し、3 つのリクエストを送ったところ、ログは 0 バイトでした。<code>.env</code> に書くときも空にせず、使わないなら <code>.env.example</code> のように行ごとコメントにします。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ログに <code>request{...}:</code> の部分が出ない</p>
+          <p><code>DefaultMakeSpan</code> を使っている場合、span の既定のレベルは DEBUG なので、<code>RUST_LOG=info</code> では span が丸ごと出ません。<code>.level(Level::INFO)</code> を付けるか、このレッスンのように <code>info_span!</code> で作ってください（ステップ 3 の読み物）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">プリフライトの応答にだけ <code>x-request-id</code> が付かない</p>
+          <p><code>PropagateRequestIdLayer</code> が CORS より内側にあります。<code>SetRequestIdLayer</code> の直後（<code>TraceLayer</code> の外側）に置いてください（ステップ 3）。<code>the_cors_preflight_response_also_has_a_request_id</code> のテストが、この位置を守ります。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ブラウザのアプリから <code>x-request-id</code> を読めない</p>
+          <p>CORS の <code>access-control-expose-headers</code> に <code>x-request-id</code> を入れていないからです（ステップ 3 の CORS の読み物）。expose するかは、このレッスンでは決めていません。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">SIGTERM を送ってもプロセスが終わらない</p>
+          <p>閉じていない接続が残っていないか確かめてください。<code>with_graceful_shutdown</code> は、全ての接続が終わるまで待ちます（ステップ 5 の注意）。</p>
+        </div>
+      </div>
+      <h2 id="remaining">まだ残っていること</h2>
+      <p>このレッスンで、ログを調べやすくし、安全に止められるようにしました。一方で、次の課題は残っています。執筆時に確かめていないことも含めて挙げます。</p>
+      <ul>
+        <li><strong>クライアントが送る <code>x-request-id</code> の検証</strong>: 送られた値をそのまま採用し、長さや文字種を確かめていません。信用できない相手からの値は捨てて振り直す、といった対策は実装していません。</li>
+        <li><strong>ASCII 以外を含む <code>x-request-id</code></strong>: ASCII 以外の文字を含む値を送ると、ログの <code>request_id</code> は <code>"-"</code> になり、応答には元の値が返るので、両者が一致しません。</li>
+        <li><strong>ブラウザからの <code>x-request-id</code></strong>: CORS で expose していないので、ブラウザの JavaScript からは読めません。</li>
+        <li><strong>DB が応答しないときの <code>/ready</code></strong>: 確かめたのは、プールを閉じて即座にエラーになる場合（503）だけです。DB が応答せずに待たされる場合の挙動は確かめていません。</li>
+        <li><strong>停止の待ち時間の上限</strong>: 閉じない接続があると、プロセスが終わりません。上限を付ける処理は実装していません（16 のコンテナ化で、停止の猶予時間に触れます）。</li>
+        <li><strong>401 などの理由</strong>: 500 系は <code>tracing::error!</code> で詳細をログに出しますが、401・403 などは、ログにステータスが出るだけで理由は出ません。</li>
+        <li><strong>JSON ログの長さ</strong>: span の内容が <code>span</code> と <code>spans</code> の両方に出るので、1 行が長くなります。</li>
+      </ul>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        tracing と tracing-subscriber でログを構造化し、<code>RUST_LOG</code> と <code>LOG_FORMAT</code> で量と形式を切り替えられるようにしました。
+        tower-http の層で全ての応答に <code>x-request-id</code> を付け、ログの <code>request_id</code> と突き合わせられるようにしました。
+        <code>/ready</code> で DB に届くかを返し、SIGTERM と <kbd>Ctrl</kbd> + <kbd>C</kbd> で処理中のリクエストを終えてから止まるようにしました。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>観点</th><th>このレッスンでの扱い</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>ログの初期化</td><td><code>telemetry::init()</code> を <code>main</code> から 1 回だけ。<code>RUST_LOG</code> が無いか壊れていれば info（空の値ではログが出ない）。色は端末のときだけ</td></tr>
+          <tr><td>リクエストのログ</td><td><code>TraceLayer</code> と自作の <code>make_span</code>。span には <code>method</code>・<code>path</code>（クエリなし）・<code>request_id</code> だけを入れる</td></tr>
+          <tr><td>リクエスト ID</td><td>無ければ UUID を割り当て、あればそのまま採用。エラー・プリフライトを含む全ての応答に付ける</td></tr>
+          <tr><td>機密の扱い</td><td><code>authorization</code> を <code>SetSensitiveRequestHeadersLayer</code> で伏せる（ヘッダーを記録するときの保険）。クエリ文字列は記録しない</td></tr>
+          <tr><td>層の順番</td><td>外側から 機密ヘッダー → ID の発行 → ID の付与 → <code>TraceLayer</code> → セキュリティヘッダー → CORS → 安全網 → <code>TimeoutLayer</code> → <code>DefaultBodyLimit</code></td></tr>
+          <tr><td>ヘルスチェック</td><td><code>/health</code> は DB に触れず 200。<code>/ready</code> は <code>SELECT 1</code> が通れば 200、通らなければ 503 <code>unavailable</code></td></tr>
+          <tr><td>停止</td><td>SIGINT・SIGTERM で新しい接続を止め、処理中のリクエストを終えてから、プールを閉じて終了コード 0。待ち時間の上限は無い</td></tr>
+          <tr><td>テスト</td><td>subscriber はテストで初期化しない。100 件（<code>tests/observability.rs</code> 5 件、<code>tests/health.rs</code> に 2 件）</td></tr>
+        </tbody>
+      </table>
+
+      <p>環境変数は次のとおりです。<code>.env.example</code> の全文も載せます。</p>
+      <table>
+        <thead>
+          <tr><th>変数</th><th>既定値</th><th>導入</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>APP_HOST</code></td><td><code>127.0.0.1</code></td><td>07</td></tr>
+          <tr><td><code>APP_PORT</code></td><td><code>8080</code></td><td>07</td></tr>
+          <tr><td><code>DATABASE_URL</code></td><td><code>sqlite://app.db</code></td><td>07</td></tr>
+          <tr><td><code>SESSION_TTL_SECS</code></td><td><code>604800</code>（7 日）</td><td>10</td></tr>
+          <tr><td><code>REQUEST_TIMEOUT_SECS</code></td><td><code>10</code></td><td>12</td></tr>
+          <tr><td><code>CORS_ALLOWED_ORIGINS</code></td><td>空（CORS は無効）</td><td>13</td></tr>
+          <tr><td><code>TRUST_FORWARDED_FOR</code></td><td><code>false</code></td><td>13</td></tr>
+          <tr><td><code>RUST_LOG</code></td><td>なし（info 以上を出す）。空の値ではログが出ない</td><td>14</td></tr>
+          <tr><td><code>LOG_FORMAT</code></td><td>なし（テキスト）。<code>json</code> で 1 行 1 JSON</td><td>14</td></tr>
+        </tbody>
+      </table>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">.env.example</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext"># コピーして .env を作り、値を書き換える（.env はコミットしない）
+APP_HOST=127.0.0.1
+APP_PORT=8080
+DATABASE_URL=sqlite://app.db
+# ログインで発行するトークンの有効期間（秒）。省略すると 604800（7 日）
+SESSION_TTL_SECS=604800
+# 1 つのリクエストの処理にかけてよい時間（秒）。超えると 408。省略すると 10
+REQUEST_TIMEOUT_SECS=10
+# ブラウザから直接この API を呼ぶオリジンの許可リスト（カンマ区切り。末尾に / を付けない）。空なら CORS は無効
+# 試すときは次の行のように書く: CORS_ALLOWED_ORIGINS=http://localhost:3000
+CORS_ALLOWED_ORIGINS=
+# 信用するプロキシ（リバースプロキシや BFF）の後ろで動かすときだけ true にする。省略すると false
+# true のときだけ、IP 単位のレート制限で X-Forwarded-For の右端を使う
+TRUST_FORWARDED_FOR=false
+# ログの出力量（tracing-subscriber の EnvFilter の書式。カンマ区切りで「対象=レベル」）。省略すると info
+# 例: RUST_LOG=warn（警告以上だけ）、RUST_LOG=info,tower_http=debug（リクエストの開始ログも出す）
+# RUST_LOG=info
+# ログの形式。json にすると 1 行 1 JSON（ログ収集の基盤向け）。省略すると人が読むテキスト
+# LOG_FORMAT=json</code></pre>
+</div>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/14-observability</code> の <code>axum/14-observability/</code> ディレクトリにあります。<code>.env</code> はコミットしていないので、<code>.env.example</code> をコピーして作ってください。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../13-http-security/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">13: HTTP の防御層</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">15: OpenAPI ドキュメントの生成</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
