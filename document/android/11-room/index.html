@@ -1,0 +1,1861 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>11: Room 3 でローカル保存 | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">11</li>
+        </ol>
+        <h1 class="lesson-title">Room 3 でローカル保存</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分（任意の実験を除く）</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 10 で MockEngine のテストまで書いた人</li>
+          <li class="lesson-meta__item">📋 前提: 10 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること。エミュレータからインターネットに接続できること（最初の一覧の取得と、release の確認で使います）</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../10-mockengine-testing/index.html">10: MockEngine でネットワークのテスト</a></li>
+          <li class="lesson-meta__item">🧩 版: Kotlin 2.4.20 / AGP 9.4.1 / Compose BOM 2026.09.00 / Room 3.0.3（<code>androidx.room3</code>）/ KSP 2.3.12 / Ktor 3.6.0</li>
+          <li class="lesson-meta__item">🌿 完成コード: ブランチ <code>android/11-room</code></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>Room 3 の Gradle プラグインと KSP を設定し、Entity・DAO・Database を書いて、DB のコードとスキーマ JSON を生成できる</li>
+          <li>DAO と API を束ねる Repository を作り、Room を唯一の情報源にして、DB が空のときだけ API から取得できる</li>
+          <li>ViewModel の状態を DB の <code>Flow</code> と <code>combine</code>・<code>stateIn</code> で組み立て、アプリを終了しても一覧の変更が残るようにできる</li>
+          <li>偽の DAO を使い、既存の単体テストと UI テストを、本物の DB なしで通せる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>09 では、Web API から Todo の一覧を取得しました。10 では、その取得をテストしました。ただし、追加・完了の切り替え・削除は、ViewModel のメモリ上（と <code>SavedStateHandle</code>）で行っていただけです。アプリを終了すると変更は消え、次に起動したときは API の 20 件に戻っていました。</p>
+      <p>この項目では、Jetpack の DB ライブラリ Room 3 を使い、一覧を端末の SQLite のデータベース（DB）に保存します。アプリを終了しても、プロセスが強制終了されても、変更が残るようになります。</p>
+      <p>前提知識として、07 の ViewModel・<code>StateFlow</code>・<code>SavedStateHandle</code> を使います。09 の <code>TodoApi</code>・<code>AppContainer</code> と、10 の偽のサーバー（<code>FakeTodoServer</code>）も使います。SQL は <code>SELECT</code>・<code>UPDATE</code>・<code>DELETE</code> の 1 行の文を読める程度で十分です。</p>
+
+      <h3 id="data-flow">データの流れ</h3>
+      <p>この項目では、Room を<strong>唯一の情報源</strong>にします。画面に出す一覧は、いつも DB から読みます。API は、DB が空のときに最初の一覧を取ってくるためだけに使います。</p>
+          <ol>
+            <li>画面（<code>TodoListPage</code>）は、これまでどおり ViewModel の <code>uiState</code> を購読します。</li>
+            <li>ViewModel は、次の 3 つを <code>combine</code> して <code>uiState</code> を作ります。DB の一覧（<code>Flow</code>）・絞り込み（<code>SavedStateHandle</code>）・読み込みの状態（ViewModel のメモリ）です。</li>
+            <li>起動したとき、DB が空なら、API から取得して DB に保存します。DB に一覧があれば、API には行きません。</li>
+            <li>追加・完了の切り替え・削除・元に戻す・完了済みの削除は、DB に書くだけです。DB が変わると、Room が新しい一覧を <code>Flow</code> に流し、2 の <code>combine</code> を通って画面に届きます。</li>
+          </ol>
+
+          <table>
+            <thead>
+            <tr><th>データ</th><th>10 まで</th><th>この項目（11）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>Todo の一覧</td><td>ViewModel のメモリと <code>SavedStateHandle</code>。起動のたびに API から取得</td><td>DB（Room）。DB が空のときだけ API から取得して保存</td></tr>
+            <tr><td>追加・切り替え・削除</td><td>ViewModel が一覧を書き換える</td><td>ViewModel は DB に書くだけ。一覧は DB の <code>Flow</code> から届く</td></tr>
+            <tr><td>絞り込み</td><td><code>SavedStateHandle</code></td><td><code>SavedStateHandle</code>（変わらない）</td></tr>
+            <tr><td>読み込み中・失敗の表示</td><td>ViewModel のメモリ</td><td>ViewModel のメモリ（変わらない）</td></tr>
+            <tr><td>アプリを終了したとき</td><td>一覧の変更が消え、API の 20 件に戻る</td><td>一覧の変更が残る</td></tr>
+            </tbody>
+          </table>
+      <p><code>SavedStateHandle</code> に残すのは絞り込みだけにします。一覧と完了の状態は DB が持つので、同じデータを 2 か所で持たないようにするためです。</p>
+
+          <div class="callout callout--note" id="limits">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">この設計の限界（「DB が空のときだけ取得」）</p>
+              <p>API に行くかどうかは、DB が空かどうかだけで決めています。そのため、次の 2 つの限界があります。</p>
+              <ul>
+                <li>一覧を全件削除してから起動し直すと、DB が空なので、API から最初の 20 件を取り直します。ステップ 4 で実際に確かめます。</li>
+                <li>DB に一覧があれば API には行かないので、2 回目以降の起動では、サーバー側の変更は取り込まれません。</li>
+              </ul>
+              <p>次の項目（12: DataStore で設定を保存）では、「最初の一覧を取得済み」という印を DataStore へ保存し、全件削除した後も取り直さないようにします。</p>
+            </div>
+          </div>
+
+      <h3 id="room3">Room 3 について</h3>
+      <ul>
+        <li>Room は、SQLite を使うための Jetpack のライブラリです。テーブルの 1 行を表すクラス（Entity）と、DB への操作を並べた interface（DAO）を書くと、実装のコードをビルド時に生成します。</li>
+        <li>Room 3 のパッケージと artifact は <code>androidx.room3</code> です。Room 2 のパッケージは <code>androidx.room</code> で、名前が違います。Web の解説の多くは Room 2 の書き方なので、import を混ぜないように注意します。</li>
+        <li>コードの生成には KSP（Kotlin Symbol Processing）を使います。Room 3 では、kapt は使えず KSP だけです。</li>
+        <li>Room 3 の Gradle プラグインでは、スキーマ（テーブルの定義）を書き出す先 <code>schemaDirectory</code> の指定が必須です。</li>
+      </ul>
+
+      <h3 id="what-we-build">この項目で作るもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>作るもの</th><th>主に変えるファイル</th><th>テストの件数（単体 / UI）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>Room 3 と KSP の設定、Entity・DAO・Database</td><td><code>libs.versions.toml</code>・<code>build.gradle.kts</code>（2 つ）・<code>TodoEntity.kt</code>・<code>TodoDao.kt</code>・<code>AppDatabase.kt</code></td><td>71 / 66</td></tr>
+            <tr><td>2</td><td>Repository・Application・<code>AppContainer</code> での DB の作成</td><td><code>TodoRepository.kt</code>・<code>TodoApplication.kt</code>・<code>AndroidManifest.xml</code>・<code>AppContainer.kt</code></td><td>71 / 66</td></tr>
+            <tr><td>3</td><td>ViewModel を Room に切り替え、テストを偽の DAO に合わせる（完成状態）</td><td><code>TodoListViewModel.kt</code>・<code>TodoListPage.kt</code>・<code>FakeTodoDao.kt</code>（2 つ）・既存のテスト</td><td>71 / 66</td></tr>
+            <tr><td>4</td><td>アプリで確かめる（終了しても残ること、DB のファイル、機内モード、全件削除）</td><td>なし</td><td>71 / 66</td></tr>
+            <tr><td>5</td><td>機内モードでの UI テスト、UI テストが DB を作らないことの確認、release の起動確認</td><td>なし</td><td>71 / 66</td></tr>
+            </tbody>
+          </table>
+      <p>新しいテストは足しません。既存のテストのうち、<code>SavedStateHandle</code> への一覧の保存を確かめていた 4 件を、DB を確かめる内容に置き換えます。件数は変わりません。10 の完成コードからの変更は、17 ファイル・追加 348 行・削除 107 行です（準備の名前の変更と、自動生成のスキーマ JSON を除く）。</p>
+
+      <h3 id="versions">使用バージョン</h3>
+
+          <table>
+            <thead>
+            <tr><th>ライブラリ・プラグイン</th><th>版</th><th>用途</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>androidx.room3:room3-runtime</code></td><td>3.0.3</td><td>Room 本体（<code>Room</code>・<code>RoomDatabase</code>・アノテーション）</td></tr>
+            <tr><td><code>androidx.room3:room3-compiler</code>（<code>ksp</code> で追加）</td><td>3.0.3</td><td>DAO と Database の実装を生成する</td></tr>
+            <tr><td>Room の Gradle プラグイン（<code>androidx.room3</code>）</td><td>3.0.3</td><td>スキーマ JSON の出力先の設定</td></tr>
+            <tr><td>KSP の Gradle プラグイン（<code>com.google.devtools.ksp</code>）</td><td>2.3.12</td><td>コードを生成する仕組み</td></tr>
+            </tbody>
+          </table>
+      <p>どれも執筆時点（2026年10月）の最新の安定版です。Room 3 は、その次の <code>3.1.0-alpha01</code> が alpha でした。<code>settings.gradle.kts</code> の <code>pluginManagement</code> は、01 から 3 つのリポジトリを見る設定です。Google の Maven・Maven Central・Gradle Plugin Portal です。Room のプラグインは Google の Maven から、KSP のプラグインは Maven Central から取得されます。<code>settings.gradle.kts</code> の変更は要りません。</p>
+      <p>KSP 2.3.12 は、AGP 9.4.1 に組み込まれた Kotlin（2.4.20）と組み合わせても、追加の設定なしでビルドできました。<code>kotlin-android</code> プラグインを足す必要はありません。</p>
+
+      <h2 id="prepare">準備</h2>
+      <p>10 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 11 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid10&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid11&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid10&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid11&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span></pre>
+</div>
+          <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // Step 1: 変数・関数・文字列テンプレート・when 式</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid10&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid11&quot;</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できる。型は推論されるが、ここでは Int のまま</span><span class="diff-line">  var counter = 0</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          counter = 0</span><span class="diff-line">          assertEquals(1, incrementCounter())</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid10&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid11&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+          <p>パッケージ名と <code>applicationId</code>（<code>com.handson.android01</code>）は 10 と同じく変えません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:packageDebug</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">&gt; Task :app:createDebugApkListingFileRedirect</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 20s</span><span class="terminal__line">38 actionable tasks: 38 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+          <p><code>BUILD SUCCESSFUL</code> と表示されれば準備は完了です。かかる時間は、Gradle デーモンが起動済みかどうかで変わります。エミュレータも 10 と同じ手順で起動しておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">emulator-5554	device</span></pre>
+</div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">Gradle の設定と Entity・DAO・Database を書く</h3>
+        </div>
+        <div class="step__body">
+          <p>Room 3 と KSP をプロジェクトに足し、DB の形（テーブル）と操作（DAO）を書きます。このステップでは、まだアプリから DB を使いません。ビルドで実装のコードとスキーマ JSON が生成されることを確かめます。</p>
+          <p>まず、バージョンカタログに版・ライブラリ・プラグインを足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  navigation3 = &quot;1.2.0&quot;</span><span class="diff-line">  kotlinxSerialization = &quot;1.11.0&quot;</span><span class="diff-line">  ktor = &quot;3.6.0&quot;</span><span class="diff-line diff-line--add">+ room3 = &quot;3.0.3&quot;</span><span class="diff-line diff-line--add">+ ksp = &quot;2.3.12&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  androidx-compose-material3 = { group = &quot;androidx.compose.material3&quot;, name = &quot;material3&quot; }</span><span class="diff-line">  androidx-navigation3-runtime = { group = &quot;androidx.navigation3&quot;, name = &quot;navigation3-runtime&quot;, version.ref = &quot;navigation3&quot; }</span><span class="diff-line">  androidx-navigation3-ui = { group = &quot;androidx.navigation3&quot;, name = &quot;navigation3-ui&quot;, version.ref = &quot;navigation3&quot; }</span><span class="diff-line diff-line--add">+ androidx-room3-compiler = { group = &quot;androidx.room3&quot;, name = &quot;room3-compiler&quot;, version.ref = &quot;room3&quot; }</span><span class="diff-line diff-line--add">+ androidx-room3-runtime = { group = &quot;androidx.room3&quot;, name = &quot;room3-runtime&quot;, version.ref = &quot;room3&quot; }</span><span class="diff-line">  kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  kotlinx-coroutines-test = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-test&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  kotlinx-serialization-core = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-serialization-core&quot;, version.ref = &quot;kotlinxSerialization&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  [plugins]</span><span class="diff-line">  android-application = { id = &quot;com.android.application&quot;, version.ref = &quot;agp&quot; }</span><span class="diff-line diff-line--add">+ androidx-room3 = { id = &quot;androidx.room3&quot;, version.ref = &quot;room3&quot; }</span><span class="diff-line diff-line--add">+ ksp = { id = &quot;com.google.devtools.ksp&quot;, version.ref = &quot;ksp&quot; }</span><span class="diff-line">  kotlin-compose = { id = &quot;org.jetbrains.kotlin.plugin.compose&quot;, version.ref = &quot;kotlin&quot; }</span><span class="diff-line">  kotlin-parcelize = { id = &quot;org.jetbrains.kotlin.plugin.parcelize&quot;, version.ref = &quot;kotlin&quot; }</span><span class="diff-line">  kotlin-serialization = { id = &quot;org.jetbrains.kotlin.plugin.serialization&quot;, version.ref = &quot;kotlin&quot; }</span></pre>
+</div>
+          <p>プロジェクト直下の <code>build.gradle.kts</code> に、2 つのプラグインを <code>apply false</code> で足します（版をここで決め、使うのは app モジュールです）。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  // Top-level build file where you can add configuration options common to all sub-projects/modules.</span><span class="diff-line">  plugins {</span><span class="diff-line">      alias(libs.plugins.android.application) apply false</span><span class="diff-line diff-line--add">+     alias(libs.plugins.androidx.room3) apply false</span><span class="diff-line diff-line--add">+     alias(libs.plugins.ksp) apply false</span><span class="diff-line">      alias(libs.plugins.kotlin.compose) apply false</span><span class="diff-line">      alias(libs.plugins.kotlin.parcelize) apply false</span><span class="diff-line">  }</span></pre>
+</div>
+          <p><code>app/build.gradle.kts</code> で、プラグインを適用し、スキーマの出力先と依存を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  plugins {</span><span class="diff-line">      alias(libs.plugins.android.application)</span><span class="diff-line diff-line--add">+     alias(libs.plugins.androidx.room3)</span><span class="diff-line diff-line--add">+     alias(libs.plugins.ksp)</span><span class="diff-line">      alias(libs.plugins.kotlin.compose)</span><span class="diff-line">      alias(libs.plugins.kotlin.parcelize)</span><span class="diff-line">      alias(libs.plugins.kotlin.serialization)</span><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ // Room のスキーマ（JSON）の出力先。Room 3 の Gradle プラグインでは指定が必須</span><span class="diff-line diff-line--add">+ room3 {</span><span class="diff-line diff-line--add">+     schemaDirectory(&quot;$projectDir/schemas&quot;)</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">  dependencies {</span><span class="diff-line">      implementation(platform(libs.androidx.compose.bom))</span><span class="diff-line">      implementation(libs.androidx.activity.compose)</span><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.lifecycle.viewmodel.compose)</span><span class="diff-line">      implementation(libs.androidx.navigation3.runtime)</span><span class="diff-line">      implementation(libs.androidx.navigation3.ui)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.room3.runtime)</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      implementation(libs.kotlinx.serialization.core)</span><span class="diff-line">      implementation(libs.kotlinx.serialization.json)</span><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.ktor.client.content.negotiation)</span><span class="diff-line">      implementation(libs.ktor.client.core)</span><span class="diff-line">      implementation(libs.ktor.serialization.kotlinx.json)</span><span class="diff-line diff-line--add">+     ksp(libs.androidx.room3.compiler)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">      testImplementation(libs.kotlinx.coroutines.test)</span><span class="diff-line">      testImplementation(libs.ktor.client.mock)</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>alias(libs.plugins.ksp)</code> は、ビルド時にコードを生成する KSP を有効にします。<code>ksp(libs.androidx.room3.compiler)</code> は、KSP で動かすプロセッサー（Room のコンパイラー）の指定です。</li>
+            <li><code>room3 { schemaDirectory(...) }</code> は、Room のプラグインの設定です。DB のスキーマを JSON にして <code>app/schemas/</code> に書き出します。Room 3 のプラグインでは、この指定が必須です。</li>
+          </ul>
+          <p>次に、<code>app/src/main/java/com/handson/android01/data/</code> に 3 つのファイルを作ります。1 つめは、テーブルの 1 行を表す Entity です。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoEntity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import androidx.room3.Entity
+import androidx.room3.PrimaryKey
+import com.handson.android01.kotlin.Todo
+
+// DB の 1 行（todos テーブルの 1 行）。画面で使う Todo とは別の型にして、DB の都合（autoGenerate など）を画面に持ち込まない。
+// id = 0 のまま insert すると、Room が新しい id を振る
+@Entity(tableName = &quot;todos&quot;)
+data class TodoEntity(
+    @PrimaryKey(autoGenerate = true) val id: Int = 0,
+    val title: String,
+    val done: Boolean,
+)
+
+fun TodoEntity.toTodo(): Todo = Todo(id = id, title = title, done = done)
+
+fun Todo.toEntity(): TodoEntity = TodoEntity(id = id, title = title, done = done)</code></pre>
+</div>
+          <ul>
+            <li><code>@Entity(tableName = "todos")</code> を付けたクラスが、<code>todos</code> テーブルになります。プロパティが列になります。</li>
+            <li><code>@PrimaryKey(autoGenerate = true)</code> は、主キーの値を DB に振らせる指定です。<code>id = 0</code> のまま挿入すると、新しい id が振られます。</li>
+            <li>画面で使う <code>Todo</code>（02 で作り、07 で <code>Parcelable</code> にした型）とは別の型にします。<code>autoGenerate</code> のような DB の都合を画面の型に持ち込まないためです。<code>toTodo()</code> と <code>toEntity()</code> で相互に変換します。</li>
+          </ul>
+          <p>2 つめは、DB への操作を並べた DAO です。interface を書くだけで、実装（<code>TodoDao_Impl</code>）は Room が KSP で生成します。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoDao.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import androidx.room3.Dao
+import androidx.room3.Insert
+import androidx.room3.OnConflictStrategy
+import androidx.room3.Query
+import kotlinx.coroutines.flow.Flow
+
+// DB への操作の一覧。interface を書くと、実装（TodoDao_Impl）を Room が KSP で生成する。
+// Room 3 では、DAO の関数は suspend にする。変更を監視する関数だけは、Flow を返す（suspend は付けない）
+@Dao
+interface TodoDao {
+
+    // テーブルが変わるたびに、最新の一覧を流し直す
+    @Query(&quot;SELECT * FROM todos ORDER BY id&quot;)
+    fun observeAll(): Flow&lt;List&lt;TodoEntity&gt;&gt;
+
+    @Query(&quot;SELECT COUNT(*) FROM todos&quot;)
+    suspend fun count(): Int
+
+    // 同じ id の行があれば置き換える
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(todo: TodoEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(todos: List&lt;TodoEntity&gt;)
+
+    @Query(&quot;UPDATE todos SET done = :done WHERE id = :id&quot;)
+    suspend fun setDone(id: Int, done: Boolean)
+
+    @Query(&quot;DELETE FROM todos WHERE id = :id&quot;)
+    suspend fun deleteById(id: Int)
+
+    @Query(&quot;DELETE FROM todos WHERE done = 1&quot;)
+    suspend fun deleteDone()
+}</code></pre>
+</div>
+          <ul>
+            <li><code>observeAll()</code> は <code>Flow</code> を返します。<code>todos</code> テーブルが変わるたびに、Room が <code>SELECT</code> をやり直し、最新の一覧を流します。ステップ 3 で、画面の一覧をこの <code>Flow</code> から作ります。<code>Flow</code> を返す関数には <code>suspend</code> を付けません。</li>
+            <li>それ以外の関数は <code>suspend</code> にします。DB の読み書きは時間がかかることがあるので、コルーチンの中から呼びます。</li>
+            <li><code>@Insert(onConflict = OnConflictStrategy.REPLACE)</code> は、同じ主キーの行があれば置き換えます。削除の「元に戻す」で、同じ id の行を入れ直すのに使います。</li>
+            <li><code>@Query</code> の中の <code>:id</code> や <code>:done</code> は、関数の引数が入る場所です。<code>Boolean</code> は SQLite では整数（0 / 1）で保存されるので、<code>done = 1</code> は完了済みの行です。</li>
+          </ul>
+          <p>3 つめは、DB 本体の定義です。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/AppDatabase.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import androidx.room3.Database
+import androidx.room3.RoomDatabase
+
+// DB 本体の定義。テーブルになる Entity の一覧と、スキーマの版（version）を書く。
+// Entity を変えたら version を上げて、移行（Migration）を用意する
+@Database(entities = [TodoEntity::class], version = 1)
+abstract class AppDatabase : RoomDatabase() {
+    abstract fun todoDao(): TodoDao
+}</code></pre>
+</div>
+          <p><code>entities</code> には、テーブルにする Entity を並べます。<code>version</code> はスキーマの版です。<code>RoomDatabase</code> を継承した抽象クラスにして、DAO を返す抽象関数を置きます。実装（<code>AppDatabase_Impl</code>）は、これも Room が生成します。</p>
+          <p>ビルドします。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:kspDebugKotlin</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:compileDebugKotlin</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:copyRoomSchemas</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:packageDebug</span><span class="terminal__line">&gt; Task :app:assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 39s</span><span class="terminal__line">40 actionable tasks: 40 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+          <p><code>kspDebugKotlin</code> が KSP でコードを生成するタスク、<code>copyRoomSchemas</code> がスキーマ JSON を <code>app/schemas/</code> に書き出すタスクです。ビルドの後、次のファイルができています。</p>
+          <ul>
+            <li><code>app/build/generated/ksp/debug/kotlin/com/handson/android01/data/AppDatabase_Impl.kt</code></li>
+            <li><code>app/build/generated/ksp/debug/kotlin/com/handson/android01/data/TodoDao_Impl.kt</code></li>
+            <li><code>app/schemas/com.handson.android01.data.AppDatabase/1.json</code></li>
+          </ul>
+          <p>生成されたクラスは <code>app/build/</code> の下にあるので、Android Studio で中を見るにはビルドが必要です。スキーマ JSON の中身は次のとおりです。自分で書くファイルではありません。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">JSON</span>
+    <span class="code-block__filename">app/schemas/com.handson.android01.data.AppDatabase/1.json</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-json">{
+  &quot;formatVersion&quot;: 1,
+  &quot;database&quot;: {
+    &quot;version&quot;: 1,
+    &quot;identityHash&quot;: &quot;6cb4ddd24cbef3658d2ac6372d46feb0&quot;,
+    &quot;entities&quot;: [
+      {
+        &quot;tableName&quot;: &quot;todos&quot;,
+        &quot;createSql&quot;: &quot;CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `done` INTEGER NOT NULL)&quot;,
+        &quot;fields&quot;: [
+          {
+            &quot;fieldPath&quot;: &quot;id&quot;,
+            &quot;columnName&quot;: &quot;id&quot;,
+            &quot;affinity&quot;: &quot;INTEGER&quot;,
+            &quot;notNull&quot;: true
+          },
+          {
+            &quot;fieldPath&quot;: &quot;title&quot;,
+            &quot;columnName&quot;: &quot;title&quot;,
+            &quot;affinity&quot;: &quot;TEXT&quot;,
+            &quot;notNull&quot;: true
+          },
+          {
+            &quot;fieldPath&quot;: &quot;done&quot;,
+            &quot;columnName&quot;: &quot;done&quot;,
+            &quot;affinity&quot;: &quot;INTEGER&quot;,
+            &quot;notNull&quot;: true
+          }
+        ],
+        &quot;primaryKey&quot;: {
+          &quot;autoGenerate&quot;: true,
+          &quot;columnNames&quot;: [
+            &quot;id&quot;
+          ]
+        }
+      }
+    ],
+    &quot;setupQueries&quot;: [
+      &quot;CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)&quot;,
+      &quot;INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, &#x27;6cb4ddd24cbef3658d2ac6372d46feb0&#x27;)&quot;
+    ]
+  }
+}</code></pre>
+</div>
+          <ul>
+            <li><code>createSql</code> が、テーブルを作る SQL です。<code>autoGenerate = true</code> の主キーは <code>INTEGER PRIMARY KEY AUTOINCREMENT</code> になりました。AUTOINCREMENT なので、削除した行の id は再利用されません。</li>
+            <li><code>done</code>（<code>Boolean</code>）の列は <code>INTEGER</code> です。</li>
+            <li><code>identityHash</code> は、このスキーマから計算した値です。Room は、端末の DB に記録したハッシュと、アプリのハッシュを、DB を開くときに比べます（ステップ 4 の任意の実験で、食い違ったときの例外を見ます）。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">スキーマ JSON はコミットする</p>
+              <p><code>app/schemas/</code> のファイルは、Git にコミットします。Room の公式の推奨です。版ごとのスキーマが履歴として残り、後でテーブルを変えるときの移行（<code>Migration</code> や自動移行）やそのテストが、過去のスキーマを参照できます。完成コードのブランチにも <code>1.json</code> が入っています。</p>
+            </div>
+          </div>
+          <p>最後に、ビルド・lint・単体テスト・UI テストをまとめて実行します。アプリの動きはまだ変わっていないので、テストの件数も 10 と同じです。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 55s</span><span class="terminal__line">90 actionable tasks: 53 executed, 37 up-to-date</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、<code>app/schemas/com.handson.android01.data.AppDatabase/1.json</code> ができていれば OK です。単体テスト 71 件と UI テスト 66 件も、10 と同じくすべて成功します。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">Repository・Application・AppContainer を用意する</h3>
+        </div>
+        <div class="step__body">
+          <p>DB を作って、アプリから使える場所に置きます。ViewModel は DAO と API を直接触らず、その間に置く <code>TodoRepository</code> を使うようにします。このステップでは、まだ ViewModel を切り替えません。</p>
+          <p><code>data/TodoRepository.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoRepository.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import com.handson.android01.kotlin.Todo
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+
+// Todo の入口。画面（ViewModel）は DAO と API を直接触らず、ここだけを使う。
+// 唯一の情報源は Room。API は、DB が空のときに最初の一覧を取ってくるためだけに使う
+class TodoRepository(
+    private val dao: TodoDao,
+    private val api: TodoApi,
+) {
+    // DB の一覧。変更のたびに最新の一覧が流れる
+    val todos: Flow&lt;List&lt;Todo&gt;&gt; = dao.observeAll().map { list -&gt; list.map { it.toTodo() } }
+
+    // DB が空のときだけ、API から取得して保存する。失敗した場合は、例外をそのまま投げる（失敗の表示は ViewModel の仕事）
+    suspend fun refreshIfEmpty() {
+        if (dao.count() == 0) {
+            dao.insertAll(api.fetchTodos().map { it.toEntity() })
+        }
+    }
+
+    suspend fun add(title: String) = dao.insert(TodoEntity(title = title, done = false))
+
+    suspend fun setDone(id: Int, done: Boolean) = dao.setDone(id, done)
+
+    suspend fun delete(id: Int) = dao.deleteById(id)
+
+    // 削除の「元に戻す」。同じ id で入れ直すので、一覧の同じ位置（id の順）に戻る
+    suspend fun restore(todo: Todo) = dao.insert(todo.toEntity())
+
+    suspend fun deleteDone() = dao.deleteDone()
+}</code></pre>
+</div>
+          <ul>
+            <li><code>todos</code> は、DAO の <code>observeAll()</code> を、画面で使う <code>Todo</code> の一覧に変換した <code>Flow</code> です。</li>
+            <li><code>refreshIfEmpty()</code> は、DB が空のときだけ API から取得して保存します。取得に失敗したときは、例外をそのまま投げます。失敗を画面にどう出すかは、これまでどおり ViewModel が決めます。</li>
+            <li>「空なら取得して保存」の判断を ViewModel に入れないために、Repository を置きます。ViewModel から見ると、データの入口はここ 1 つです。</li>
+            <li><code>restore()</code> は、削除した <code>Todo</code> を同じ id で入れ直します。一覧は id の順に並べて読むので、削除する前と同じ位置に戻ります。</li>
+          </ul>
+          <p>DB を作るには <code>Context</code> が必要です。アプリのプロセスが作られたときに 1 度だけ呼ばれる <code>Application</code> のサブクラスを作り、そこで <code>AppContainer</code> に <code>Context</code> を渡します。<code>app/src/main/java/com/handson/android01/</code> に <code>TodoApplication.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/TodoApplication.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01
+
+import android.app.Application
+import com.handson.android01.data.AppContainer
+
+// アプリのプロセスが作られたときに、Activity より先に 1 度だけ作られる。
+// DB を作るには Context が要るので、ここで AppContainer に渡す
+class TodoApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        AppContainer.init(this)
+    }
+}</code></pre>
+</div>
+          <p>このクラスを使うように、<code>AndroidManifest.xml</code> の <code>&lt;application&gt;</code> に <code>android:name</code> を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/AndroidManifest.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      &lt;uses-permission android:name=&quot;android.permission.INTERNET&quot; /&gt;</span><span class="diff-line">  </span><span class="diff-line">      &lt;application</span><span class="diff-line diff-line--add">+         android:name=&quot;.TodoApplication&quot;</span><span class="diff-line">          android:allowBackup=&quot;true&quot;</span><span class="diff-line">          android:dataExtractionRules=&quot;@xml/data_extraction_rules&quot;</span><span class="diff-line">          android:fullBackupContent=&quot;@xml/backup_rules&quot;</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>09 で作った <code>AppContainer</code>（手書きの最小の DI）に、DB と Repository を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/AppContainer.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.data</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ import android.content.Context</span><span class="diff-line diff-line--add">+ import androidx.room3.Room</span><span class="diff-line diff-line--add">+ import androidx.sqlite.driver.AndroidSQLiteDriver</span><span class="diff-line">  import io.ktor.client.engine.android.Android</span><span class="diff-line diff-line--add">+ import kotlinx.coroutines.Dispatchers</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // アプリ全体で使う部品の置き場所（手書きの最小の DI）。ViewModel は、ここから TodoApi を受け取る。</span><span class="diff-line diff-line--remove">- // HttpClient は接続を使い回すので、画面ごとに作らず、アプリで 1 つを使い回す。</span><span class="diff-line diff-line--add">+ // アプリ全体で使う部品の置き場所（手書きの最小の DI）。ViewModel は、ここから TodoApi や TodoRepository を受け取る。</span><span class="diff-line diff-line--add">+ // HttpClient は接続を使い回すので、画面ごとに作らず、アプリで 1 つを使い回す。DB も同じで、アプリで 1 つだけ作る。</span><span class="diff-line">  // Hilt を導入する項目では、この object をなくして、Hilt に作らせる</span><span class="diff-line">  object AppContainer {</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     private lateinit var appContext: Context</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // TodoApplication.onCreate から 1 度だけ呼ぶ</span><span class="diff-line diff-line--add">+     fun init(context: Context) {</span><span class="diff-line diff-line--add">+         appContext = context.applicationContext</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     private val database: AppDatabase by lazy {</span><span class="diff-line diff-line--add">+         Room.databaseBuilder&lt;AppDatabase&gt;(appContext, &quot;todos.db&quot;)</span><span class="diff-line diff-line--add">+             // クエリを実行するスレッド。ここでは IO 用のスレッドプールを指定する</span><span class="diff-line diff-line--add">+             .setQueryCoroutineContext(Dispatchers.IO)</span><span class="diff-line diff-line--add">+             // SQLite を動かすドライバー。省略しても既定でこのドライバーが使われるが、何を使っているか分かるように明示する</span><span class="diff-line diff-line--add">+             .setDriver(AndroidSQLiteDriver())</span><span class="diff-line diff-line--add">+             .build()</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      private val defaultTodoApi: TodoApi by lazy { TodoApi(createTodoHttpClient(Android.create())) }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     private val defaultTodoRepository: TodoRepository by lazy { TodoRepository(database.todoDao(), todoApi) }</span><span class="diff-line">  </span><span class="diff-line">      // テストが、通信しない TodoApi に差し替えるための入口（本番のコードは触らない）</span><span class="diff-line">      var todoApiOverride: TodoApi? = null</span><span class="diff-line">  </span><span class="diff-line">      val todoApi: TodoApi get() = todoApiOverride ?: defaultTodoApi</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     // テストが、偽の DAO を使う TodoRepository に差し替えるための入口</span><span class="diff-line diff-line--add">+     var todoRepositoryOverride: TodoRepository? = null</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+     val todoRepository: TodoRepository get() = todoRepositoryOverride ?: defaultTodoRepository</span><span class="diff-line">  }</span></pre>
+</div>
+          <ul>
+            <li><code>init(context)</code> で、<code>TodoApplication</code> から <code>Context</code> を受け取ります。Activity の <code>Context</code> を持ち続けないように、<code>applicationContext</code> にしておきます。</li>
+            <li><code>Room.databaseBuilder&lt;AppDatabase&gt;(appContext, "todos.db")</code> で、<code>todos.db</code> という名前の DB ファイルを使う <code>AppDatabase</code> を作ります。<code>HttpClient</code> と同じく、アプリで 1 つだけ作って使い回します。</li>
+            <li><code>database</code> は <code>lazy</code> なので、初めて使われたときに作られます。テストで <code>todoRepositoryOverride</code> に差し替えた場合は、本物の DB は作られません。</li>
+            <li><code>todoRepositoryOverride</code> は、09 の <code>todoApiOverride</code> と同じ考え方の、テスト用の差し替え口です。ステップ 3 で、UI テストが偽の DAO を使う Repository に差し替えます。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">クエリのスレッドとドライバーの指定について</p>
+              <p><code>setQueryCoroutineContext(Dispatchers.IO)</code> は、クエリを実行するコルーチンのコンテキストの指定です。Room 3.0.3 のソース（<code>RoomDatabase.android.kt</code>）では、指定しない場合も Android では <code>Dispatchers.IO</code> になります。</p>
+              <p><code>setDriver(AndroidSQLiteDriver())</code> は、SQLite を動かすドライバーの指定です。同じソースの <code>build()</code> では、ドライバーを指定しない場合、Android 用の <code>AndroidSQLiteDriver</code> が使われます。筆者の環境で <code>setDriver</code> の行を消して起動しても、例外は出ず、一覧が表示されました。</p>
+              <p>どちらも既定の値と同じですが、この教材では、何を使っているかが分かるように明示しています。</p>
+            </div>
+          </div>
+          <p>まとめて実行します。ViewModel はまだ <code>TodoApi</code> を使っているので、アプリの動きもテストの件数も変わりません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 51s</span><span class="terminal__line">90 actionable tasks: 16 executed, 74 up-to-date</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 71 件と UI テスト 66 件がすべて成功すれば OK です。<code>TodoApplication</code> を足しても、本物の <code>MainActivity</code> を起動する既存の UI テストが通ることを確かめています。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">ViewModel を Room に切り替え、テストを合わせる</h3>
+        </div>
+        <div class="step__body">
+          <p>ViewModel を <code>TodoRepository</code> に切り替えます。一覧を書き換える処理を ViewModel からなくし、DB に書くだけにします。最後に、テストを偽の DAO に合わせます。</p>
+          <h4>Repository と AppContainer の仕上げ</h4>
+          <p><code>refreshIfEmpty()</code> が、保存した件数を返すようにします。理由は、この後の「初回取得の直後に空の一覧が見える問題」で説明します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoRepository.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      // DB の一覧。変更のたびに最新の一覧が流れる</span><span class="diff-line">      val todos: Flow&lt;List&lt;Todo&gt;&gt; = dao.observeAll().map { list -&gt; list.map { it.toTodo() } }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // DB が空のときだけ、API から取得して保存する。失敗した場合は、例外をそのまま投げる（失敗の表示は ViewModel の仕事）</span><span class="diff-line diff-line--remove">-     suspend fun refreshIfEmpty() {</span><span class="diff-line diff-line--remove">-         if (dao.count() == 0) {</span><span class="diff-line diff-line--remove">-             dao.insertAll(api.fetchTodos().map { it.toEntity() })</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--add">+     // DB が空のときだけ、API から取得して保存する。保存した件数を返す（取得しなかったときは 0）。</span><span class="diff-line diff-line--add">+     // 失敗した場合は、例外をそのまま投げる（失敗の表示は ViewModel の仕事）</span><span class="diff-line diff-line--add">+     suspend fun refreshIfEmpty(): Int {</span><span class="diff-line diff-line--add">+         if (dao.count() &gt; 0) return 0</span><span class="diff-line diff-line--add">+         val todos = api.fetchTodos().map { it.toEntity() }</span><span class="diff-line diff-line--add">+         dao.insertAll(todos)</span><span class="diff-line diff-line--add">+         return todos.size</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      suspend fun add(title: String) = dao.insert(TodoEntity(title = title, done = false))</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>ViewModel が <code>TodoApi</code> を直接使わなくなるので、<code>AppContainer</code> から <code>todoApiOverride</code> と <code>todoApi</code> を消します。Repository には、本物の <code>TodoApi</code> を直接渡します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/AppContainer.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      private val defaultTodoApi: TodoApi by lazy { TodoApi(createTodoHttpClient(Android.create())) }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     private val defaultTodoRepository: TodoRepository by lazy { TodoRepository(database.todoDao(), todoApi) }</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-     // テストが、通信しない TodoApi に差し替えるための入口（本番のコードは触らない）</span><span class="diff-line diff-line--remove">-     var todoApiOverride: TodoApi? = null</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-     val todoApi: TodoApi get() = todoApiOverride ?: defaultTodoApi</span><span class="diff-line diff-line--add">+     private val defaultTodoRepository: TodoRepository by lazy { TodoRepository(database.todoDao(), defaultTodoApi) }</span><span class="diff-line">  </span><span class="diff-line">      // テストが、偽の DAO を使う TodoRepository に差し替えるための入口</span><span class="diff-line">      var todoRepositoryOverride: TodoRepository? = null</span><span class="diff-line">  ...</span></pre>
+</div>
+          <h4>ViewModel を書き換える</h4>
+          <p><code>TodoListViewModel.kt</code> は、ほぼ全体が変わるので、全文で示します。ファイルの中身を、次のコードで置き換えます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListViewModel.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.handson.android01.data.AppContainer
+import com.handson.android01.data.TodoRepository
+import com.handson.android01.kotlin.Todo
+import io.ktor.client.call.NoTransformationFoundException
+import io.ktor.client.network.sockets.ConnectTimeoutException
+import io.ktor.client.network.sockets.SocketTimeoutException
+import io.ktor.client.plugins.HttpRequestTimeoutException
+import io.ktor.client.plugins.ResponseException
+import io.ktor.serialization.ContentConvertException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.serialization.SerializationException
+import java.io.IOException
+
+// 画面状態を持つ ViewModel。画面回転（Activity の作り直し）では破棄されず、同じインスタンスが使われ続ける。
+// SavedStateHandle: プロセスが終了されても残したい値の入れ物。Activity の onSaveInstanceState の Bundle に保存され、
+// プロセスが作り直されたときに、保存した値が入った状態で渡される
+class TodoListViewModel(
+    private val savedStateHandle: SavedStateHandle,
+    // Todo の保存先と取得元。テストでは、偽の DAO と、通信しない MockEngine 入りの TodoApi をつないだものを渡す
+    private val repository: TodoRepository,
+) : ViewModel() {
+
+    // viewModel() の既定のファクトリは、引数なし、または SavedStateHandle だけのコンストラクタを探して呼ぶ。
+    // そのため、アプリでは TodoRepository を AppContainer（手書きの置き場所）から受け取る
+    constructor(savedStateHandle: SavedStateHandle) : this(savedStateHandle, AppContainer.todoRepository)
+
+    // 読み込み中かどうかと失敗の文言。DB には入らない画面だけの状態なので、ViewModel のメモリだけに持つ（復元しない）
+    private data class LoadState(val isLoading: Boolean = true, val errorMessage: String? = null)
+
+    private val loadState = MutableStateFlow(LoadState())
+
+    // 画面の状態は、3 つの Flow を combine して作る: DB の一覧（Room）・絞り込み（SavedStateHandle）・読み込みの状態。
+    // どれかが変わるたびに作り直されるので、一覧を書き換える処理は ViewModel に要らない（DAO に書けば、Flow で届く）。
+    // stateIn: 冷たい Flow を、現在の値を持つ StateFlow にする。Eagerly は、ViewModel が作られた時点から購読を始める
+    val uiState: StateFlow&lt;TodoListUiState&gt; = combine(
+        repository.todos,
+        savedStateHandle.getStateFlow(KEY_FILTER, TodoFilter.All),
+        loadState,
+    ) { todos, filter, load -&gt;
+        TodoListUiState(todos = todos, filter = filter, isLoading = load.isLoading, errorMessage = load.errorMessage)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, TodoListUiState(isLoading = true))
+
+    init {
+        load()
+    }
+
+    // DB が空のときだけ API から取得して保存し、成功なら読み込み済みにして、失敗なら失敗の状態にする。
+    // viewModelScope: ViewModel が破棄される（onCleared）ときに、中の処理もまとめてキャンセルされるスコープ。
+    // 既定のディスパッチャーは Dispatchers.Main.immediate。DB の処理は Room が（AppContainer で指定した）IO のスレッドで、
+    // 通信は Ktor のエンジンが別のスレッドで行うので、withContext は要らない
+    private fun load() {
+        viewModelScope.launch {
+            try {
+                val saved = repository.refreshIfEmpty()
+                // DB に書いてから、Room が新しい一覧を Flow に流すまでには少し間がある（実測で約 50 ms）。
+                // その間に読み込み済みにすると、空の一覧が一瞬見えるので、一覧が届くまで読み込み中のままにする
+                if (saved &gt; 0) uiState.first { it.todos.isNotEmpty() }
+                loadState.value = LoadState(isLoading = false)
+            } catch (e: CancellationException) {
+                // キャンセルは「失敗」ではない。握りつぶさずに投げ直す（握りつぶすと、キャンセルされたコルーチンが止まらない）
+                throw e
+            } catch (e: Exception) {
+                loadState.value = LoadState(isLoading = false, errorMessage = e.toUserMessage())
+            }
+        }
+    }
+
+    // 失敗中の「再試行」。読み込み中に戻してから、もう一度取得する（読み込み中・失敗していないときは何もしない）
+    fun retry() {
+        if (loadState.value.errorMessage == null) return
+        loadState.value = LoadState()
+        load()
+    }
+
+    // 追加・切り替え・削除は、DAO に書くだけ。画面の一覧は、DB の変更が Flow で届いて更新される
+    fun addTodo(title: String) {
+        val trimmed = title.trim()
+        if (trimmed.isEmpty()) return
+        viewModelScope.launch { repository.add(trimmed) }
+    }
+
+    fun toggleTodo(id: Int, done: Boolean) {
+        viewModelScope.launch { repository.setDone(id, done) }
+    }
+
+    fun deleteTodo(id: Int) {
+        viewModelScope.launch { repository.delete(id) }
+    }
+
+    // 削除の「元に戻す」。同じ id で入れ直すと、一覧の並び（id の順）で、削除前の位置に戻る
+    fun restoreTodo(todo: Todo) {
+        viewModelScope.launch { repository.restore(todo) }
+    }
+
+    fun deleteDone() {
+        viewModelScope.launch { repository.deleteDone() }
+    }
+
+    // 絞り込みだけは SavedStateHandle に残す（プロセスが終了されても残る）。書き込むと、上の getStateFlow を通って画面に届く
+    fun setFilter(filter: TodoFilter) {
+        savedStateHandle[KEY_FILTER] = filter
+    }
+
+    // 例外を、画面に出す文言にする。e.message はそのまま出さない（レスポンスの本文が入ることがある）
+    private fun Exception.toUserMessage(): String = when (this) {
+        // タイムアウトは IOException のサブクラスもあるので、IOException より先に調べる
+        is HttpRequestTimeoutException, is ConnectTimeoutException, is SocketTimeoutException -&gt; &quot;通信がタイムアウトしました&quot;
+        is ResponseException -&gt; &quot;サーバーがエラーを返しました（HTTP ${response.status.value}）&quot;
+        is IOException -&gt; &quot;ネットワークに接続できません&quot;
+        is ContentConvertException, is SerializationException, is NoTransformationFoundException -&gt; &quot;データの形式が正しくありません&quot;
+        else -&gt; &quot;予期しないエラーが発生しました&quot;
+    }
+
+    private companion object {
+        const val KEY_FILTER = &quot;filter&quot;
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li>コンストラクタで受け取るものを、<code>TodoApi</code> から <code>TodoRepository</code> に変えました。アプリでは、<code>SavedStateHandle</code> だけを受け取るコンストラクタが <code>AppContainer.todoRepository</code> を渡します（09 と同じ形です）。</li>
+            <li><code>LoadState</code> は、読み込み中かどうかと失敗の文言です。DB には入らない画面だけの状態なので、ViewModel のメモリだけに持ちます。</li>
+            <li><code>uiState</code> は、3 つの <code>Flow</code> を <code>combine</code> して作ります。DB の一覧（<code>repository.todos</code>）・絞り込み（<code>savedStateHandle.getStateFlow</code>）・<code>loadState</code> です。どれかが変わるたびに <code>TodoListUiState</code> が作り直されます。</li>
+            <li><code>stateIn</code> は、<code>combine</code> の結果を、現在の値を持つ <code>StateFlow</code> にします。<code>SharingStarted.Eagerly</code> は、ViewModel が作られた時点から購読を始める指定です。初期値は「読み込み中で一覧は空」です。</li>
+            <li><code>addTodo</code>・<code>toggleTodo</code>・<code>deleteTodo</code>・<code>restoreTodo</code>・<code>deleteDone</code> は、<code>viewModelScope.launch</code> の中で Repository を呼ぶだけです。10 までの <code>update</code> 関数（一覧の書き換えと <code>SavedStateHandle</code> への保存）は要らなくなりました。</li>
+            <li><code>setFilter</code> は、<code>SavedStateHandle</code> に書き込むだけです。書き込んだ値は <code>getStateFlow</code> を通って <code>uiState</code> に届きます。</li>
+            <li><code>viewModelScope</code> の既定のディスパッチャーはメインスレッドです。DB の処理は Room が <code>AppContainer</code> で指定した IO のスレッドで実行するので、<code>withContext</code> は要りません。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>WhileSubscribed</code> にしない理由</p>
+              <p><code>stateIn</code> の開始には、画面が購読している間だけ動かす <code>SharingStarted.WhileSubscribed(5_000)</code> もよく使われます。ただし、購読者がいないと <code>.value</code> が初期値のままになります。この項目の単体テストは <code>vm.uiState.value</code> を直接読むので、既存のテストを変えずに済む <code>Eagerly</code> を選びました。</p>
+            </div>
+          </div>
+          <h4>初回取得の直後に空の一覧が見える問題</h4>
+          <p><code>load()</code> の中に、次の 1 行があります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">TodoListViewModel.kt（load の中）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">if (saved &gt; 0) uiState.first { it.todos.isNotEmpty() }</code></pre>
+</div>
+          <p>最初は、この行が無い形（<code>refreshIfEmpty()</code> の直後で読み込み済みにする）で作りました。<code>combine</code> の中に一時的にログ（<code>Log.d</code>）を入れ、アプリのデータを消して起動するのを 3 回試すと、3 回とも次の順序でした（時刻は 1 回分の例）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">Logcat（一時的に入れたログ。対処前）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">08:05:13.671 combine isLoading=true  todos=0
+08:05:14.528 combine isLoading=false todos=0     ← 空の一覧が「読み込み済み」で出る
+08:05:14.580 combine isLoading=false todos=20    ← Room の Flow が 20 件を流す</code></pre>
+</div>
+          <p>DB に書いた後、Room が <code>SELECT</code> をやり直して <code>Flow</code> に流すより先に、<code>loadState</code> の更新が届いていました。その間（数ミリ秒〜50 ミリ秒ほど。測定のたびに変わります）、「Todo がない」ときの表示（と FAB）が一瞬出ます。</p>
+          <p>そこで、<code>refreshIfEmpty()</code> が保存した件数を返すようにしました。保存したときだけ、<code>uiState.first { it.todos.isNotEmpty() }</code> で一覧が届くのを待ってから、読み込み済みにします。同じ測定をやり直すと、3 回とも空の一覧は出なくなりました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">Logcat（一時的に入れたログ。対処後）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">08:06:05.726 combine isLoading=true  todos=0
+08:06:06.614 combine isLoading=true  todos=20
+08:06:06.621 combine isLoading=false todos=20</code></pre>
+</div>
+          <p>保存した件数が 0（API が空の一覧を返した）のときは待ちません。空の一覧を保存しても DB は変わらず、Room は新しい一覧を流さないので、待つと読み込み中のままになるからです。測定用のログは、完成コードには入っていません。</p>
+          <h4>画面の削除を合わせる</h4>
+          <p><code>restoreTodo</code> は、元の位置（<code>index</code>）を受け取らなくなりました。同じ id で入れ直せば、id の順に並ぶ一覧の同じ位置に戻るからです。<code>TodoListPage.kt</code> を合わせます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          filter = uiState.filter,</span><span class="diff-line">          onFilterChange = viewModel::setFilter,</span><span class="diff-line">          onDelete = { todo -&gt;</span><span class="diff-line diff-line--remove">-             val index = uiState.todos.indexOf(todo)</span><span class="diff-line diff-line--remove">-             if (index &gt;= 0) {</span><span class="diff-line diff-line--add">+             if (todo in uiState.todos) {</span><span class="diff-line">                  viewModel.deleteTodo(todo.id)</span><span class="diff-line">                  // 表示中の Snackbar があれば閉じてから出す（出さないと、前の Snackbar が消えるまで待たされる）</span><span class="diff-line">                  snackbarHostState.currentSnackbarData?.dismiss()</span><span class="diff-line">  ...</span><span class="diff-line">                          duration = SnackbarDuration.Short,</span><span class="diff-line">                      )</span><span class="diff-line">                      if (result == SnackbarResult.ActionPerformed) {</span><span class="diff-line diff-line--remove">-                         viewModel.restoreTodo(todo, index)</span><span class="diff-line diff-line--add">+                         viewModel.restoreTodo(todo)</span><span class="diff-line">                      }</span><span class="diff-line">                  }</span><span class="diff-line">              }</span><span class="diff-line">  ...</span></pre>
+</div>
+          <h4>テストを偽の DAO に合わせる</h4>
+          <p>既存のテストは、本物の Room を使わず、偽の DAO で動かします。本物の Room は、書き込みと、その後のクエリのやり直しを <code>Dispatchers.IO</code> のスレッドで行います。このスレッドは、Compose の UI テストが待ってくれる対象に入りません。操作の直後に表示を確かめている既存の UI テストの多くで、待ち合わせが必要になり、不安定になります。DAO は interface なので、09 で <code>TodoApi</code> にエンジンを渡せるようにしたのと同じように、偽物を手で書けます。</p>
+          <p>単体テスト用に <code>app/src/test/java/com/handson/android01/ui/screens/FakeTodoDao.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/FakeTodoDao.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import com.handson.android01.data.TodoDao
+import com.handson.android01.data.TodoEntity
+import com.handson.android01.data.toEntity
+import com.handson.android01.kotlin.Todo
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
+
+// テスト用の偽の DAO。本物の Room は使わず、メモリ上のリストを MutableStateFlow に入れて動かす。
+// どの関数も中断せずに値を書き換えるので、テストの中で書き込みの直後に結果を確かめられる。
+// initial は「DB にすでに入っている」状態を作るためのもの
+class FakeTodoDao(initial: List&lt;Todo&gt; = emptyList()) : TodoDao {
+
+    private val rows = MutableStateFlow(initial.map { it.toEntity() })
+
+    override fun observeAll(): Flow&lt;List&lt;TodoEntity&gt;&gt; = rows.map { list -&gt; list.sortedBy { it.id } }
+
+    override suspend fun count(): Int = rows.value.size
+
+    // id が 0 なら、今の最大値 + 1 を振る。同じ id があれば置き換える（REPLACE）
+    override suspend fun insert(todo: TodoEntity) {
+        rows.update { list -&gt;
+            val saved = if (todo.id == 0) todo.copy(id = (list.maxOfOrNull { it.id } ?: 0) + 1) else todo
+            list.filterNot { it.id == saved.id } + saved
+        }
+    }
+
+    override suspend fun insertAll(todos: List&lt;TodoEntity&gt;) = todos.forEach { insert(it) }
+
+    override suspend fun setDone(id: Int, done: Boolean) {
+        rows.update { list -&gt; list.map { if (it.id == id) it.copy(done = done) else it } }
+    }
+
+    override suspend fun deleteById(id: Int) {
+        rows.update { list -&gt; list.filterNot { it.id == id } }
+    }
+
+    override suspend fun deleteDone() {
+        rows.update { list -&gt; list.filterNot { it.done } }
+    }
+}</code></pre>
+</div>
+          <ul>
+            <li>メモリ上の行の一覧を <code>MutableStateFlow</code> に入れて、本物の DAO と同じ関数を実装します。<code>observeAll()</code> は、その <code>Flow</code> を id の順に並べて返します。</li>
+            <li>どの関数も中断せずに値を書き換えます。そのため、テストで書き込んだ直後に結果を確かめられます。</li>
+            <li><code>initial</code> で、「DB にすでに入っている」状態から始められます。アプリの再起動を再現するのに使います。</li>
+            <li><code>insert</code> は、id が 0 なら「今の最大値 + 1」を振ります。本物の DB（AUTOINCREMENT）は、削除した最大の id を再利用しない点が違いますが、既存のテストの期待値には影響しません。</li>
+          </ul>
+          <p>UI テストでも使うので、同じ内容のファイルを <code>androidTest</code> 側の同じパッケージにも作ります（ファイルの場所は下の見出しのとおり）。10 の <code>FakeTodoServer</code> が両方にあるのと同じ扱いです。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">UI テスト用の <code>FakeTodoDao.kt</code> を見る（単体テスト用と同じ内容）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/FakeTodoDao.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import com.handson.android01.data.TodoDao
+import com.handson.android01.data.TodoEntity
+import com.handson.android01.data.toEntity
+import com.handson.android01.kotlin.Todo
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
+
+// テスト用の偽の DAO。本物の Room は使わず、メモリ上のリストを MutableStateFlow に入れて動かす。
+// どの関数も中断せずに値を書き換えるので、テストの中で書き込みの直後に結果を確かめられる。
+// initial は「DB にすでに入っている」状態を作るためのもの
+class FakeTodoDao(initial: List&lt;Todo&gt; = emptyList()) : TodoDao {
+
+    private val rows = MutableStateFlow(initial.map { it.toEntity() })
+
+    override fun observeAll(): Flow&lt;List&lt;TodoEntity&gt;&gt; = rows.map { list -&gt; list.sortedBy { it.id } }
+
+    override suspend fun count(): Int = rows.value.size
+
+    // id が 0 なら、今の最大値 + 1 を振る。同じ id があれば置き換える（REPLACE）
+    override suspend fun insert(todo: TodoEntity) {
+        rows.update { list -&gt;
+            val saved = if (todo.id == 0) todo.copy(id = (list.maxOfOrNull { it.id } ?: 0) + 1) else todo
+            list.filterNot { it.id == saved.id } + saved
+        }
+    }
+
+    override suspend fun insertAll(todos: List&lt;TodoEntity&gt;) = todos.forEach { insert(it) }
+
+    override suspend fun setDone(id: Int, done: Boolean) {
+        rows.update { list -&gt; list.map { if (it.id == id) it.copy(done = done) else it } }
+    }
+
+    override suspend fun deleteById(id: Int) {
+        rows.update { list -&gt; list.filterNot { it.id == id } }
+    }
+
+    override suspend fun deleteDone() {
+        rows.update { list -&gt; list.filterNot { it.done } }
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <p>ViewModel の単体テスト（<code>TodoListViewModelTest.kt</code>）を合わせます。主な変更は次のとおりです。</p>
+          <ul>
+            <li>ViewModel を作る箇所を、すべて <code>TodoListViewModel(saved, TodoRepository(dao, server.api))</code> にします。補助関数（<code>viewModel</code>・<code>loadedViewModel</code>・<code>failingViewModel</code>）には、偽の DAO を渡せる引数 <code>dao</code> を足します。</li>
+            <li><code>SavedStateHandle</code> への一覧の保存を確かめていた 4 件を、DB（偽の DAO）を確かめる内容に置き換えます。<code>dbHasTodos_isShownWithoutLoading</code>・<code>updates_areWrittenToDao</code>・<code>loadFailure_leavesDaoEmpty</code>・<code>dbHasTodos_doesNotCallApi</code> です。</li>
+            <li><code>uiState_emitsLoadingThenLoadedThenToggled</code> では、状態が 4 つになります（読み込み中・空 → 読み込み中・一覧あり → 読み込み済み → 切り替え後）。2 つめは、上の「一覧が届くまで読み込み中のままにする」対処で入ります。</li>
+            <li><code>StandardTestDispatcher</code> を使う 2 件に <code>runCurrent()</code> を足します。10 までは状態が同期的に変わっていましたが、今は <code>viewModelScope.launch</code> の中身と <code>combine</code> が、ディスパッチャーを進めるまで動かないためです。最初にテストを実行したとき、失敗した 2 件はどちらもこの理由でした。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoListViewModelTest.kt</code> の全文を見る（ファイル全体を差し替える）</summary>
+            <div class="disclosure__body">
+          <p>変更が 20 か所ほどに散らばるので、全文で示します。ファイルの中身を、次のコードで置き換えます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/TodoListViewModelTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.ui.screens
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.viewModelScope
+import com.handson.android01.data.TodoRepository
+import com.handson.android01.kotlin.Todo
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.IOException
+
+// ViewModel の単体テスト（JVM 上。エミュレータは不要）。
+// viewModelScope は Dispatchers.Main.immediate を使うが、JVM には Main が無いので、setMain でテスト用のディスパッチャーに差し替える
+@OptIn(ExperimentalCoroutinesApi::class)
+class TodoListViewModelTest {
+
+    private val todos = listOf(
+        Todo(1, &quot;write&quot;),
+        Todo(2, &quot;test&quot;, done = true),
+        Todo(3, &quot;ship&quot;),
+    )
+
+    // setMain したら、テストのあとで必ず resetMain する（他のテストに差し替えが残らないように）
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    // 偽のサーバーは、渡されたディスパッチャーで動く。テスト用のディスパッチャーなら、応答までの待ち時間（delayMillis）は仮想時間になる
+    private fun viewModel(
+        saved: SavedStateHandle = SavedStateHandle(),
+        dao: FakeTodoDao = FakeTodoDao(),
+        responseDelayMillis: Long = 1_000L,
+        dispatcher: CoroutineDispatcher,
+    ) = TodoListViewModel(saved, TodoRepository(dao, FakeTodoServer(todos, delayMillis = responseDelayMillis, dispatcher = dispatcher).api))
+
+    // StandardTestDispatcher: launch した処理はキューに入るだけで、テスト側が進める（runCurrent / advanceTimeBy / advanceUntilIdle）まで動かない。
+    // delay は仮想時間なので、待たずに時間だけ進められる
+    @Test
+    fun standardDispatcher_loadingFinishesWhenVirtualTimeAdvances() = runTest(StandardTestDispatcher()) {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val vm = viewModel(responseDelayMillis = 1_000L, dispatcher = dispatcher)
+
+        // 作った直後: 読み込み中で、一覧は空
+        assertTrue(vm.uiState.value.isLoading)
+        assertEquals(emptyList&lt;Todo&gt;(), vm.uiState.value.todos)
+
+        advanceTimeBy(999)
+        runCurrent()
+        assertTrue(vm.uiState.value.isLoading)
+
+        advanceTimeBy(1)
+        runCurrent()
+        assertFalse(vm.uiState.value.isLoading)
+        assertEquals(todos, vm.uiState.value.todos)
+    }
+
+    // 待ち時間が 0 でも、Standard では launch の中身は runCurrent するまで動かない
+    @Test
+    fun standardDispatcher_doesNotRunLaunchedWorkUntilTold() = runTest(StandardTestDispatcher()) {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val vm = viewModel(responseDelayMillis = 0L, dispatcher = dispatcher)
+
+        assertTrue(vm.uiState.value.isLoading)
+
+        runCurrent()
+        assertFalse(vm.uiState.value.isLoading)
+    }
+
+    // UnconfinedTestDispatcher: launch した処理は、最初の中断点（delay など）まで、呼び出した場所でそのまま実行される
+    @Test
+    fun unconfinedDispatcher_runsLaunchedWorkEagerly() = runTest {
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val vm = viewModel(responseDelayMillis = 0L, dispatcher = dispatcher)
+
+        // runCurrent なしで、もう読み込みが終わっている
+        assertFalse(vm.uiState.value.isLoading)
+        assertEquals(todos, vm.uiState.value.todos)
+    }
+
+    // StateFlow の値の変化を順に集める。collect は終わらないので backgroundScope で起動する（テストの最後に自動でキャンセルされる）。
+    // StateFlow は値が変わったときだけ通知し、collect が追いつく前の途中の値は飛ばされる（conflation）。
+    // 一覧が届いてから読み込み済みにするので、「一覧は入ったが、まだ読み込み中」の状態が途中に 1 つ入る（ViewModel の load を参照）
+    @Test
+    fun uiState_emitsLoadingThenLoadedThenToggled() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val vm = viewModel(responseDelayMillis = 1_000L, dispatcher = dispatcher)
+        val states = mutableListOf&lt;TodoListUiState&gt;()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.uiState.toList(states) }
+
+        advanceTimeBy(1_000)
+        runCurrent()
+        vm.toggleTodo(1, done = true)
+        runCurrent()
+
+        assertEquals(4, states.size)
+        assertTrue(states[0].isLoading)
+        assertEquals(emptyList&lt;Todo&gt;(), states[0].todos)
+        assertTrue(states[1].isLoading)
+        assertEquals(todos, states[1].todos)
+        assertFalse(states[2].isLoading)
+        assertFalse(states[2].todos.first { it.id == 1 }.done)
+        assertTrue(states[3].todos.first { it.id == 1 }.done)
+    }
+
+    // 以降のテストは、読み込み済み（待ち時間 0 + Unconfined）の状態から始める
+    private fun loadedViewModel(
+        saved: SavedStateHandle = SavedStateHandle(),
+        dao: FakeTodoDao = FakeTodoDao(),
+    ): TodoListViewModel {
+        val dispatcher = UnconfinedTestDispatcher()
+        Dispatchers.setMain(dispatcher)
+        return viewModel(saved, dao, responseDelayMillis = 0L, dispatcher = dispatcher)
+    }
+
+    @Test
+    fun toggleTodo_changesOnlyThatTodo() {
+        val vm = loadedViewModel()
+
+        vm.toggleTodo(1, done = true)
+
+        assertEquals(listOf(true, true, false), vm.uiState.value.todos.map { it.done })
+    }
+
+    @Test
+    fun addTodo_appendsWithNextIdAndIgnoresBlank() {
+        val vm = loadedViewModel()
+
+        vm.addTodo(&quot;  buy milk  &quot;)
+        vm.addTodo(&quot;   &quot;)
+
+        assertEquals(4, vm.uiState.value.todos.size)
+        assertEquals(Todo(4, &quot;buy milk&quot;), vm.uiState.value.todos.last())
+    }
+
+    @Test
+    fun deleteTodo_thenRestoreTodo_putsItBackAtTheSameIndex() {
+        val vm = loadedViewModel()
+        val target = todos[1]
+
+        vm.deleteTodo(target.id)
+        assertEquals(listOf(1, 3), vm.uiState.value.todos.map { it.id })
+
+        vm.restoreTodo(target)
+        assertEquals(listOf(1, 2, 3), vm.uiState.value.todos.map { it.id })
+    }
+
+    @Test
+    fun deleteDone_removesDoneTodos() {
+        val vm = loadedViewModel()
+
+        vm.deleteDone()
+
+        assertEquals(listOf(1, 3), vm.uiState.value.todos.map { it.id })
+    }
+
+    @Test
+    fun setFilter_changesFilterOnly() {
+        val vm = loadedViewModel()
+
+        vm.setFilter(TodoFilter.Done)
+
+        assertEquals(TodoFilter.Done, vm.uiState.value.filter)
+        assertEquals(todos, vm.uiState.value.todos)
+    }
+
+    // DB にすでに一覧があれば、それをそのまま表示し、読み込み中にならない（アプリの再起動を、中身のある DAO を渡して再現する）
+    @Test
+    fun dbHasTodos_isShownWithoutLoading() {
+        val saved = SavedStateHandle(mapOf(&quot;filter&quot; to TodoFilter.Done))
+
+        val vm = loadedViewModel(saved, FakeTodoDao(listOf(Todo(9, &quot;saved&quot;, done = true))))
+
+        assertFalse(vm.uiState.value.isLoading)
+        assertEquals(listOf(Todo(9, &quot;saved&quot;, done = true)), vm.uiState.value.todos)
+        assertEquals(TodoFilter.Done, vm.uiState.value.filter)
+    }
+
+    // 一覧の変更は DAO に書かれ、SavedStateHandle に書かれるのは絞り込みだけ
+    @Test
+    fun updates_areWrittenToDao() = runTest {
+        val saved = SavedStateHandle()
+        val dao = FakeTodoDao()
+        val vm = loadedViewModel(saved, dao)
+
+        vm.toggleTodo(1, done = true)
+        vm.setFilter(TodoFilter.Active)
+
+        assertEquals(3, dao.count())
+        assertEquals(vm.uiState.value.todos, dao.observeAll().first().map { Todo(it.id, it.title, it.done) })
+        assertTrue(vm.uiState.value.todos.first { it.id == 1 }.done)
+        assertEquals(TodoFilter.Active, saved.get&lt;TodoFilter&gt;(&quot;filter&quot;))
+        assertFalse(saved.contains(&quot;todos&quot;))
+    }
+
+    // ---- 読み込みの失敗と再試行（偽のサーバーが失敗を返す） ----
+
+    // 偽のサーバーと、それにつないだ ViewModel を作る。ディスパッチャーは Unconfined なので、応答は呼んだ場所でそのまま処理される
+    private fun failingViewModel(
+        saved: SavedStateHandle = SavedStateHandle(),
+        dao: FakeTodoDao = FakeTodoDao(),
+        configure: FakeTodoServer.() -&gt; Unit,
+    ): Pair&lt;FakeTodoServer, TodoListViewModel&gt; {
+        val dispatcher = UnconfinedTestDispatcher()
+        Dispatchers.setMain(dispatcher)
+        val server = FakeTodoServer(todos, dispatcher = dispatcher).apply(configure)
+        return server to TodoListViewModel(saved, TodoRepository(dao, server.api))
+    }
+
+    @Test
+    fun loadFailure_showsErrorAndStopsLoading() {
+        val (_, vm) = failingViewModel { status = HttpStatusCode.NotFound }
+
+        val state = vm.uiState.value
+        assertFalse(state.isLoading)
+        assertEquals(&quot;サーバーがエラーを返しました（HTTP 404）&quot;, state.errorMessage)
+        assertEquals(emptyList&lt;Todo&gt;(), state.todos)
+    }
+
+    @Test
+    fun loadFailure_messageDependsOnTheKindOfException() {
+        val (_, network) = failingViewModel { error = IOException(&quot;boom&quot;) }
+        assertEquals(&quot;ネットワークに接続できません&quot;, network.uiState.value.errorMessage)
+
+        val (_, broken) = failingViewModel { rawBody = &quot;[{&quot; }
+        assertEquals(&quot;データの形式が正しくありません&quot;, broken.uiState.value.errorMessage)
+
+        val (_, unexpected) = failingViewModel { error = IllegalStateException(&quot;bug&quot;) }
+        assertEquals(&quot;予期しないエラーが発生しました&quot;, unexpected.uiState.value.errorMessage)
+    }
+
+    // 例外の message（レスポンスの本文が入ることがある）は、画面に出す文言に混ぜない
+    @Test
+    fun loadFailure_doesNotLeakExceptionMessage() {
+        val (_, vm) = failingViewModel { rawBody = &quot;[{\&quot;secret\&quot;: 1}]&quot; }
+
+        assertEquals(&quot;データの形式が正しくありません&quot;, vm.uiState.value.errorMessage)
+    }
+
+    // 失敗したときは、DB に何も書かない（空のままなので、次の起動でも取得し直される）
+    @Test
+    fun loadFailure_leavesDaoEmpty() = runTest {
+        val dao = FakeTodoDao()
+
+        failingViewModel(dao = dao) { status = HttpStatusCode.InternalServerError }
+
+        assertEquals(0, dao.count())
+    }
+
+    @Test
+    fun retry_afterFailure_loadsTodos() {
+        val (server, vm) = failingViewModel { status = HttpStatusCode.InternalServerError }
+        assertEquals(&quot;サーバーがエラーを返しました（HTTP 500）&quot;, vm.uiState.value.errorMessage)
+
+        server.status = HttpStatusCode.OK
+        vm.retry()
+
+        val state = vm.uiState.value
+        assertFalse(state.isLoading)
+        assertEquals(null, state.errorMessage)
+        assertEquals(todos, state.todos)
+        assertEquals(2, server.requestCount)
+    }
+
+    // 再試行は、失敗中にだけ効く。読み込み済みのときに呼んでも、取得し直さない
+    @Test
+    fun retry_whenNotFailed_doesNothing() {
+        val (server, vm) = failingViewModel { }
+
+        vm.retry()
+
+        assertEquals(todos, vm.uiState.value.todos)
+        assertEquals(1, server.requestCount)
+    }
+
+    // 再試行の途中（読み込み中）に、もう一度押されても、取得は 1 回だけ
+    @Test
+    fun retry_whileLoading_doesNotStartSecondRequest() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val server = FakeTodoServer(todos, status = HttpStatusCode.InternalServerError, delayMillis = 1_000L, dispatcher = dispatcher)
+        val vm = TodoListViewModel(SavedStateHandle(), TodoRepository(FakeTodoDao(), server.api))
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(&quot;サーバーがエラーを返しました（HTTP 500）&quot;, vm.uiState.value.errorMessage)
+
+        server.status = HttpStatusCode.OK
+        vm.retry()
+        vm.retry()
+        // loadState の変更が uiState に届くのは、combine がテスト用のディスパッチャーで動いてから
+        runCurrent()
+        assertTrue(vm.uiState.value.isLoading)
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertEquals(todos, vm.uiState.value.todos)
+        assertEquals(2, server.requestCount)
+    }
+
+    // 取得の途中で ViewModel が破棄されると、viewModelScope がキャンセルされ、取得中のコルーチンも止まる。
+    // これは失敗ではないので、失敗の表示（errorMessage）にしてはいけない（catch (e: Exception) で握りつぶさず、CancellationException は投げ直す）
+    @Test
+    fun cancellationDuringLoad_isNotTreatedAsFailure() = runTest(StandardTestDispatcher()) {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val vm = viewModel(responseDelayMillis = 1_000L, dispatcher = dispatcher)
+
+        // 応答を待っている途中（1 秒のうち 0.5 秒）で、ViewModel の破棄と同じく viewModelScope をキャンセルする
+        advanceTimeBy(500)
+        runCurrent()
+        vm.viewModelScope.cancel()
+        advanceUntilIdle()
+
+        assertEquals(null, vm.uiState.value.errorMessage)
+    }
+
+    // DB に一覧があれば取得しない（アプリの再起動）。通信の回数で確かめる
+    @Test
+    fun dbHasTodos_doesNotCallApi() {
+        val (server, vm) = failingViewModel(dao = FakeTodoDao(listOf(Todo(9, &quot;saved&quot;)))) { }
+
+        assertEquals(0, server.requestCount)
+        assertEquals(listOf(Todo(9, &quot;saved&quot;)), vm.uiState.value.todos)
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <p>UI テストの補助の 2 ファイルも、偽の DAO を使う Repository に合わせます。本物の <code>MainActivity</code> を起動するテスト用の <code>FakeTodoApiRule</code> は、<code>AppContainer.todoRepositoryOverride</code> を差し替えるようにします。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>FakeTodoApiRule.kt</code> と <code>TestViewModels.kt</code> の変更を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/FakeTodoApiRule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line">  import com.handson.android01.data.AppContainer</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoRepository</span><span class="diff-line">  import org.junit.rules.TestWatcher</span><span class="diff-line">  import org.junit.runner.Description</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // 実際の Activity（MainActivity）を起動するテスト用: アプリが使う TodoApi を、ネットワークに出ない偽のサーバーのものに差し替える。</span><span class="diff-line diff-line--add">+ // 実際の Activity（MainActivity）を起動するテスト用: アプリが使う TodoRepository を、本物の DB にもネットワークにも出ない（偽の DAO と偽のサーバーの）ものに差し替える。</span><span class="diff-line">  // Activity を起動するルールより外側に置く（RuleChain.outerRule）。そうしないと、起動のあとに差し替えることになる</span><span class="diff-line">  class FakeTodoApiRule(val server: FakeTodoServer = FakeTodoServer(demoTodos(20))) : TestWatcher() {</span><span class="diff-line">  </span><span class="diff-line">      override fun starting(description: Description) {</span><span class="diff-line diff-line--remove">-         AppContainer.todoApiOverride = server.api</span><span class="diff-line diff-line--add">+         AppContainer.todoRepositoryOverride = TodoRepository(FakeTodoDao(), server.api)</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      override fun finished(description: Description) {</span><span class="diff-line diff-line--remove">-         AppContainer.todoApiOverride = null</span><span class="diff-line diff-line--add">+         AppContainer.todoRepositoryOverride = null</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TestViewModels.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.lifecycle.viewmodel.initializer</span><span class="diff-line">  import androidx.lifecycle.viewmodel.viewModelFactory</span><span class="diff-line">  import com.handson.android01.data.TodoApi</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoRepository</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // テスト用: 偽のサーバー（FakeTodoServer）につないだ ViewModel を作る。api を渡さなければ、initialTodos をすぐに返すサーバーを使う。</span><span class="diff-line diff-line--add">+ // テスト用: 偽の DAO（FakeTodoDao）と、偽のサーバー（FakeTodoServer）につないだ ViewModel を作る。api を渡さなければ、initialTodos をすぐに返すサーバーを使う。</span><span class="diff-line">  // viewModel(factory = ...) は、同じ ViewModelStoreOwner（ここでは Activity）の中では同じインスタンスを返す</span><span class="diff-line">  @Composable</span><span class="diff-line">  fun testViewModel(initialTodos: List&lt;Todo&gt; = demoTodoList, api: TodoApi? = null): TodoListViewModel =</span><span class="diff-line">      viewModel(</span><span class="diff-line">          factory = viewModelFactory {</span><span class="diff-line diff-line--remove">-             initializer { TodoListViewModel(createSavedStateHandle(), api ?: FakeTodoServer(initialTodos).api) }</span><span class="diff-line diff-line--add">+             initializer { TodoListViewModel(createSavedStateHandle(), TodoRepository(FakeTodoDao(), api ?: FakeTodoServer(initialTodos).api)) }</span><span class="diff-line">          },</span><span class="diff-line">      )</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>UI テストのクラスそのものは変えません。まとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 43s</span></pre>
+</div>
+          <p>単体テスト 71 件と UI テスト 66 件が、すべて成功しました。これが完成状態です（この後のステップでは、コードを変えません）。結果をまとめます。</p>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト（<code>test</code>）</td><td>71 件すべて成功（10 と同じ件数。4 件を置き換え）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>66 件すべて成功（10 と同じ件数。テストのクラスは変更なし）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 10 件・ヒント 1 件。警告の内訳は <code>UnusedResources</code> 7 件・<code>RedundantLabel</code> 1 件・<code>Typos</code> 1 件・<code>AndroidGradlePluginVersion</code> 1 件（10 より <code>Typos</code> が 1 件多い。下の説明を参照）</td></tr>
+            <tr><td>debug APK</td><td>約 14.7MB（<code>./gradlew clean</code> の後のビルドで 14,660,304 バイト。10 は 14,377,248 バイト）</td></tr>
+            </tbody>
+          </table>
+
+          <table>
+            <thead>
+            <tr><th>テストクラス</th><th>種類</th><th>件数</th><th>この項目での変更</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>TodoListViewModelTest</code></td><td>単体</td><td>20</td><td>4 件を DB を確かめる内容に置き換え、2 件に <code>runCurrent()</code> を追加</td></tr>
+            <tr><td>10 までのその他の単体テスト</td><td>単体</td><td>51</td><td>準備で <code>BasicsTest</code> の期待値を変えた</td></tr>
+            <tr><td>10 までの UI テスト</td><td>UI</td><td>66</td><td>テストのクラスは変更なし（補助の <code>TestViewModels</code>・<code>FakeTodoApiRule</code> と、新しい <code>FakeTodoDao</code> のみ）</td></tr>
+            </tbody>
+          </table>
+          <p>lint の警告は、10 の 9 件から 10 件に増えます。増えたのは <code>Typos</code> で、準備でアプリ名（<code>app_name</code>）を <code>HandsonAndroid11</code> に変えたためです。lint が、末尾の <code>11</code> を <code>HandsonAndroid!!</code> の打ち間違いとみなす誤検知なので、直さなくてかまいません。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 71 件と UI テスト 66 件がすべて成功すれば OK です。lint はエラー 0 件・警告 10 件です。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">アプリで確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>完成したアプリを入れて、変更が DB に残ることを確かめます。UI テストの後はアプリが消えているので、DB は空です。最初の起動では、これまでどおり API から 20 件を取得し、DB に保存します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">Installed on 1 device.</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 1s</span><span class="terminal__line">40 actionable tasks: 1 executed, 39 up-to-date</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>筆者の環境（1 回の測定）では、次の順に確かめました。</p>
+          <ol>
+            <li>起動すると、API から取得した一覧が出ます（<code>20 件中 11 件完了</code>）。</li>
+            <li>1 行目の完了を切り替え（<code>12 件完了</code>）、FAB から <code>Room_persist_test</code> を追加します（<code>21 件中 12 件完了</code>）。</li>
+            <li>アプリを強制終了して、起動し直します。<code>21 件中 12 件完了</code> のままです。10 までは、ここで API の 20 件に戻っていました。</li>
+          </ol>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>強制終了（<code>force-stop</code>）のほかに、プロセスを直接止めた場合も確かめます。<code>pidof</code> でアプリのプロセス ID を調べ、<code>run-as</code> でアプリの権限から <code>kill -9</code> を送ります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line">3787</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 kill -9 3787&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pidof com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>プロセス ID（筆者の環境では <code>3787</code>）は、起動のたびに変わります。<code>kill -9</code> の後の <code>pidof</code> は何も表示しないので、プロセスは無くなっています。起動し直しても <code>21 件中 12 件完了</code> のままでした。</p>
+          <p><code>adb shell am kill com.handson.android01</code> も試しましたが、アプリが前面にある間は終了せず、<code>pidof</code> の値は変わりませんでした。</p>
+
+          <p>DB のファイルも見てみます。debug ビルドのアプリは、<code>run-as</code> でアプリのデータの場所にあるファイルを読めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls -la databases/&quot;</span><span class="terminal__line">total 88</span><span class="terminal__line">drwxrwx--x 2 u0_a215 u0_a215  4096 2026-10-04 08:37 .</span><span class="terminal__line">drwx------ 6 u0_a215 u0_a215  4096 2026-10-04 08:36 ..</span><span class="terminal__line">-rw------- 1 u0_a215 u0_a215 24576 2026-10-04 08:37 todos.db</span><span class="terminal__line">-rw------- 1 u0_a215 u0_a215 32768 2026-10-04 08:37 todos.db-shm</span><span class="terminal__line">-rw------- 1 u0_a215 u0_a215     0 2026-10-04 08:37 todos.db-wal</span><span class="terminal__line">-rw------- 1 u0_a215 u0_a215     0 2026-10-04 08:37 todos.db.lck</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select count(*) from todos&#x27;&quot;</span><span class="terminal__line">21</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select * from todos where id&gt;19&#x27;&quot;</span><span class="terminal__line">20|ullam nobis libero sapiente ad optio sint|1</span><span class="terminal__line">21|Room_persist_test|0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select * from room_master_table&#x27;&quot;</span><span class="terminal__line">42|6cb4ddd24cbef3658d2ac6372d46feb0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select name, seq from sqlite_sequence&#x27;&quot;</span><span class="terminal__line">todos|21</span></pre>
+</div>
+          <ul>
+            <li><code>todos.db-wal</code> と <code>todos.db-shm</code> は、WAL（Write-Ahead Logging、先行書き込みログ）のファイルです。Room のジャーナルモードの既定は、端末のメモリが少ない場合を除いて WAL です。</li>
+            <li><code>todos.db.lck</code> は、Room がファイルのロックに使うファイルです。DB の中身は入っていません（サイズは 0）。</li>
+            <li>エミュレータには <code>sqlite3</code> コマンドがあり、SQL で中身を見られます。追加した <code>Room_persist_test</code> は id 21 で、完了していない（0）行として入っています。</li>
+            <li><code>room_master_table</code> の値は、ステップ 1 のスキーマ JSON の <code>identityHash</code> と同じです。</li>
+            <li><code>sqlite_sequence</code> は、AUTOINCREMENT のテーブルで使った最大の id の記録です。</li>
+            <li>ファイルの日時・サイズ・ユーザー名（<code>u0_a215</code>）は環境によって変わります。release ビルドのアプリ（debuggable でない）では <code>run-as</code> は使えません。</li>
+          </ul>
+          <p>次に、2 回目以降の起動で API に行かないことを、機内モードで確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 -W 3 8.8.8.8</span><span class="terminal__line">connect: Network is unreachable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>ネットワークに出られなくても、<code>21 件中 12 件完了</code> の一覧が出ました。DB に一覧があるので、<code>refreshIfEmpty()</code> は API を呼びません。10 までは、ここで「ネットワークに接続できません」と再試行のボタンが出ていました。確かめたら、機内モードを解除します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 -W 3 8.8.8.8</span><span class="terminal__line">（中略）</span><span class="terminal__line">1 packets transmitted, 1 received, 0% packet loss, time 0ms</span></pre>
+</div>
+          <p>最後に、詳細画面から削除してみます。1 件（筆者の場合は id が 2 の Todo）を開いて「削除」を押し、一覧に戻ると <code>20 件中 12 件完了</code> になりました（21 件から 1 件減）。DB でも、id 2 の行は消えています。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select count(*) from todos where id=2&#x27;&quot;</span><span class="terminal__line">0</span></pre>
+</div>
+          <p>ViewModel には、一覧を書き換える処理がありません。DAO に書くだけで、Room の <code>Flow</code> が新しい一覧を流し、画面が更新されます。</p>
+
+          <h4>全件削除して起動し直す</h4>
+          <p>この項目の設計の限界も見ておきます（<a href="#limits">概要の「この設計の限界」</a>）。<code>sqlite3</code> で <code>todos</code> テーブルを空にしてから、起動し直します。画面から全件を消したときと同じく、DB が空の状態になります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select count(*) from todos&#x27;&quot;</span><span class="terminal__line">20</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;DELETE FROM todos;&#x27;&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select count(*) from todos&#x27;&quot;</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 sqlite3 databases/todos.db &#x27;select count(*) from todos&#x27;&quot;</span><span class="terminal__line">20</span></pre>
+</div>
+          <p><code>DELETE</code> は何も表示しません。起動し直すと、画面は <code>20 件中 11 件完了</code> に戻り、DB も 20 件になりました。DB が空なので、<code>refreshIfEmpty()</code> が API から最初の一覧を取り直したためです。追加した <code>Room_persist_test</code> や、切り替えた完了の状態は残っていません。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: 版の上げ忘れ・移行の書き忘れ・<code>suspend</code> の外し忘れで起きる例外を見る</summary>
+            <div class="disclosure__body">
+          <p>この実験は任意です。読むだけでもかまいません。以下は、筆者が完成コードを一時的に変えて試した結果です（それぞれ 1 回の実測）。試す場合は、アプリにデータが入った状態で行い、終わったらコードを元に戻してください。</p>
+              <p><strong>Entity を変えて、版を上げ忘れる</strong></p>
+          <p><code>TodoEntity</code> に <code>val note: String = ""</code> を足し、<code>version = 1</code> のまま <code>installDebug</code> して起動すると、アプリが落ちました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">Logcat</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">FATAL EXCEPTION: main
+java.lang.IllegalStateException: Room cannot verify the data integrity. Looks like you&#x27;ve changed schema but forgot to update the version number. You can simply fix this by increasing the version number. Expected identity hash: 41fde652801f60d6e718e3e442a49b9a, found: 6cb4ddd24cbef3658d2ac6372d46feb0
+    at androidx.room3.BaseRoomConnectionManager.checkIdentity(RoomConnectionManager.kt:310)</code></pre>
+</div>
+          <p>端末の DB に記録されたハッシュ（<code>found</code>）と、新しいスキーマのハッシュ（<code>Expected</code>）が違うためです。例外は、<code>load()</code> の <code>try</code> の中ではなく、<code>uiState</code> が購読している <code>observeAll()</code> の <code>Flow</code> から投げられます。<code>load()</code> の <code>catch</code> では捕まえられないので、メインスレッドで落ちます。このとき <code>app/schemas/</code> の <code>1.json</code> も新しいハッシュで上書きされます。エンティティを戻して再ビルドすると、元の <code>1.json</code> に戻りました。</p>
+              <p><strong>版だけ上げて、移行を書かない</strong></p>
+          <p>続けて <code>version = 2</code> にすると（<code>2.json</code> が生成されます）、起動時に次の例外で落ちました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">Logcat</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">java.lang.IllegalStateException: A migration from 1 to 2 was required but not found. Please provide the necessary Migration path via RoomDatabase.Builder.addMigration(...) or allow for destructive migrations via one of the RoomDatabase.Builder.fallbackToDestructiveMigration* functions.</code></pre>
+</div>
+          <p><code>databaseBuilder</code> に <code>fallbackToDestructiveMigration(dropAllTables = true)</code> を足すと、落ちずに起動しました。ただし、DB が作り直されてデータは消え、API から 20 件を取り直しました（<code>20 件中 11 件完了</code>）。「DB が空なら取得し直す」動きも、ここで確かめられます。実験の後は、コードを戻して <code>2.json</code> を消します。DB が version 2 のまま version 1 のコードを入れると、<code>A migration from 2 to 1 was required but not found</code> で落ちます。<code>adb shell pm clear com.handson.android01</code> でアプリのデータを消してください。</p>
+              <p><strong>DAO の <code>suspend</code> を外す</strong></p>
+          <p><code>count()</code> の <code>suspend</code> を外しても、ビルドは成功しました。KSP は、呼んだスレッドで DB を待つ（<code>performBlocking</code> を使う）実装を生成しました。実行すると、メインスレッド（<code>viewModelScope</code> の既定）から呼ばれたところで例外になり、<code>load()</code> の <code>catch</code> に入って「予期しないエラーが発生しました」と再試行のボタンが出ました。例外は次のとおりです（一時的に <code>Log.e</code> を入れて確認）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">Logcat</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">java.lang.IllegalStateException: Cannot access database on the main thread since it may potentially lock the UI for a long period of time.
+    at androidx.room3.RoomDatabase.assertNotMainThread(RoomDatabase.android.kt:418)
+    at androidx.room3.util.DBUtil__DBUtil_androidKt.performBlocking(DBUtil.android.kt:45)</code></pre>
+</div>
+          <p>Room 3.0.3 では、<code>suspend</code> でない DAO の関数も書けますが、メインスレッドからは呼べません。DAO の関数は <code>suspend</code> にしておきます。</p>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>アプリを強制終了しても、プロセスを止めても、追加・完了の切り替えが残っていれば OK です。機内モードで起動し直しても一覧が出ること、詳細画面での削除が一覧に反映されること、DB を空にすると API の 20 件に戻ることも確かめてください。機内モードは解除しておきます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>最後に、テストが本物の DB とネットワークに依存していないことと、release ビルドでも DB が使えることを確かめます。コードはステップ 3 の完成状態のままです。エミュレータは起動しておいてください。</p>
+          <h4>機内モードでも UI テストが通ることを確かめる</h4>
+          <p>UI テストが、ネットワークに依存していないことを確かめます。10 と同じく、機内モードにして UI テストだけを実行し直します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 -W 3 8.8.8.8</span><span class="terminal__line">connect: Network is unreachable</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest --rerun-tasks</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 56s</span></pre>
+</div>
+          <p>筆者の環境では、機内モードのまま UI テスト 66 件がすべて成功しました。</p>
+          <p>確かめたら、機内モードを解除し、<code>ping</code> が通ることを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell ping -c 1 -W 3 8.8.8.8</span><span class="terminal__line">（中略）</span><span class="terminal__line">1 packets transmitted, 1 received, 0% packet loss, time 0ms</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">機内モードの解除を忘れない</p>
+              <p>解除しないまま次の release の確認に進むと、DB が空のアプリが API から取得できず、「ネットワークに接続できません」と表示されます。</p>
+            </div>
+          </div>
+          <h4>UI テストが本物の DB を作らないことを確かめる</h4>
+          <p>本物の <code>MainActivity</code> を起動するテストに、<code>MainActivityTest</code> があります。このテストでは、<code>FakeTodoApiRule</code> が <code>AppContainer.todoRepositoryOverride</code> を、偽の DAO と偽のサーバーの Repository に替えています。<code>AppContainer</code> の <code>database</code> は <code>lazy</code> なので、差し替えたテストでは本物の DB が作られないはずです。アプリのデータを消して、このテストだけを実行し、DB のファイルを見ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug installDebugAndroidTest -q</span><span class="terminal__line">Installed on 1 device.</span><span class="terminal__line">Installed on 1 device.</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm clear com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am instrument -w -e class com.handson.android01.MainActivityTest com.handson.android01.test/androidx.test.runner.AndroidJUnitRunner</span><span class="terminal__line"></span><span class="terminal__line">com.handson.android01.MainActivityTest:.</span><span class="terminal__line"></span><span class="terminal__line">Time: 1.837</span><span class="terminal__line"></span><span class="terminal__line">OK (1 test)</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls databases&quot;</span><span class="terminal__line">ls: databases: No such file or directory</span></pre>
+</div>
+          <p><code>connectedDebugAndroidTest</code> は、テストの後にアプリを消します。ここでは、<code>installDebug installDebugAndroidTest</code> でアプリとテストの APK を入れたままにして、<code>am instrument</code> でテストを実行しています。<code>Time</code> の値は環境によって変わります。テストは成功し、<code>databases</code> のディレクトリはありませんでした。比べるために、同じ状態でアプリを普通に起動すると、<code>databases</code> に <code>todos.db</code>・<code>todos.db-shm</code>・<code>todos.db-wal</code>・<code>todos.db.lck</code> ができました。</p>
+          <h4>release ビルドでも動くことを確かめる</h4>
+          <p>release ビルドでは R8 がコードを縮小し、クラスの名前を短く変えます。Room が生成した <code>AppDatabase_Impl</code> が release でも動くことを確かめます。手順の詳しい説明は、09 のステップ 3「release ビルドでも動くことを確かめる」を参照してください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:minifyReleaseWithR8</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 29s</span><span class="terminal__line">52 actionable tasks: 52 executed</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n &#x27;^com.handson.android01.data.AppDatabase_Impl -&gt;&#x27; app/build/outputs/mapping/release/mapping.txt</span><span class="terminal__line">222026:com.handson.android01.data.AppDatabase_Impl -&gt; com.handson.android01.data.AppDatabase_Impl:</span></pre>
+</div>
+          <p><code>mapping.txt</code> は、R8 が変えた名前の対応表です。<code>AppDatabase_Impl</code> は名前が変わっていません。Room のライブラリに含まれる keep ルール（consumer rules）が効いているためです。プロジェクトの keep ルールを足す必要はありませんでした。行番号は環境によって変わります。</p>
+          <p>できた <code>app-release-unsigned.apk</code> は約 1.7MB（1,749,115 バイト）でした。10 では 1,695,447 バイトでした。09 と同じ手順で、作業用ディレクトリにコピーし、debug 用の鍵で <code>apksigner sign</code> します。次のコマンドの <code>build-tools/37.0.0</code> は、筆者の環境の版です。<code>~/Library/Android/sdk/build-tools/</code> にインストール済みの版に読み替えてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp app/build/outputs/apk/release/app-release-unsigned.apk &lt;作業用ディレクトリ&gt;/rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd &lt;作業用ディレクトリ&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out rel-signed.apk rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner verify --verbose rel-signed.apk</span><span class="terminal__line">Verifies</span><span class="terminal__line">Verified using v1 scheme (JAR signing): false</span><span class="terminal__line">Verified using v2 scheme (APK Signature Scheme v2): true</span><span class="terminal__line">Verified using v3 scheme (APK Signature Scheme v3): true</span><span class="terminal__line">Verified using v3.1 scheme (APK Signature Scheme v3.1): false</span><span class="terminal__line">Verified using v3.2 scheme (APK Signature Scheme v3.2): false</span><span class="terminal__line">Verified using v4 scheme (APK Signature Scheme v4): false</span><span class="terminal__line">Verified for SourceStamp: false</span><span class="terminal__line">Number of signers: 1</span></pre>
+</div>
+          <p><code>apksigner sign</code> は、成功すると何も表示しません。端末には、1 つ前の確認で入れた debug 版のアプリが残っています。release 版も同じ debug 用の鍵で署名したので、アンインストールせずに上書きでも入れられます。ここでは DB が空の状態から確かめるため、debug 版をアンインストールしてから入れます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb install rel-signed.apk</span><span class="terminal__line">Serving...</span><span class="terminal__line">All files should be loaded. Notifying the device.</span><span class="terminal__line">Performing Incremental Install</span><span class="terminal__line">Success</span><span class="terminal__line">Install command complete in 440 ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -c</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p><code>Install command complete in</code> の後の時間は、実行のたびに変わります。筆者の環境では、<code>20 件中 11 件完了</code> の一覧が出ました。FAB から <code>Release_persist</code> を追加し（<code>21 件中 11 件完了</code>）、強制終了して起動し直しても <code>21 件中 11 件完了</code> のままでした。1 件を開くと「Todo の詳細」が出ました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -c &quot;FATAL EXCEPTION&quot;</span><span class="terminal__line">0</span></pre>
+</div>
+          <p>確認が終わったら、作業用ディレクトリの APK を削除し、アプリをアンインストールします。エミュレータと Gradle デーモンも止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>機内モードのままでも UI テスト 66 件が通り、機内モードを解除していれば OK です。<code>MainActivityTest</code> の後に <code>databases</code> が無いことと、release の APK でも追加した Todo が強制終了の後に残ることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="not-covered">この項目で扱わなかったこと</h2>
+      <ul>
+        <li>マイグレーションの書き方（<code>Migration</code>・<code>@AutoMigration</code>）。ステップ 4 の任意の実験で「必要になる」ことを見ただけです。</li>
+        <li>リレーション・複数のテーブル・外部キー・インデックス・全文検索（FTS）・<code>@DatabaseView</code>・<code>ColumnTypeConverter</code>。</li>
+        <li>トランザクション（<code>withWriteTransaction</code>）、<code>useReaderConnection</code> などの低レベルの API、<code>BundledSQLiteDriver</code>、Kotlin Multiplatform、Paging。</li>
+        <li>API との同期と、競合の解決。API は DB が空のときの取得にだけ使っているので、サーバー側の変更は取り込まれません（<a href="#limits">この設計の限界</a>）。</li>
+        <li>DB への書き込みの失敗（<code>SQLiteException</code> など）の画面表示。<code>addTodo</code> などの <code>viewModelScope.launch</code> には <code>catch</code> が無いので、書き込みで例外が起きるとアプリが落ちます。</li>
+        <li>本物の Room を使う DAO のテスト（端末上で動かすテスト）。15 で扱う予定です。</li>
+        <li>DataStore（12）と Hilt（13）。</li>
+      </ul>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid11</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">Room 3 のプラグイン・KSP・<code>schemaDirectory</code> を設定し、<code>AppDatabase_Impl</code> と <code>TodoDao_Impl</code> とスキーマ JSON が生成されることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">スキーマ JSON をコミットする理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>TodoEntity</code> を <code>Todo</code> と別の型にした理由と、<code>autoGenerate</code> の動きを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">Room を唯一の情報源にし、DB が空のときだけ API から取得する流れを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">ViewModel の <code>uiState</code> を <code>combine</code> と <code>stateIn</code> で作り、書き込みは DAO に任せた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">初回取得の直後に空の一覧が見える理由と、その対処を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">テストで本物の Room ではなく偽の DAO を使う理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">アプリを強制終了しても変更が残ること、機内モードでも 2 回目以降は一覧が出ること、全件削除すると API から取り直すことを確かめ、機内モードを解除した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-10" class="checklist__input">
+          <label for="check-10" class="checklist__label">単体テスト 71 件・UI テスト 66 件を通し、UI テストが本物の DB を作らないこと、release の APK でも DB が使えることを確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>lateinit property appContext has not been initialized</code> で落ちる</p>
+              <p><code>AppContainer.init</code> が呼ばれる前に DB を使っています。<code>AndroidManifest.xml</code> の <code>&lt;application&gt;</code> に <code>android:name=".TodoApplication"</code> を書き忘れていないか確かめます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">import が解決できない、別の artifact を探しに行く</p>
+              <p>Room 2 の <code>androidx.room</code> と、Room 3 の <code>androidx.room3</code> が混ざっています。この項目のコードは、すべて <code>androidx.room3</code> から import します。kapt ではなく KSP（<code>ksp(...)</code>）で Room のコンパイラーを追加します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>room3 { schemaDirectory(...) }</code> を書かずにビルドしている</p>
+              <p>Room 3 の Gradle プラグインでは、<code>schemaDirectory</code> の指定が必須です（リリースノートに明記されています）。<code>app/build.gradle.kts</code> に <code>room3 { schemaDirectory("$projectDir/schemas") }</code> があるか確かめます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">実験の後に <code>A migration from 2 to 1 was required but not found</code> で落ちる</p>
+              <p>版を上げる実験の後、端末の DB が version 2 のまま残っています。<code>adb shell pm clear com.handson.android01</code> でアプリのデータを消してから起動します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">単体テストで、書き込みの直後の値が変わっていない</p>
+              <p><code>StandardTestDispatcher</code> では、<code>viewModelScope.launch</code> の中身と <code>combine</code> は、ディスパッチャーを進める（<code>runCurrent()</code> など）まで動きません。10 までの <code>_uiState.update</code> のようには、同期的に変わりません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">アプリが「ネットワークに接続できません」になる</p>
+              <p>DB が空のときは API から取得するので、ネットワークが必要です。機内モードのままになっていないか確かめます。解除するコマンドは次のとおりです。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span></pre>
+</div>
+
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        Room 3 の Gradle プラグインと KSP を設定し、Entity・DAO・Database を書きました。DAO と Database の実装は、Room が KSP で生成します。スキーマは JSON に書き出し、コミットしておきます。
+        <code>TodoRepository</code> を置いて Room を唯一の情報源にし、API は DB が空のときにだけ使うようにしました。ViewModel は DB の <code>Flow</code>・絞り込み・読み込みの状態を <code>combine</code> して <code>uiState</code> を作ります。追加や削除は DAO に書くだけで、画面は <code>Flow</code> で更新されます。アプリを強制終了しても変更が残り、2 回目以降は機内モードでも一覧が出ます。ただし、全件削除すると次の起動で API の一覧を取り直し、サーバー側の変更は取り込みません。テストは偽の DAO を使い、本物の DB とネットワークを使わずに通ります。</p>
+      <p>次の項目（12: DataStore で設定を保存）では、絞り込みなどの設定を DataStore に保存し、アプリを再起動しても保たれるようにします。「最初の一覧を取得済み」の印も DataStore へ保存し、全件削除した後も API から取り直さないようにします。</p>
+
+      <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+              <p class="callout__title">完成コード</p>
+              <p>このレッスンの完成コードは、ブランチ <code>android/11-room</code> の <code>android/11-room/</code> ディレクトリにあります。</p>
+            </div>
+          </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../10-mockengine-testing/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">10: MockEngine でネットワークのテスト</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">12: DataStore で設定を保存</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
