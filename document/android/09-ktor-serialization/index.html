@@ -523,7 +523,7 @@ object AppContainer {
             <li><code>viewModel()</code> の既定のファクトリは、「引数なし」か「<code>SavedStateHandle</code> だけ」のコンストラクタを探して呼びます。<code>TodoApi</code> を渡す手段が無いので、ViewModel は <code>AppContainer</code> から受け取ります（下の ViewModel の副コンストラクタ）。</li>
             <li><code>HttpClient</code> は、接続を使い回せるように、画面や ViewModel ごとには作らず、アプリで 1 つを使い回します（<code>by lazy</code> で最初に使うときに 1 回だけ作る）。</li>
             <li><code>todoApiOverride</code> は、テストが通信しない <code>TodoApi</code> に差し替えるための入口です。使い方は、このステップの後半で見ます。</li>
-            <li>これは、依存（部品）の受け渡しを手で書いた最小の形です。12 で Hilt（DI のライブラリ）を導入するときに、この <code>object</code> をなくして Hilt に作らせます。</li>
+            <li>これは、依存（部品）の受け渡しを手で書いた最小の形です。13 で Hilt（DI のライブラリ）を導入するときに、この <code>object</code> をなくして Hilt に作らせます。</li>
           </ul>
           <p><code>createTodoHttpClient</code> に、呼び出し全体のタイムアウトを足します。</p>
 
@@ -1104,7 +1104,7 @@ class FakeTodoApiRule(val server: FakeTodoServer = FakeTodoServer(demoTodos(20))
 
       <h2 id="not-covered">この項目で扱わなかったこと</h2>
       <p><code>MockEngine</code> を使った新しいテストは、次の項目（10）で扱います。<code>TodoApi</code> の成功・HTTP エラー・壊れた JSON・タイムアウト、ViewModel の失敗と再試行、失敗表示の UI テストです。<code>expectSuccess</code> を外したときの見え方も、10 でテストを使って確かめます。</p>
-      <p>API への書き込み（POST・PUT・DELETE）、認証、自動のリトライ、接続と読み取りのタイムアウトの調整は扱っていません。キャッシュとオフライン対応、ページング、<code>Logging</code> プラグイン、Hilt などの DI（12）と Room での永続化（11）も扱っていません。CIO エンジンなど、ほかのエンジンとの比較も、ドキュメントの記述までで、実測はしていません。</p>
+      <p>API への書き込み（POST・PUT・DELETE）、認証、自動のリトライ、接続と読み取りのタイムアウトの調整は扱っていません。キャッシュとオフライン対応、ページング、<code>Logging</code> プラグイン、Hilt などの DI（13）と Room での永続化（11）も扱っていません。CIO エンジンなど、ほかのエンジンとの比較も、ドキュメントの記述までで、実測はしていません。</p>
 
       <h2 id="exercise">演習</h2>
       <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
