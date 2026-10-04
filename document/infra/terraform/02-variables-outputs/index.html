@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02: 変数とアウトプット | Infra（Terraform）ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../../index.html">ハンズオン</a></li>
+          <li>Infra</li>
+          <li>Terraform</li>
+          <li aria-current="page">02</li>
+        </ol>
+        <h1 class="lesson-title">変数とアウトプット</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: Terraform の基本操作（<code>init</code> / <code>plan</code> / <code>apply</code>）を一通り体験した人</li>
+          <li class="lesson-meta__item">📋 前提: 01 で作った <code>01-basics</code> ディレクトリ（<code>main.tf</code> と <code>.gitignore</code>）が手元にあること。クラウドのアカウントは不要（ローカルにファイルを作るだけ）</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../01-basics/index.html">01: Terraform の基本操作</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>variable</code> ブロックで入力変数を宣言し、<code>var.&lt;名前&gt;</code> で参照する</li>
+          <li>default・環境変数 <code>TF_VAR_*</code>・<code>terraform.tfvars</code>・<code>*.auto.tfvars</code>・<code>-var</code> / <code>-var-file</code> の優先順位を実際に確かめる</li>
+          <li><code>type</code> と <code>validation</code> で受け取る値を検査し、<code>sensitive</code> で表示を伏せる（伏せるだけで、値は平文で残ることも知る）</li>
+          <li><code>locals</code> で式に名前を付けて設定を整理する</li>
+          <li><code>output</code> で結果を返し、<code>terraform output</code>（<code>-raw</code> / <code>-json</code>）で取り出す</li>
+          <li>変数ファイルのうち、どれを Git にコミットするかを決める</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        01 の <code>main.tf</code> には、あいさつ文の <code>Hello</code> やペットの名前の単語数 <code>2</code> が直接書かれていました。値を変えるたびに <code>main.tf</code> を書き換えるのは不便です。
+        この項目では、設定の外から値を受け取る<strong>入力変数（variable）</strong>と、結果を外へ返す<strong>出力値（output）</strong>を使えるようにします。あわせて、設定の中で使う値に名前を付ける<strong>ローカル値（locals）</strong>も扱います。
+      </p>
+      <p>
+        01 と同じく、使うのは手元にファイルを作る <code>hashicorp/local</code> と、ランダムな名前を作る <code>hashicorp/random</code> だけです。クラウドのアカウントや料金の心配はありません。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Terraform v1.16.2（darwin_arm64）/ hashicorp/local v2.9.1 / hashicorp/random v3.9.1 で動作を確認しています。バージョンは執筆時点（2026年10月）のものです。
+            掲載している出力は色なし（<code>-no-color</code> 相当）で取得したものです。出力を <code>grep</code> や <code>head</code> に渡すコマンドだけは、色の制御文字で一致しなくならないよう <code>-no-color</code> を付けています。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">01 の完成コードを出発点にする</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  01 で作った <code>01-basics</code> の隣に、新しい作業ディレクトリ <code>02-variables-outputs</code> を作り、<code>main.tf</code> と <code>.gitignore</code> をコピーします。
+  state（<code>terraform.tfstate</code>）や <code>.terraform/</code> はコピーしません。この項目のリソースは、新しいディレクトリで一から作ります。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir 02-variables-outputs</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp 01-basics/main.tf 01-basics/.gitignore 02-variables-outputs/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 02-variables-outputs</span></pre>
+</div>
+<p>コピーした <code>main.tf</code> は、01 の完成形そのままです。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">terraform {
+  required_version = "&gt;= 1.9"
+
+  required_providers {
+    local = {
+      source  = "hashicorp/local"
+      version = "~&gt; 2.9"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~&gt; 3.9"
+    }
+  }
+}
+
+resource "random_pet" "greeter" {
+  length = 2
+}
+
+resource "local_file" "hello" {
+  filename = "${path.module}/output/hello.txt"
+  content  = "Hello, ${random_pet.greeter.id}!\n"
+}</code></pre>
+</div>
+<p>新しいディレクトリなので、まず <code>terraform init</code> でプロバイダーを取得します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform init</span><span class="terminal__line">Initializing the backend...</span><span class="terminal__line"></span><span class="terminal__line">Initializing provider plugins...</span><span class="terminal__line">- Finding hashicorp/random versions matching "~&gt; 3.9"...</span><span class="terminal__line">- Finding hashicorp/local versions matching "~&gt; 2.9"...</span><span class="terminal__line">- Installing hashicorp/random v3.9.1...</span><span class="terminal__line">- Installed hashicorp/random v3.9.1 (signed by HashiCorp)</span><span class="terminal__line">- Installing hashicorp/local v2.9.1...</span><span class="terminal__line">- Installed hashicorp/local v2.9.1 (signed by HashiCorp)</span><span class="terminal__line"></span><span class="terminal__line">Terraform has created a lock file .terraform.lock.hcl to record the provider</span><span class="terminal__line">selections it made above. Include this file in your version control repository</span><span class="terminal__line">so that Terraform can guarantee to make the same selections by default when</span><span class="terminal__line">you run "terraform init" in the future.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has been successfully initialized!</span><span class="terminal__line"></span><span class="terminal__line">You may now begin working with Terraform. Try running "terraform plan" to see</span><span class="terminal__line">any changes that are required for your infrastructure. All Terraform commands</span><span class="terminal__line">should now work.</span><span class="terminal__line"></span><span class="terminal__line">If you ever set or change modules or backend configuration for Terraform,</span><span class="terminal__line">rerun this command to reinitialize your working directory. If you forget, other</span><span class="terminal__line">commands will detect it and remind you to do so if necessary.</span></pre>
+</div>
+<p>
+  今度は <code>main.tf</code> にバージョン制約（<code>~&gt; 3.9</code> など）が書いてあります。そのため、<code>Finding hashicorp/random versions matching "~&gt; 3.9"...</code> のように、制約に合う版を探しています。
+  続けて <code>validate</code> し、<code>apply</code> でリソースを作ります。この項目では <code>apply</code> を何度も実行するので、確認の <code>yes</code> 入力を省く <code>-auto-approve</code> を付けます。実際の環境では、付けずに実行計画を確かめてから <code>yes</code> と入力しましょう。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello will be created</span><span class="terminal__line">  + resource "local_file" "hello" {</span><span class="terminal__line">      + content              = (known after apply)</span><span class="terminal__line">      + content_base64sha256 = (known after apply)</span><span class="terminal__line">      + content_base64sha512 = (known after apply)</span><span class="terminal__line">      + content_md5          = (known after apply)</span><span class="terminal__line">      + content_sha1         = (known after apply)</span><span class="terminal__line">      + content_sha256       = (known after apply)</span><span class="terminal__line">      + content_sha512       = (known after apply)</span><span class="terminal__line">      + directory_permission = "0777"</span><span class="terminal__line">      + file_permission      = "0777"</span><span class="terminal__line">      + filename             = "./output/hello.txt"</span><span class="terminal__line">      + id                   = (known after apply)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # random_pet.greeter will be created</span><span class="terminal__line">  + resource "random_pet" "greeter" {</span><span class="terminal__line">      + id        = (known after apply)</span><span class="terminal__line">      + length    = 2</span><span class="terminal__line">      + separator = "-"</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 2 to add, 0 to change, 0 to destroy.</span><span class="terminal__line">random_pet.greeter: Creating...</span><span class="terminal__line">random_pet.greeter: Creation complete after 0s [id=wired-stag]</span><span class="terminal__line">local_file.hello: Creating...</span><span class="terminal__line">local_file.hello: Creation complete after 0s [id=5afbd96f316f514627366ce597cb975c29d8a719]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 2 added, 0 changed, 0 destroyed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">Hello, wired-stag!</span></pre>
+</div>
+<div class="callout callout--note">
+  <span class="callout__icon" aria-hidden="true">ℹ️</span>
+  <div class="callout__body">
+    <p class="callout__title">ペットの名前は実行ごとに変わる</p>
+    <p><code>wired-stag</code> は執筆時の出力例です。<code>random_pet</code> の値は作成のたびにランダムで決まるので、みなさんの環境では別の名前になります。<code>id</code> のハッシュ値も同様です。以降の出力に出てくる <code>wired-stag</code> は、自分の環境の名前に読み替えてください。</p>
+  </div>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>Apply complete! Resources: 2 added, 0 changed, 0 destroyed.</code> が表示され、<code>cat output/hello.txt</code> で <code>Hello, &lt;ペットの名前&gt;!</code> が表示されることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">入力変数を宣言して使う</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  あいさつ文の <code>Hello</code> を、外から変えられるようにします。新しく <code>variables.tf</code> を作り、入力変数 <code>greeting</code> を宣言します。
+  Terraform はディレクトリ内の <code>.tf</code> ファイルをすべて読み込むので、ファイル名は自由です。変数の宣言は <code>variables.tf</code> にまとめるのが慣例です。
+</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">variables.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">variable "greeting" {
+  type        = string
+  description = "ファイルに書くあいさつ文"
+  default     = "Hello"
+}</code></pre>
+</div>
+<ul>
+  <li><code>type</code>: 受け取る値の型（ここでは文字列 <code>string</code>）</li>
+  <li><code>description</code>: 変数の説明。値の入力を求められたときなどに表示されます（ステップ 4 で確かめます）</li>
+  <li><code>default</code>: 値が渡されなかったときに使う既定値</li>
+</ul>
+<p><code>main.tf</code> では、<code>var.greeting</code> の形で変数を参照します。<code>content</code> の <code>Hello</code> を置き換えます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> resource "local_file" "hello" {</span><span class="diff-line">   filename = "${path.module}/output/hello.txt"</span><span class="diff-line diff-line--remove">-  content  = "Hello, ${random_pet.greeter.id}!\n"</span><span class="diff-line diff-line--add">+  content  = "${var.greeting}, ${random_pet.greeter.id}!\n"</span><span class="diff-line"> }</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform fmt -check -recursive</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=5afbd96f316f514627366ce597cb975c29d8a719]</span><span class="terminal__line"></span><span class="terminal__line">No changes. Your infrastructure matches the configuration.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has compared your real infrastructure against your configuration</span><span class="terminal__line">and found no differences, so no changes are needed.</span></pre>
+</div>
+<p>
+  <code>terraform fmt -check</code> は、書式を直さずに検査だけ行い、直す箇所がなければ何も表示しません。
+  <code>plan</code> は <code>No changes.</code> です。<code>greeting</code> の値は default の <code>Hello</code> なので、できあがる <code>content</code> は前と同じだからです。
+</p>
+<p>次に、<code>-var</code> オプションで値を渡してみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -var 'greeting=Good morning'</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=5afbd96f316f514627366ce597cb975c29d8a719]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">-/+ destroy and then create replacement</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello must be replaced</span><span class="terminal__line">-/+ resource "local_file" "hello" {</span><span class="terminal__line">      ~ content              = &lt;&lt;-EOT # forces replacement</span><span class="terminal__line">          - Hello, wired-stag!</span><span class="terminal__line">          + Good morning, wired-stag!</span><span class="terminal__line">        EOT</span><span class="terminal__line">      ~ content_base64sha256 = "dQosnx803uzLUJBv2+0ZTjAEYWRJbvdE9LpTU4fsl1A=" -&gt; (known after apply)</span><span class="terminal__line">      …</span><span class="terminal__line">      ~ id                   = "5afbd96f316f514627366ce597cb975c29d8a719" -&gt; (known after apply)</span><span class="terminal__line">        # (3 unchanged attributes hidden)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 1 to add, 0 to change, 1 to destroy.</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>content</code> が <code>Good morning, wired-stag!</code> へ変わる計画です（中ほどの「…」はハッシュ値の行、最後の「…」は 01 と同じ <code>Note:</code> の部分です）。
+  01 で見たとおり、<code>local_file</code> は <code>content</code> が変わると置換（<code>-/+</code>）になります。同じ <code>-var</code> を付けて <code>apply</code> します（以降、<code>apply</code> の出力は実行計画の部分を「…」で省略します）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve -var 'greeting=Good morning'</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=5afbd96f316f514627366ce597cb975c29d8a719]</span><span class="terminal__line">…</span><span class="terminal__line">Plan: 1 to add, 0 to change, 1 to destroy.</span><span class="terminal__line">local_file.hello: Destroying... [id=5afbd96f316f514627366ce597cb975c29d8a719]</span><span class="terminal__line">local_file.hello: Destruction complete after 0s</span><span class="terminal__line">local_file.hello: Creating...</span><span class="terminal__line">local_file.hello: Creation complete after 0s [id=8da986fde420cfbfe7d467e2e8ee6f8a3d02cb64]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 1 added, 0 changed, 1 destroyed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">Good morning, wired-stag!</span></pre>
+</div>
+<p>では、<code>-var</code> を付けずにもう一度 <code>plan</code> するとどうなるでしょうか。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=8da986fde420cfbfe7d467e2e8ee6f8a3d02cb64]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">-/+ destroy and then create replacement</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello must be replaced</span><span class="terminal__line">-/+ resource "local_file" "hello" {</span><span class="terminal__line">      ~ content              = &lt;&lt;-EOT # forces replacement</span><span class="terminal__line">          - Good morning, wired-stag!</span><span class="terminal__line">          + Hello, wired-stag!</span><span class="terminal__line">        EOT</span><span class="terminal__line">      …</span><span class="terminal__line">        # (3 unchanged attributes hidden)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 1 to add, 0 to change, 1 to destroy.</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>Good morning</code> から <code>Hello</code> へ戻す差分が出ました。<code>-var</code> で渡した値は、そのコマンド 1 回限りです。どこにも保存されないので、付け忘れると default の値で計画が作られます。
+  ここでは <code>apply</code> せず、state は <code>Good morning</code> のままにして次のステップへ進みます。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>-var 'greeting=Good morning'</code> を付けた <code>apply</code> で <code>hello.txt</code> が <code>Good morning, …!</code> になり、<code>-var</code> を外した <code>plan</code> では <code>Hello</code> へ戻す差分が出ることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">値の渡し方と優先順位を確かめる</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  変数の値は <code>-var</code> 以外にも、ファイルや環境変数で渡せます。同じ <code>greeting</code> を複数の方法で同時に渡し、どれが勝つかを確かめます。
+  <code>plan</code> の全文は長いので、新しい <code>content</code> の行（<code>+</code> で始まり、ペットの名前を含む行）だけを <code>grep</code> で取り出します。
+</p>
+<div class="callout callout--warning">
+  <span class="callout__icon" aria-hidden="true">⚠️</span>
+  <div class="callout__body">
+    <p class="callout__title"><code>grep</code> のパターンを自分のペットの名前に変える</p>
+    <p>このステップと、ステップ 6 の <code>grep</code> のパターンには、執筆時のペットの名前 <code>wired-stag</code> が入っています。そのまま実行すると何も表示されないので、自分の環境の名前（<code>cat output/hello.txt</code> で確かめられます）に書き換えてから実行してください。</p>
+  </div>
+</div>
+<p>まず、何も渡さない状態です。default の <code>Hello</code> が使われます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -no-color | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + Hello, wired-stag!</span></pre>
+</div>
+<p>環境変数でも値を渡せます。名前は <code>TF_VAR_</code> に変数名を続けたもの（ここでは <code>TF_VAR_greeting</code>）です。まだ変数ファイルが無い状態で試すと、default の <code>Hello</code> の代わりに環境変数の値が使われます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> TF_VAR_greeting='from env' terraform plan -no-color | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + from env, wired-stag!</span></pre>
+</div>
+<p><strong>① <code>terraform.tfvars</code></strong>: 作業ディレクトリに <code>terraform.tfvars</code> を作ります。<code>変数名 = 値</code> の形で書きます。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">terraform.tfvars</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">greeting = "from terraform.tfvars"</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -no-color | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + from terraform.tfvars, wired-stag!</span></pre>
+</div>
+<p>オプションを何も付けていないのに、<code>terraform.tfvars</code> の値が使われました。この名前のファイルは自動で読み込まれます。</p>
+<p><strong>② 環境変数 <code>TF_VAR_greeting</code></strong>: 先ほどの環境変数を、<code>terraform.tfvars</code> を残したまま渡します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> TF_VAR_greeting='from env' terraform plan -no-color | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + from terraform.tfvars, wired-stag!</span></pre>
+</div>
+<p>結果は <code>terraform.tfvars</code> の値のままです。環境変数は <code>terraform.tfvars</code> より弱いことがわかります。</p>
+<p><strong>③ <code>-var-file</code></strong>: 任意の名前の変数ファイルを作り、<code>-var-file</code> で指定します。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">custom.tfvars</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">greeting = "from custom.tfvars"</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> TF_VAR_greeting='from env' terraform plan -no-color -var-file=custom.tfvars | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + from custom.tfvars, wired-stag!</span></pre>
+</div>
+<p><strong>④ <code>-var</code></strong>: さらに <code>-var</code> も付けます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> TF_VAR_greeting='from env' terraform plan -no-color -var-file=custom.tfvars -var 'greeting=from -var' | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + from -var, wired-stag!</span></pre>
+</div>
+<p><code>-var-file</code> と <code>-var</code> の書く順番を入れ替えると、結果も入れ替わります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -no-color -var 'greeting=from -var' -var-file=custom.tfvars | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + from custom.tfvars, wired-stag!</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -no-color -var-file=custom.tfvars -var 'greeting=from -var' | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + from -var, wired-stag!</span></pre>
+</div>
+<p>コマンドラインの <code>-var</code> と <code>-var-file</code> は、どちらが強いというより、後に書いた方が勝ちます。</p>
+<p><strong>⑤ <code>*.auto.tfvars</code></strong>: 名前が <code>.auto.tfvars</code> で終わるファイルも自動で読み込まれます。<code>my.auto.tfvars</code> を作ります（<code>terraform.tfvars</code> と <code>custom.tfvars</code> は残したままです）。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">my.auto.tfvars</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">greeting = "from my.auto.tfvars"</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -no-color | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + from my.auto.tfvars, wired-stag!</span><span class="terminal__line"><span class="terminal__prompt">$</span> TF_VAR_greeting='from env' terraform plan -no-color | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + from my.auto.tfvars, wired-stag!</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -no-color -var-file=custom.tfvars | grep -E '^ +\+ .*wired-stag'</span><span class="terminal__line">          + from custom.tfvars, wired-stag!</span></pre>
+</div>
+<p>
+  <code>my.auto.tfvars</code> は <code>terraform.tfvars</code> にも環境変数にも勝ちますが、<code>-var-file</code> には負けました。
+  ここまでの結果を、弱い順に並べると次のとおりです。
+</p>
+<table>
+  <thead>
+    <tr><th>順位</th><th>渡し方</th><th>確かめた組み合わせと結果</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1（最も弱い）</td><td><code>variable</code> の <code>default</code></td><td>何も渡さないときだけ使われる</td></tr>
+    <tr><td>2</td><td>環境変数 <code>TF_VAR_&lt;名前&gt;</code></td><td>default には勝つが、<code>terraform.tfvars</code> にも <code>*.auto.tfvars</code> にも負ける</td></tr>
+    <tr><td>3</td><td><code>terraform.tfvars</code></td><td>環境変数に勝ち、<code>*.auto.tfvars</code> に負ける</td></tr>
+    <tr><td>4</td><td><code>*.auto.tfvars</code></td><td><code>terraform.tfvars</code> に勝ち、<code>-var-file</code> に負ける</td></tr>
+    <tr><td>5（最も強い）</td><td><code>-var</code> / <code>-var-file</code></td><td>ファイルや環境変数より強い。両方あるときはコマンドラインで後に書いた方が勝つ</td></tr>
+  </tbody>
+</table>
+<p>
+  この順番は、公式ドキュメントの <a href="https://developer.hashicorp.com/terraform/language/values/variables#assign-values-to-variables">Input Variables の「Assign values to variables」</a> に載っている優先順位（強い順に書かれています）と一致します。
+  <code>terraform.tfvars.json</code> や、<code>*.auto.tfvars</code> が複数あるときの読み込み順も、このページに書かれています。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p>表の各行の組み合わせを自分でも試し、<code>grep</code> で表示される <code>content</code> の行が表のとおりになることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">default の無い変数を追加し、<code>terraform.tfvars</code> で渡す</h3>
+        </div>
+        <div class="step__body">
+
+<p>試しに作った変数ファイルを、いったんすべて削除します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm custom.tfvars my.auto.tfvars terraform.tfvars</span></pre>
+</div>
+<p>
+  次に、ファイルの作成者名を表す変数 <code>owner</code> を追加します。今度は <code>default</code> を書きません。default の無い変数は、必ず値を渡す必要がある「必須」の変数になります。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">variables.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">   default     = "Hello"</span><span class="diff-line"> }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+variable "owner" {</span><span class="diff-line diff-line--add">+  type        = string</span><span class="diff-line diff-line--add">+  description = "ファイルの作成者名（default なし。必ず値を渡す）"</span><span class="diff-line diff-line--add">+}</span></pre>
+</div>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> resource "local_file" "hello" {</span><span class="diff-line">   filename = "${path.module}/output/hello.txt"</span><span class="diff-line diff-line--remove">-  content  = "${var.greeting}, ${random_pet.greeter.id}!\n"</span><span class="diff-line diff-line--add">+  content  = "${var.greeting}, ${random_pet.greeter.id}! (by ${var.owner})\n"</span><span class="diff-line"> }</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span></pre>
+</div>
+<p>
+  値を渡さずに <code>plan</code> を実行すると、Terraform は値の入力を求めます。<code>Alice</code> と入力して <kbd>Enter</kbd> を押すと、計画の作成が続きます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">var.owner</span><span class="terminal__line">  ファイルの作成者名（default なし。必ず値を渡す）</span><span class="terminal__line"></span><span class="terminal__line">  Enter a value: Alice</span><span class="terminal__line"></span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=8da986fde420cfbfe7d467e2e8ee6f8a3d02cb64]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>var.owner</code> と、<code>variables.tf</code> に書いた <code>description</code> の後に <code>Enter a value:</code> と表示され、入力待ちになります。入力した文字はそのまま表示されます。
+</p>
+<p>CI などで入力を求められると困る場合は、<code>-input=false</code> を付けます。値が無ければ、入力を求めずにエラーで止まります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -input=false</span><span class="terminal__line"></span><span class="terminal__line">Error: No value for required variable</span><span class="terminal__line"></span><span class="terminal__line">  on variables.tf line 7:</span><span class="terminal__line">   7: variable "owner" {</span><span class="terminal__line"></span><span class="terminal__line">The root module input variable "owner" is not set, and has no default value.</span><span class="terminal__line">Use a -var or -var-file command line argument to provide a value for this</span><span class="terminal__line">variable.</span></pre>
+</div>
+<p>エラーの案内どおり、<code>-var</code> や <code>-var-file</code>、環境変数で渡せば進みます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> TF_VAR_owner=Alice terraform plan -no-color -input=false | grep -E '^ +\+ .*wired'</span><span class="terminal__line">          + Hello, wired-stag! (by Alice)</span></pre>
+</div>
+<p>宣言していない変数に値を渡すと、エラーになります。変数名の打ち間違いに気づけます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -input=false -var 'nosuch=1' -var owner=A</span><span class="terminal__line"></span><span class="terminal__line">Error: Value for undeclared variable</span><span class="terminal__line"></span><span class="terminal__line">A variable named "nosuch" was assigned on the command line, but the root</span><span class="terminal__line">module does not declare a variable of that name. To use this value, add a</span><span class="terminal__line">"variable" block to the configuration.</span></pre>
+</div>
+<p>
+  毎回 <code>-var</code> を付けるのは手間なので、<code>owner</code> の値は <code>terraform.tfvars</code> で渡すことにします。改めて <code>terraform.tfvars</code> を作ります。
+</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">terraform.tfvars</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">owner = "Alice"</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=8da986fde420cfbfe7d467e2e8ee6f8a3d02cb64]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">-/+ destroy and then create replacement</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello must be replaced</span><span class="terminal__line">-/+ resource "local_file" "hello" {</span><span class="terminal__line">      ~ content              = &lt;&lt;-EOT # forces replacement</span><span class="terminal__line">          - Good morning, wired-stag!</span><span class="terminal__line">          + Hello, wired-stag! (by Alice)</span><span class="terminal__line">        EOT</span><span class="terminal__line">      …</span><span class="terminal__line">        # (3 unchanged attributes hidden)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 1 to add, 0 to change, 1 to destroy.</span><span class="terminal__line">local_file.hello: Destroying... [id=8da986fde420cfbfe7d467e2e8ee6f8a3d02cb64]</span><span class="terminal__line">local_file.hello: Destruction complete after 0s</span><span class="terminal__line">local_file.hello: Creating...</span><span class="terminal__line">local_file.hello: Creation complete after 0s [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 1 added, 0 changed, 1 destroyed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">Hello, wired-stag! (by Alice)</span></pre>
+</div>
+<p>
+  差分の変更前が <code>Good morning, wired-stag!</code> になっているのは、ステップ 2 で <code>-var</code> を付けて <code>apply</code> した内容が state に残っていたからです。<code>-var</code> を付けない <code>apply</code> で、default の <code>Hello</code> に戻りました。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>-input=false</code> の <code>plan</code> が <code>Error: No value for required variable</code> で止まることを確認してください。<code>terraform.tfvars</code> を作った後の <code>apply</code> では、<code>hello.txt</code> が <code>Hello, …! (by Alice)</code> になります。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">型と <code>validation</code> で値を検査し、<code>sensitive</code> で表示を伏せる</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  文字列以外の型の変数と、機微な値の変数を追加します。<code>variables.tf</code> を次の内容にします（<code>pet_length</code>・<code>shout</code>・<code>api_token</code> の 3 つを追加）。これが <code>variables.tf</code> の完成形です。
+</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">variables.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">variable "greeting" {
+  type        = string
+  description = "ファイルに書くあいさつ文"
+  default     = "Hello"
+}
+
+variable "owner" {
+  type        = string
+  description = "ファイルの作成者名（default なし。必ず値を渡す）"
+}
+
+variable "pet_length" {
+  type        = number
+  description = "random_pet の名前を構成する単語の数（1〜5）"
+  default     = 2
+
+  validation {
+    condition     = var.pet_length &gt;= 1 &amp;&amp; var.pet_length &lt;= 5
+    error_message = "pet_length は 1 以上 5 以下で指定してください。"
+  }
+}
+
+variable "shout" {
+  type        = bool
+  description = "true にするとあいさつ文を大文字にする"
+  default     = false
+}
+
+variable "api_token" {
+  type        = string
+  description = "ダミーの API トークン（機微な値の例）"
+  sensitive   = true
+  default     = "dummy-token-12345"
+}</code></pre>
+</div>
+<ul>
+  <li><code>pet_length</code>: 数値（<code>number</code>）の変数です。<code>validation</code> ブロックで「1 以上 5 以下」という条件を付けています。<code>condition</code> が <code>false</code> になる値を渡すと、<code>error_message</code> を表示して止まります</li>
+  <li><code>shout</code>: 真偽値（<code>bool</code>）の変数です。ステップ 6 で使います</li>
+  <li><code>api_token</code>: <code>sensitive = true</code> を付けた、機微な値の例です。default の <code>dummy-token-12345</code> は練習用のダミーです。本物のトークンやパスワードを default に書いてはいけません</li>
+</ul>
+<p>
+  <code>main.tf</code> では、<code>random_pet</code> の <code>length</code> を <code>var.pet_length</code> に変え、<code>api_token</code> をファイルに書き出す <code>local_sensitive_file</code> を追加します。<code>local_sensitive_file</code> は、機微な内容のファイルを作るための <code>local_file</code> の仲間です。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> </span><span class="diff-line"> resource "random_pet" "greeter" {</span><span class="diff-line diff-line--remove">-  length = 2</span><span class="diff-line diff-line--add">+  length = var.pet_length</span><span class="diff-line"> }</span><span class="diff-line"> </span><span class="diff-line"> …</span><span class="diff-line">   content  = "${var.greeting}, ${random_pet.greeter.id}! (by ${var.owner})\n"</span><span class="diff-line"> }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+resource "local_sensitive_file" "token" {</span><span class="diff-line diff-line--add">+  filename = "${path.module}/output/token.txt"</span><span class="diff-line diff-line--add">+  content  = var.api_token</span><span class="diff-line diff-line--add">+}</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform fmt -check -recursive</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span></pre>
+</div>
+<p>まず、条件に合わない値を渡してみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -input=false -var pet_length=9</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line"></span><span class="terminal__line">Terraform planned the following actions, but then encountered a problem:</span><span class="terminal__line"></span><span class="terminal__line">  # local_sensitive_file.token will be created</span><span class="terminal__line">  + resource "local_sensitive_file" "token" {</span><span class="terminal__line">      …</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 1 to add, 0 to change, 0 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Error: Invalid value for variable</span><span class="terminal__line"></span><span class="terminal__line">  on variables.tf line 12:</span><span class="terminal__line">  12: variable "pet_length" {</span><span class="terminal__line">    ├────────────────</span><span class="terminal__line">    │ var.pet_length is 9</span><span class="terminal__line"></span><span class="terminal__line">pet_length は 1 以上 5 以下で指定してください。</span><span class="terminal__line"></span><span class="terminal__line">This was checked by the validation rule at variables.tf:17,3-13.</span></pre>
+</div>
+<p>
+  <code>Error: Invalid value for variable</code> の後に、<code>validation</code> に書いた <code>error_message</code> がそのまま表示されました。
+  エラーの前に、<code>local_sensitive_file.token</code> の作成計画が表示されている点に注意してください。<code>Terraform planned the following actions, but then encountered a problem:</code> とあるとおり、計画の途中でエラーになったので、この計画は実行できません。
+</p>
+<p>次に、型に合わない値を渡します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -input=false -var pet_length=abc</span><span class="terminal__line">…</span><span class="terminal__line">Error: Invalid value for input variable</span><span class="terminal__line"></span><span class="terminal__line">  on variables.tf line 12:</span><span class="terminal__line">  12: variable "pet_length" {</span><span class="terminal__line"></span><span class="terminal__line">Unsuitable value for var.pet_length set using -var="pet_length=...": a number</span><span class="terminal__line">is required.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -input=false -var shout=maybe</span><span class="terminal__line">…</span><span class="terminal__line">Error: Invalid value for input variable</span><span class="terminal__line"></span><span class="terminal__line">  on variables.tf line 23:</span><span class="terminal__line">  23: variable "shout" {</span><span class="terminal__line"></span><span class="terminal__line">Unsuitable value for var.shout set using -var="shout=...": a bool is</span><span class="terminal__line">required.</span></pre>
+</div>
+<p>
+  型が合わないときは <code>Error: Invalid value for input variable</code> になり、<code>a number is required.</code> や <code>a bool is required.</code> のように、必要な型が示されます。「…」は、上と同じ <code>local_sensitive_file.token</code> の計画の部分です。
+  <code>validation</code> 違反の <code>Invalid value for variable</code> と、型違反の <code>Invalid value for input variable</code> は、見出しが似ているので見分けましょう。なお、<code>-var shout=yes</code> も同じエラーになりました。
+</p>
+<p>値を渡さずに <code>apply</code> して、トークンのファイルを作ります。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_sensitive_file.token will be created</span><span class="terminal__line">  + resource "local_sensitive_file" "token" {</span><span class="terminal__line">      + content              = (sensitive value)</span><span class="terminal__line">      …</span><span class="terminal__line">      + id                   = (known after apply)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 1 to add, 0 to change, 0 to destroy.</span><span class="terminal__line">local_sensitive_file.token: Creating...</span><span class="terminal__line">local_sensitive_file.token: Creation complete after 0s [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 1 added, 0 changed, 0 destroyed.</span></pre>
+</div>
+<p>
+  <code>content</code> が <code>(sensitive value)</code> と伏せて表示されました。では、実物と state はどうなっているでしょうか。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/token.txt</span><span class="terminal__line">dummy-token-12345</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n 'dummy-token' terraform.tfstate</span><span class="terminal__line">56:            "content": "dummy-token-12345",</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -l output</span><span class="terminal__line">total 16</span><span class="terminal__line">-rwxr-xr-x@ 1 yourname  staff  30 10月  4 12:51 hello.txt</span><span class="terminal__line">-rwx------@ 1 yourname  staff  17 10月  4 12:51 token.txt</span></pre>
+</div>
+<p>
+  ファイルにも state にも、トークンが平文で入っています。<code>sensitive</code> は <code>plan</code> や <code>apply</code> の画面に表示しないための印で、値を暗号化するものではありません。
+  01 で「state はコミットしない」とした理由の 1 つがこれです。なお、<code>token.txt</code> の権限は <code>-rwx------</code>（<code>local_sensitive_file</code> の既定 <code>0700</code>。所有者以外は読めない）になっています。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>-var pet_length=9</code> では <code>Invalid value for variable</code> と自分で書いたメッセージが表示されます。<code>-var pet_length=abc</code> では <code>Invalid value for input variable</code> が表示されます。あわせて、<code>apply</code> 後の <code>terraform.tfstate</code> にトークンが平文で入っていることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>locals</code> で式に名前を付ける</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  <code>main.tf</code> には、<code>"${path.module}/output"</code> が 2 回出てきます。また、<code>content</code> の式は長くなってきました。
+  <code>locals</code> ブロックで、こうした値や式に名前を付けます。付けた名前は <code>local.&lt;名前&gt;</code> で参照します。変数と違い、外から値を渡すものではなく、設定の中で計算した値に名前を付けるものです。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+locals {</span><span class="diff-line diff-line--add">+  output_dir    = "${path.module}/output"</span><span class="diff-line diff-line--add">+  greeting_text = var.shout ? upper(var.greeting) : var.greeting</span><span class="diff-line diff-line--add">+  message       = "${local.greeting_text}, ${random_pet.greeter.id}! (by ${var.owner})\n"</span><span class="diff-line diff-line--add">+}</span><span class="diff-line diff-line--add">+</span><span class="diff-line"> resource "random_pet" "greeter" {</span><span class="diff-line">   length = var.pet_length</span><span class="diff-line"> …</span><span class="diff-line"> </span><span class="diff-line"> resource "local_file" "hello" {</span><span class="diff-line diff-line--remove">-  filename = "${path.module}/output/hello.txt"</span><span class="diff-line diff-line--remove">-  content  = "${var.greeting}, ${random_pet.greeter.id}! (by ${var.owner})\n"</span><span class="diff-line diff-line--add">+  filename = "${local.output_dir}/hello.txt"</span><span class="diff-line diff-line--add">+  content  = local.message</span><span class="diff-line"> }</span><span class="diff-line"> </span><span class="diff-line"> resource "local_sensitive_file" "token" {</span><span class="diff-line diff-line--remove">-  filename = "${path.module}/output/token.txt"</span><span class="diff-line diff-line--add">+  filename = "${local.output_dir}/token.txt"</span><span class="diff-line">   content  = var.api_token</span><span class="diff-line"> }</span></pre>
+</div>
+<ul>
+  <li><code>output_dir</code>: 出力先のディレクトリ。2 つのリソースの <code>filename</code> で使います</li>
+  <li><code>greeting_text</code>: <code>var.shout</code> が <code>true</code> なら <code>upper()</code> で大文字にし、そうでなければそのまま使います（<code>条件 ? 真のとき : 偽のとき</code> の条件式）</li>
+  <li><code>message</code>: ファイルに書く文。ほかのローカル値（<code>local.greeting_text</code>）も参照できます</li>
+</ul>
+<p>これで <code>main.tf</code> は完成です。全文は次のとおりです。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">terraform {
+  required_version = "&gt;= 1.9"
+
+  required_providers {
+    local = {
+      source  = "hashicorp/local"
+      version = "~&gt; 2.9"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~&gt; 3.9"
+    }
+  }
+}
+
+locals {
+  output_dir    = "${path.module}/output"
+  greeting_text = var.shout ? upper(var.greeting) : var.greeting
+  message       = "${local.greeting_text}, ${random_pet.greeter.id}! (by ${var.owner})\n"
+}
+
+resource "random_pet" "greeter" {
+  length = var.pet_length
+}
+
+resource "local_file" "hello" {
+  filename = "${local.output_dir}/hello.txt"
+  content  = local.message
+}
+
+resource "local_sensitive_file" "token" {
+  filename = "${local.output_dir}/token.txt"
+  content  = var.api_token
+}</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform fmt -check -recursive</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line"></span><span class="terminal__line">No changes. Your infrastructure matches the configuration.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has compared your real infrastructure against your configuration</span><span class="terminal__line">and found no differences, so no changes are needed.</span></pre>
+</div>
+<p>
+  <code>No changes.</code> になりました。書き方を整理しただけで、できあがる値（ファイルのパスと内容）は変わっていないからです。このように、<code>plan</code> で差分が出ないことを確かめながら設定を整理できます。
+  次に、<code>shout</code> を <code>true</code> にしてみます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -no-color -var shout=true | grep -E '^ +[-+~] .*wired'</span><span class="terminal__line">          - Hello, wired-stag! (by Alice)</span><span class="terminal__line">          + HELLO, wired-stag! (by Alice)</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve -var shout=true</span><span class="terminal__line">…</span><span class="terminal__line">Plan: 1 to add, 0 to change, 1 to destroy.</span><span class="terminal__line">local_file.hello: Destroying... [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line">local_file.hello: Destruction complete after 0s</span><span class="terminal__line">local_file.hello: Creating...</span><span class="terminal__line">local_file.hello: Creation complete after 0s [id=fce645e75bfa5f124fcde9b9b831dca4163a85de]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 1 added, 0 changed, 1 destroyed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">HELLO, wired-stag! (by Alice)</span></pre>
+</div>
+<p>あいさつ文だけが大文字になりました。<code>-var</code> を付けずに <code>apply</code> して元に戻します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line">…</span><span class="terminal__line">  # local_file.hello must be replaced</span><span class="terminal__line">-/+ resource "local_file" "hello" {</span><span class="terminal__line">      ~ content              = &lt;&lt;-EOT # forces replacement</span><span class="terminal__line">          - HELLO, wired-stag! (by Alice)</span><span class="terminal__line">          + Hello, wired-stag! (by Alice)</span><span class="terminal__line">        EOT</span><span class="terminal__line">…</span><span class="terminal__line">Plan: 1 to add, 0 to change, 1 to destroy.</span><span class="terminal__line">local_file.hello: Destroying... [id=fce645e75bfa5f124fcde9b9b831dca4163a85de]</span><span class="terminal__line">local_file.hello: Destruction complete after 0s</span><span class="terminal__line">local_file.hello: Creating...</span><span class="terminal__line">local_file.hello: Creation complete after 0s [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 1 added, 0 changed, 1 destroyed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">Hello, wired-stag! (by Alice)</span></pre>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>locals</code> に書き換えた直後の <code>plan</code> が <code>No changes.</code> になることを確認してください。また、<code>-var shout=true</code> の <code>apply</code> で <code>HELLO, …!</code> となり、付けずに <code>apply</code> すると <code>Hello, …!</code> へ戻ることも確かめましょう。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">出力値で結果を返す</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  ペットの名前は <code>apply</code> するまで決まらず、これまでは <code>cat output/hello.txt</code> で確かめていました。こうした「作った結果」を外へ返すのが出力値（<code>output</code>）です。
+  <code>outputs.tf</code> を作り、ファイルのパスとペットの名前を返します。
+</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">outputs.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">output "hello_path" {
+  description = "生成したあいさつファイルのパス"
+  value       = local_file.hello.filename
+}
+
+output "pet_name" {
+  description = "random_pet が作った名前"
+  value       = random_pet.greeter.id
+}</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  + hello_path = "./output/hello.txt"</span><span class="terminal__line">  + pet_name   = "wired-stag"</span><span class="terminal__line"></span><span class="terminal__line">You can apply this plan to save these new output values to the Terraform</span><span class="terminal__line">state, without changing any real infrastructure.</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>Changes to Outputs:</code> に、追加される出力値が表示されました。リソースは何も変わりませんが、<code>apply</code> すると出力値が state に保存されます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  + hello_path = "./output/hello.txt"</span><span class="terminal__line">  + pet_name   = "wired-stag"</span><span class="terminal__line"></span><span class="terminal__line">You can apply this plan to save these new output values to the Terraform</span><span class="terminal__line">state, without changing any real infrastructure.</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 0 added, 0 changed, 0 destroyed.</span><span class="terminal__line"></span><span class="terminal__line">Outputs:</span><span class="terminal__line"></span><span class="terminal__line">hello_path = "./output/hello.txt"</span><span class="terminal__line">pet_name = "wired-stag"</span></pre>
+</div>
+<p><code>apply</code> の最後に <code>Outputs:</code> が表示されます。後から取り出すには <code>terraform output</code> を使います。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform output</span><span class="terminal__line">hello_path = "./output/hello.txt"</span><span class="terminal__line">pet_name = "wired-stag"</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform output pet_name</span><span class="terminal__line">"wired-stag"</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform output -raw pet_name</span><span class="terminal__line">wired-stag</span></pre>
+</div>
+<p>
+  名前を指定すると、その値だけを表示します。文字列は <code>"wired-stag"</code> のように引用符付きで表示されます。
+  <code>-raw</code> を付けると、引用符を付けずに値だけを出力します。末尾の改行も出力しないので、実際の端末では次のプロンプトが同じ行に続きます。シェルのコマンド置換に埋め込むときに便利です。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> echo "Hello, $(terraform output -raw pet_name)"</span><span class="terminal__line">Hello, wired-stag</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform output -json</span><span class="terminal__line">{</span><span class="terminal__line">  "hello_path": {</span><span class="terminal__line">    "sensitive": false,</span><span class="terminal__line">    "type": "string",</span><span class="terminal__line">    "value": "./output/hello.txt"</span><span class="terminal__line">  },</span><span class="terminal__line">  "pet_name": {</span><span class="terminal__line">    "sensitive": false,</span><span class="terminal__line">    "type": "string",</span><span class="terminal__line">    "value": "wired-stag"</span><span class="terminal__line">  }</span><span class="terminal__line">}</span></pre>
+</div>
+<p>
+  <code>-json</code> は、すべての出力値を JSON で出力します。値（<code>value</code>）に加えて、型（<code>type</code>）と機微な値かどうか（<code>sensitive</code>）も含まれるので、ほかのプログラムで読み取るときに使います。
+</p>
+<p>
+  続いて、ステップ 5 の <code>api_token</code> も出力値にしてみます。<code>outputs.tf</code> の末尾に追加します。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">outputs.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">   value       = random_pet.greeter.id</span><span class="diff-line"> }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+output "token" {</span><span class="diff-line diff-line--add">+  description = "ダミーの API トークン"</span><span class="diff-line diff-line--add">+  value       = var.api_token</span><span class="diff-line diff-line--add">+}</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line"></span><span class="terminal__line">Error: Output refers to sensitive values</span><span class="terminal__line"></span><span class="terminal__line">  on outputs.tf line 11:</span><span class="terminal__line">  11: output "token" {</span><span class="terminal__line"></span><span class="terminal__line">To reduce the risk of accidentally exporting sensitive data that was intended</span><span class="terminal__line">to be only internal, Terraform requires that any root module output</span><span class="terminal__line">containing sensitive data be explicitly marked as sensitive, to confirm your</span><span class="terminal__line">intent.</span><span class="terminal__line"></span><span class="terminal__line">If you do intend to export this data, annotate the output value as sensitive</span><span class="terminal__line">by adding the following argument:</span><span class="terminal__line">    sensitive = true</span></pre>
+</div>
+<p>
+  <code>Error: Output refers to sensitive values</code> になりました。<code>sensitive = true</code> の変数から作った値を、印を付けずに出力しようとしたためです。
+  機微な値をうっかり外へ出さないよう、出力する意思を <code>sensitive = true</code> で明示するよう求められています。案内どおりに追加します。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">outputs.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">   description = "ダミーの API トークン"</span><span class="diff-line">   value       = var.api_token</span><span class="diff-line diff-line--add">+  sensitive   = true</span><span class="diff-line"> }</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply -auto-approve</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  + token      = (sensitive value)</span><span class="terminal__line"></span><span class="terminal__line">You can apply this plan to save these new output values to the Terraform</span><span class="terminal__line">state, without changing any real infrastructure.</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 0 added, 0 changed, 0 destroyed.</span><span class="terminal__line"></span><span class="terminal__line">Outputs:</span><span class="terminal__line"></span><span class="terminal__line">hello_path = "./output/hello.txt"</span><span class="terminal__line">pet_name = "wired-stag"</span><span class="terminal__line">token = &lt;sensitive&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform output</span><span class="terminal__line">hello_path = "./output/hello.txt"</span><span class="terminal__line">pet_name = "wired-stag"</span><span class="terminal__line">token = &lt;sensitive&gt;</span></pre>
+</div>
+<p>一覧では <code>&lt;sensitive&gt;</code> と伏せられています。しかし、名前を指定したり <code>-raw</code> や <code>-json</code> を付けたりすると、平文で表示されます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform output token</span><span class="terminal__line">"dummy-token-12345"</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform output -raw token</span><span class="terminal__line">dummy-token-12345</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform output -json</span><span class="terminal__line">{</span><span class="terminal__line">…</span><span class="terminal__line">  "token": {</span><span class="terminal__line">    "sensitive": true,</span><span class="terminal__line">    "type": "string",</span><span class="terminal__line">    "value": "dummy-token-12345"</span><span class="terminal__line">  }</span><span class="terminal__line">}</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n 'dummy-token' terraform.tfstate</span><span class="terminal__line">16:      "value": "dummy-token-12345",</span><span class="terminal__line">70:            "content": "dummy-token-12345",</span></pre>
+</div>
+<div class="callout callout--warning">
+  <span class="callout__icon" aria-hidden="true">⚠️</span>
+  <div class="callout__body">
+    <p class="callout__title"><code>sensitive</code> は「表示を伏せる」だけ</p>
+    <p><code>sensitive = true</code> を付けた出力値も、<code>terraform output &lt;名前&gt;</code>・<code>-raw</code>・<code>-json</code> では平文で表示され、state には平文で保存されます（上の <code>grep</code> では、出力値の分とファイルの分の 2 か所に見つかりました）。画面やログに残さない工夫であって、値を守る仕組みではありません。state を誰が読めるかも含めて管理しましょう。</p>
+  </div>
+</div>
+<p>これで <code>outputs.tf</code> は完成です。全文は次のとおりです。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">outputs.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">output "hello_path" {
+  description = "生成したあいさつファイルのパス"
+  value       = local_file.hello.filename
+}
+
+output "pet_name" {
+  description = "random_pet が作った名前"
+  value       = random_pet.greeter.id
+}
+
+output "token" {
+  description = "ダミーの API トークン"
+  value       = var.api_token
+  sensitive   = true
+}</code></pre>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>terraform output</code> で <code>hello_path</code>・<code>pet_name</code>・<code>token = &lt;sensitive&gt;</code> が表示され、<code>terraform output -raw pet_name</code> でペットの名前だけが引用符なしで出力されることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">変数ファイルの扱いを決め、<code>destroy</code> で片付ける</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  ファイルは役割ごとに <code>main.tf</code>（リソースとローカル値）・<code>variables.tf</code>（入力変数）・<code>outputs.tf</code>（出力値）・<code>terraform.tfvars</code>（変数の値）に分かれました。
+  Git での扱いを、次の方針で決めます。
+</p>
+<ul>
+  <li><code>terraform.tfvars</code> には機微でない値だけを書き、コミットする（今回は <code>owner = "Alice"</code> だけ）</li>
+  <li>トークンやパスワードなどの機微な値は、環境変数 <code>TF_VAR_&lt;名前&gt;</code> で渡すか、<code>.gitignore</code> で無視した変数ファイル（<code>*.auto.tfvars</code> や <code>secret.tfvars</code> など）に書く</li>
+</ul>
+<p><code>.gitignore</code> に、機微な値を書く変数ファイルのパターンを追加します。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">.gitignore</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line"> *.tfstate.*</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+# 機微な値を書く変数ファイル。terraform.tfvars は機微な値を入れない前提でコミットする</span><span class="diff-line diff-line--add">+*.auto.tfvars</span><span class="diff-line diff-line--add">+secret*.tfvars</span><span class="diff-line diff-line--add">+</span><span class="diff-line"> # このレッスンで Terraform が生成するファイル</span><span class="diff-line"> output/</span></pre>
+</div>
+<p>これで <code>.gitignore</code> は完成です。全文は次のとおりです。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">gitignore</span>
+    <span class="code-block__filename">.gitignore</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext"># Terraform が作業用に作るディレクトリ（プロバイダーの実体が入る）
+.terraform/
+
+# state。リソースの実際の値が入るのでコミットしない
+*.tfstate
+*.tfstate.*
+
+# 機微な値を書く変数ファイル。terraform.tfvars は機微な値を入れない前提でコミットする
+*.auto.tfvars
+secret*.tfvars
+
+# このレッスンで Terraform が生成するファイル
+output/</code></pre>
+</div>
+<p>
+  <code>*.auto.tfvars</code> は自動で読み込まれるので、機微な値を置いておく場所として便利です。<code>secret.tfvars</code> のような名前のファイルは自動では読み込まれないので、<code>-var-file=secret.tfvars</code> で指定して使います。
+  無視されているかは <code>git check-ignore -v &lt;ファイル名&gt;</code> で確かめられます。執筆時に試したところ、<code>secret.tfvars</code> は <code>.gitignore</code> の 10 行目（<code>secret*.tfvars</code>）、<code>my.auto.tfvars</code> は 9 行目（<code>*.auto.tfvars</code>）で無視されていると表示されました。
+</p>
+<p>コミットするのは、<code>main.tf</code>・<code>variables.tf</code>・<code>outputs.tf</code>・<code>terraform.tfvars</code>・<code>.gitignore</code> と、01 と同じく <code>.terraform.lock.hcl</code> です。最後に、変更が残っていないことを確かめてから片付けます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform fmt -check -recursive</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line"></span><span class="terminal__line">No changes. Your infrastructure matches the configuration.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has compared your real infrastructure against your configuration</span><span class="terminal__line">and found no differences, so no changes are needed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform destroy -auto-approve</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=wired-stag]</span><span class="terminal__line">local_sensitive_file.token: Refreshing state... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  - destroy</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello will be destroyed</span><span class="terminal__line">…</span><span class="terminal__line">  # random_pet.greeter will be destroyed</span><span class="terminal__line">  - resource "random_pet" "greeter" {</span><span class="terminal__line">      - id        = "wired-stag" -&gt; null</span><span class="terminal__line">      - length    = 2 -&gt; null</span><span class="terminal__line">      - separator = "-" -&gt; null</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 0 to add, 0 to change, 3 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Changes to Outputs:</span><span class="terminal__line">  - hello_path = "./output/hello.txt" -&gt; null</span><span class="terminal__line">  - pet_name   = "wired-stag" -&gt; null</span><span class="terminal__line">  - token      = (sensitive value) -&gt; null</span><span class="terminal__line">local_file.hello: Destroying... [id=bafb9796490e4ca8b64012c7dda06bd950a6609a]</span><span class="terminal__line">local_sensitive_file.token: Destroying... [id=69e0d7ee9c4bdaa5b910f26d8fb5f96c4cdc264f]</span><span class="terminal__line">local_file.hello: Destruction complete after 0s</span><span class="terminal__line">local_sensitive_file.token: Destruction complete after 0s</span><span class="terminal__line">random_pet.greeter: Destroying... [id=wired-stag]</span><span class="terminal__line">random_pet.greeter: Destruction complete after 0s</span><span class="terminal__line"></span><span class="terminal__line">Destroy complete! Resources: 3 destroyed.</span></pre>
+</div>
+<p>3 つのリソースが削除され、<code>Changes to Outputs:</code> のとおり出力値も消えました。state を確認します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cat terraform.tfstate | head -12</span><span class="terminal__line">{</span><span class="terminal__line">  "version": 4,</span><span class="terminal__line">  "terraform_version": "1.16.2",</span><span class="terminal__line">  "serial": 23,</span><span class="terminal__line">  "lineage": "c5969934-7233-7b80-9e27-e0199245222f",</span><span class="terminal__line">  "outputs": {},</span><span class="terminal__line">  "resources": [],</span><span class="terminal__line">  "check_results": [</span><span class="terminal__line">    {</span><span class="terminal__line">      "object_kind": "var",</span><span class="terminal__line">      "config_addr": "var.pet_length",</span><span class="terminal__line">      "status": "unknown",</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>outputs</code> と <code>resources</code> が空になっています。
+  01 と同じく、空になった <code>output/</code> ディレクトリが残るので、気になる場合は <code>rmdir output</code> で削除してください。
+</p>
+<div class="callout callout--note">
+  <span class="callout__icon" aria-hidden="true">ℹ️</span>
+  <div class="callout__body">
+    <p class="callout__title">この教材リポジトリの完成コードについて</p>
+    <p>完成コードを置いているブランチ <code>infra/terraform/02-variables-outputs</code> には、lock ファイルは含まれていません。01 と同じく、リポジトリのルートの <code>.gitignore</code> が <code>**/.terraform.lock.hcl</code> を無視する設定になっているためです。自分のプロジェクトでは lock ファイルをコミットしてください。</p>
+  </div>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>terraform destroy</code> が <code>Destroy complete! Resources: 3 destroyed.</code> で終わることを確認してください。また、<code>.gitignore</code> に <code>*.auto.tfvars</code> と <code>secret*.tfvars</code> があり、<code>terraform.tfvars</code> は無いことも確かめましょう。</p>
+</div>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>variable</code> ブロックで変数を宣言し、<code>var.greeting</code> で参照した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>-var</code> で渡した値が永続せず、付け忘れると default に戻る差分が出ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">default &lt; <code>TF_VAR_*</code> &lt; <code>terraform.tfvars</code> &lt; <code>*.auto.tfvars</code> &lt; <code>-var</code> / <code>-var-file</code> の優先順位を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">default の無い変数が入力を求めること、<code>-input=false</code> では <code>No value for required variable</code> で止まることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>validation</code> 違反（<code>Invalid value for variable</code>）と型違反（<code>Invalid value for input variable</code>）を見分けられる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>locals</code> で整理した後の <code>plan</code> が <code>No changes.</code> になることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>terraform output</code> の名前指定・<code>-raw</code>・<code>-json</code> の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>sensitive</code> は表示を伏せるだけで、state には平文で残ることを確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>-var</code> を付けたのに、次の <code>plan</code> で差分が出る</p>
+          <p><code>-var</code> で渡した値はその 1 回限りで、どこにも保存されません。次の <code>plan</code> / <code>apply</code> で付け忘れると、default（や <code>terraform.tfvars</code> など）の値で計画が作られ、元に戻す差分が出ます。毎回使う値は <code>terraform.tfvars</code> に書きましょう。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Error: No value for required variable</code> で止まる</p>
+          <p>default の無い変数の値が渡されていません。<code>-input=false</code> を付けていると、入力を求めずにこのエラーで止まります。<code>terraform.tfvars</code>・<code>-var</code>・環境変数 <code>TF_VAR_&lt;名前&gt;</code> のどれかで値を渡してください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Error: Value for undeclared variable</code> で止まる</p>
+          <p><code>-var</code> で渡した変数名が、<code>variable</code> ブロックで宣言されていません。変数名の打ち間違いか、<code>variables.tf</code> への宣言の書き忘れを確かめてください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>Error: Output refers to sensitive values</code> で止まる</p>
+          <p><code>sensitive = true</code> の変数から作った値を出力値にするときは、その <code>output</code> ブロックにも <code>sensitive = true</code> が必要です。エラー文の案内どおりに追加してください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ステップ 3 の <code>grep</code> で何も表示されない</p>
+          <p><code>grep</code> のパターンに執筆時のペットの名前 <code>wired-stag</code> が残っています。自分の環境のペットの名前に書き換えてください。また、<code>-no-color</code> を外すと色の制御文字が入り、パターンに一致しなくなります。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        入力変数で設定の外から値を受け取り、出力値で結果を外へ返せるようになりました。値の渡し方には優先順位があること、<code>type</code> と <code>validation</code> で受け取る値を検査できること、<code>sensitive</code> は表示を伏せるだけで state には平文で残ることも確かめました。
+        次の項目では、設定をモジュールにまとめて再利用します。今回作った入力変数と出力値は、そのままモジュールの「入口」と「出口」になります。
+      </p>
+
+      <h2 id="references">参考資料</h2>
+      <ul>
+        <li><a href="https://developer.hashicorp.com/terraform/language/values/variables#assign-values-to-variables">Input Variables</a>（優先順位は Assign values to variables の節）</li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/values/outputs">Output Values</a></li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/values/locals">Local Values</a></li>
+        <li><a href="https://developer.hashicorp.com/terraform/cli/commands/output">Command: output</a></li>
+        <li><a href="https://registry.terraform.io/providers/hashicorp/local/latest/docs/resources/sensitive_file">local_sensitive_file</a>（hashicorp/local）</li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>infra/terraform/02-variables-outputs</code> の <code>infra/terraform/02-variables-outputs/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../01-basics/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">01: Terraform の基本操作</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">03: モジュール化</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../../assets/js/main.js"></script>
+</body>
+</html>
