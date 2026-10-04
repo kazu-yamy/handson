@@ -1433,7 +1433,7 @@ class TodoRepositoryTest {
   <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;run-as com.handson.android01 ls files/datastore&quot;</span><span class="terminal__line">run-as: package not debuggable: com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -c &quot;FATAL EXCEPTION&quot;</span><span class="terminal__line">0</span></pre>
 </div>
           <p>起動し直すと、「完了」のチップが選ばれた状態で、完了済みの Todo だけが出ました。release ビルドは debuggable でないので、<code>run-as</code> は使えず、設定ファイルの中身は見られません。画面の動きで確かめます。R8 で DataStore が動かなくなることはなく、<code>proguard-rules.pro</code> に keep ルールを足す必要はありませんでした。</p>
-          <p>確認が終わったら、作業用ディレクトリの APK を削除し、アプリをアンインストールします。エミュレータと Gradle デーモンも止めます。</p>
+          <p>確認が終わったら、作業用ディレクトリの APK を削除し、アプリをアンインストールします。エミュレータと Gradle デーモンも止めます。Gradle デーモンは、プロジェクトのディレクトリに戻ってから止めます。</p>
 
 <div class="terminal">
   <div class="terminal__header">
@@ -1442,7 +1442,7 @@ class TodoRepositoryTest {
     <span class="terminal__dot"></span>
     <span class="terminal__title">Terminal</span>
   </div>
-  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd -</span><span class="terminal__line">&lt;プロジェクトのディレクトリ&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
 </div>
 
           <div class="step__check">
@@ -1577,7 +1577,7 @@ class TodoRepositoryTest {
         「最初の一覧を取得済み」の印を保存し、API に行くかどうかを DB の中身ではなく印で決めるようにしたので、全件削除して起動し直しても API から取り直しません。取得に失敗したときは印を付けず、再試行で取得できます。
         絞り込みは <code>SavedStateHandle</code> から DataStore に移し、アプリを終了しても保たれるようにしました。起動直後は読み込み中の表示が出ているので、既定の「すべて」が見えることはありません。
         テストでは <code>DataStore&lt;Preferences&gt;</code> の偽物を使い、<code>SettingsRepository</code> は本物のまま、設定ファイルを作らずに通ります。</p>
-      <p>次の項目（13: Hilt）では、09 から手書きしてきた <code>AppContainer</code> を Hilt に置き換え、部品を Hilt に作らせます。<code>data</code> のパッケージの <code>SettingsRepository</code> は、画面側（<code>ui.screens</code>）の <code>TodoFilter</code> を参照しています。この依存の向きも、そこで整理します。</p>
+      <p>次の項目（<a href="../13-hilt/index.html">13: Hilt で依存性注入</a>）では、09 から手書きしてきた <code>AppContainer</code> を Hilt に置き換え、部品を Hilt に作らせます。<code>data</code> のパッケージの <code>SettingsRepository</code> は、画面側（<code>ui.screens</code>）の <code>TodoFilter</code> を参照しています。この依存の向きも、そこで整理します。</p>
 
       <div class="callout callout--note">
             <span class="callout__icon" aria-hidden="true">ℹ️</span>
@@ -1593,10 +1593,10 @@ class TodoRepositoryTest {
           <span class="lesson-nav__direction">← 前のレッスン</span>
           <span class="lesson-nav__title">11: Room 3 でローカル保存</span>
         </a>
-        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
-          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
-          <span class="lesson-nav__title">13: Hilt</span>
-        </span>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../13-hilt/index.html">
+          <span class="lesson-nav__direction">次のレッスン →</span>
+          <span class="lesson-nav__title">13: Hilt で依存性注入</span>
+        </a>
       </nav>
 
     </div>
