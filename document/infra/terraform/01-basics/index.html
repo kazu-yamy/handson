@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01: Terraform の基本操作 | Infra（Terraform）ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../../index.html">ハンズオン</a></li>
+          <li>Infra</li>
+          <li>Terraform</li>
+          <li aria-current="page">01</li>
+        </ol>
+        <h1 class="lesson-title">Terraform の基本操作</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: Terraform を初めて使う人</li>
+          <li class="lesson-meta__item">📋 前提: ターミナルでの基本的なコマンド操作（<code>cd</code> / <code>ls</code> / <code>cat</code> など）ができること。クラウドのアカウントは不要（ローカルにファイルを作るだけ）。Terraform がインストール済みであること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: なし（トラック最初の項目）</li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>terraform init</code> でプロバイダーを取得し、lock ファイルの役割を知る</li>
+          <li><code>fmt</code> / <code>validate</code> / <code>plan</code> / <code>apply</code> の流れでリソースを作る</li>
+          <li>state（<code>terraform.tfstate</code>）に何が記録されているかを確かめる</li>
+          <li>設定の変更が「置換」になる場合と、リソース間の暗黙の依存を <code>plan</code> の出力から読み取る</li>
+          <li>Terraform の外で実物を消したとき、<code>plan</code> がどう検出するかを確かめる</li>
+          <li><code>destroy</code> で片付け、Git にコミットするファイルとしないファイルを分ける</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        Infra トラックの最初の項目です。Terraform の設定ファイル（<code>.tf</code>）を書き、<code>init</code> → <code>plan</code> → <code>apply</code> の流れでリソースを作ってから、<code>destroy</code> で片付けるまでを一通り体験します。
+      </p>
+      <p>
+        クラウドのリソースは使いません。手元にテキストファイルを作る <code>local_file</code> と、ランダムな名前を作る <code>random_pet</code> だけを扱うので、アカウントの登録や料金の心配なしに試せます。
+        ここで覚える操作と state の考え方は、以降の各クラウドの項目でもそのまま使います。
+      </p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>
+            Terraform v1.16.2（darwin_arm64）/ hashicorp/local v2.9.1 / hashicorp/random v3.9.1 で動作を確認しています。
+            バージョンは執筆時点（2026年10月）のものです。<code>terraform init</code> はその時点の最新版のプロバイダーを選ぶため、実行する時期によっては新しいバージョンが入り、出力の内容も多少変わります。
+            掲載している出力は色なし（<code>-no-color</code> 相当）で取得したものです。
+          </p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">作業ディレクトリを作り、<code>init</code> の前に <code>plan</code> してみる</h3>
+        </div>
+        <div class="step__body">
+
+<p>まず Terraform が使えることを確かめます。<code>terraform version</code> でバージョンを表示します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform version</span><span class="terminal__line">Terraform v1.16.2</span><span class="terminal__line">on darwin_arm64</span><span class="terminal__line"></span><span class="terminal__line">Your version of Terraform is out of date! The latest version</span><span class="terminal__line">is 1.16.5. You can update by downloading from https://developer.hashicorp.com/terraform/install</span></pre>
+</div>
+<p>
+  最後の 3 行は、より新しい版が出ているときだけ表示される案内です。表示されなくても問題ありません。
+  <code>terraform</code> コマンドが見つからない場合は、<a href="https://developer.hashicorp.com/terraform/install">公式のインストールページ</a>の手順でインストールしてください。
+</p>
+<p>作業ディレクトリ <code>01-basics</code> を作り、その中に移動します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir 01-basics</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 01-basics</span></pre>
+</div>
+<p>
+  <code>main.tf</code> を作り、次の内容を書きます。<code>terraform</code> ブロックには、Terraform 本体の対応バージョンと、使うプロバイダー（Terraform から操作対象を扱うためのプラグイン）を書きます。
+  今回は、ローカルにファイルを作る <code>hashicorp/local</code> と、ランダムな値を作る <code>hashicorp/random</code> を使います。プロバイダーのバージョンは、この時点ではまだ書きません。
+</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">terraform {
+  required_version = "&gt;= 1.9"
+
+  required_providers {
+    local = {
+      source = "hashicorp/local"
+    }
+    random = {
+      source = "hashicorp/random"
+    }
+  }
+}</code></pre>
+</div>
+<p>この状態で、<code>init</code> をせずに <code>terraform plan</code> を実行してみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line"></span><span class="terminal__line">Error: Inconsistent dependency lock file</span><span class="terminal__line"></span><span class="terminal__line">The following dependency selections recorded in the lock file are</span><span class="terminal__line">inconsistent with the current configuration:</span><span class="terminal__line">  - provider registry.terraform.io/hashicorp/local: required by this configuration but no version is selected</span><span class="terminal__line">  - provider registry.terraform.io/hashicorp/random: required by this configuration but no version is selected</span><span class="terminal__line"></span><span class="terminal__line">To make the initial dependency selections that will initialize the dependency</span><span class="terminal__line">lock file, run:</span><span class="terminal__line">  terraform init</span></pre>
+</div>
+<p>
+  エラーになりました。文言は「依存関係の lock ファイルが設定と一致しない（Inconsistent dependency lock file）」というもので、「<code>init</code> していない」とは書かれていません。
+  設定にはプロバイダーが書かれているのに、どの版を使うかがまだ決まっていない、という意味です。対処として、最後の行で <code>terraform init</code> を実行するよう案内されています。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>terraform version</code> で <code>Terraform v1.16.2</code>（またはそれ以降）が表示され、<code>init</code> 前の <code>terraform plan</code> が <code>Error: Inconsistent dependency lock file</code> で止まることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>terraform init</code> でプロバイダーを取得する</h3>
+        </div>
+        <div class="step__body">
+
+<p><code>terraform init</code> を実行します。<code>main.tf</code> に書いたプロバイダーを Terraform Registry からダウンロードし、作業ディレクトリを使える状態にします。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform init</span><span class="terminal__line">Initializing the backend...</span><span class="terminal__line"></span><span class="terminal__line">Initializing provider plugins...</span><span class="terminal__line">- Finding latest version of hashicorp/local...</span><span class="terminal__line">- Finding latest version of hashicorp/random...</span><span class="terminal__line">- Installing hashicorp/local v2.9.1...</span><span class="terminal__line">- Installed hashicorp/local v2.9.1 (signed by HashiCorp)</span><span class="terminal__line">- Installing hashicorp/random v3.9.1...</span><span class="terminal__line">- Installed hashicorp/random v3.9.1 (signed by HashiCorp)</span><span class="terminal__line"></span><span class="terminal__line">Terraform has created a lock file .terraform.lock.hcl to record the provider</span><span class="terminal__line">selections it made above. Include this file in your version control repository</span><span class="terminal__line">so that Terraform can guarantee to make the same selections by default when</span><span class="terminal__line">you run "terraform init" in the future.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has been successfully initialized!</span><span class="terminal__line"></span><span class="terminal__line">You may now begin working with Terraform. Try running "terraform plan" to see</span><span class="terminal__line">any changes that are required for your infrastructure. All Terraform commands</span><span class="terminal__line">should now work.</span><span class="terminal__line"></span><span class="terminal__line">If you ever set or change modules or backend configuration for Terraform,</span><span class="terminal__line">rerun this command to reinitialize your working directory. If you forget, other</span><span class="terminal__line">commands will detect it and remind you to do so if necessary.</span></pre>
+</div>
+<p>バージョンを指定していないので、それぞれの最新版（local v2.9.1、random v3.9.1）が選ばれました。local と random の行の順番は、実行のたびに入れ替わることがあります。ディレクトリの中身を見てみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -la</span><span class="terminal__line">total 16</span><span class="terminal__line">drwxr-xr-x@ 5 yourname  staff   160 10月  4 12:34 .</span><span class="terminal__line">drwxr-xr-x@ 3 yourname  staff    96 10月  4 12:34 ..</span><span class="terminal__line">drwxr-xr-x@ 3 yourname  staff    96 10月  4 12:34 .terraform</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff  2350 10月  4 12:34 .terraform.lock.hcl</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff   180 10月  4 12:34 main.tf</span></pre>
+</div>
+<p>
+  2 つのものが増えています。<code>.terraform/</code> にはダウンロードしたプロバイダーの実行ファイルが入ります（<code>.terraform/providers/registry.terraform.io/hashicorp/</code> の下）。
+  <code>.terraform.lock.hcl</code> は、選ばれたプロバイダーの版とハッシュを記録する lock ファイルです。次に <code>init</code> したときも同じ版が選ばれるようにするためのもので、出力にあるとおり Git などで管理することが推奨されています。
+</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">.terraform.lock.hcl（抜粋）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl"># This file is maintained automatically by "terraform init".
+# Manual edits may be lost in future updates.
+
+provider "registry.terraform.io/hashicorp/local" {
+  version = "2.9.1"
+  hashes = [
+    "h1:OZGJN0LSSat5QIxZPxDXtVr4XpHb2oG7cVKJhSqBFIE=",
+    "zh:25606c7a5e308144fb627f6e31611bb52ff72bb9ae2d27af39673ab1a6b3c1bf",
+    …
+  ]
+}
+
+provider "registry.terraform.io/hashicorp/random" {
+  version = "3.9.1"
+  hashes = [
+    …
+  ]
+}</code></pre>
+</div>
+<p>
+  <code>hashes</code> の行は環境によって変わるため、ここでは省略しています。
+</p>
+<p>
+  次に、選ばれた版をもとに、プロバイダーのバージョン制約を <code>main.tf</code> に書き足します。
+  <code>~&gt; 2.9</code> は「2.9 以上、3.0 未満」という意味で、互換性のある範囲の更新だけを許します。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">     local = {</span><span class="diff-line diff-line--remove">-      source = "hashicorp/local"</span><span class="diff-line diff-line--add">+      source  = "hashicorp/local"</span><span class="diff-line diff-line--add">+      version = "~&gt; 2.9"</span><span class="diff-line">     }</span><span class="diff-line">     random = {</span><span class="diff-line diff-line--remove">-      source = "hashicorp/random"</span><span class="diff-line diff-line--add">+      source  = "hashicorp/random"</span><span class="diff-line diff-line--add">+      version = "~&gt; 3.9"</span><span class="diff-line">     }</span></pre>
+</div>
+<p>
+  <code>source</code> の後ろの空白が 1 つ増えているのは、<code>=</code> の位置をそろえるためです。後で使う <code>terraform fmt</code> が、この形に整えます。
+  設定を変えたので、もう一度 <code>init</code> し、<code>terraform validate</code> で、設定の文法と、参照や型などの整合性を検査します（プロバイダーの API やクラウドには接続しません）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform init</span><span class="terminal__line">Initializing the backend...</span><span class="terminal__line"></span><span class="terminal__line">Initializing provider plugins...</span><span class="terminal__line">- Reusing previous version of hashicorp/random from the dependency lock file</span><span class="terminal__line">- Reusing previous version of hashicorp/local from the dependency lock file</span><span class="terminal__line">- Using previously-installed hashicorp/random v3.9.1</span><span class="terminal__line">- Using previously-installed hashicorp/local v2.9.1</span><span class="terminal__line">…</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span></pre>
+</div>
+<p>2 回目の <code>init</code> は、lock ファイルに記録された版を再利用しています（出力の後半は 1 回目と同じなので省略しています）。</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>.terraform/</code> と <code>.terraform.lock.hcl</code> ができ、<code>terraform validate</code> が <code>Success! The configuration is valid.</code> を表示することを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">最初のリソースを書き、<code>plan</code> と <code>apply</code> で作る</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  いよいよ、Terraform で管理する対象（リソース）を書きます。<code>main.tf</code> の末尾に、テキストファイルを作る <code>local_file</code> リソースを追加します。
+  <code>resource "種類" "名前"</code> の形で書き、Terraform の中では <code>local_file.hello</code> という名前で指します。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">       version = "~&gt; 3.9"</span><span class="diff-line">     }</span><span class="diff-line">   }</span><span class="diff-line"> }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+resource "local_file" "hello" {</span><span class="diff-line diff-line--add">+  filename = "${path.module}/output/hello.txt"</span><span class="diff-line diff-line--add">+  content  = "Hello, Terraform!\n"</span><span class="diff-line diff-line--add">+}</span></pre>
+</div>
+<p>
+  <code>${path.module}</code> は、この <code>.tf</code> ファイルがあるディレクトリを表します。<code>filename</code> に書いた場所へ、<code>content</code> の内容でファイルが作られます。
+</p>
+<p>書いたら、<code>terraform fmt</code> で書式を整え、<code>terraform validate</code> で検査します。<code>fmt</code> は直す箇所が無ければ何も表示しません。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform fmt</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform validate</span><span class="terminal__line">Success! The configuration is valid.</span></pre>
+</div>
+<p>続いて <code>terraform plan</code> で、これから何が起きるか（実行計画）を確認します。<code>plan</code> は確認するだけで、実際には何も変更しません。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello will be created</span><span class="terminal__line">  + resource "local_file" "hello" {</span><span class="terminal__line">      + content              = &lt;&lt;-EOT</span><span class="terminal__line">            Hello, Terraform!</span><span class="terminal__line">        EOT</span><span class="terminal__line">      + content_base64sha256 = (known after apply)</span><span class="terminal__line">      + content_base64sha512 = (known after apply)</span><span class="terminal__line">      + content_md5          = (known after apply)</span><span class="terminal__line">      + content_sha1         = (known after apply)</span><span class="terminal__line">      + content_sha256       = (known after apply)</span><span class="terminal__line">      + content_sha512       = (known after apply)</span><span class="terminal__line">      + directory_permission = "0777"</span><span class="terminal__line">      + file_permission      = "0777"</span><span class="terminal__line">      + filename             = "./output/hello.txt"</span><span class="terminal__line">      + id                   = (known after apply)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 1 to add, 0 to change, 0 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">─────────────────────────────────────────────────────────────────────────────</span><span class="terminal__line"></span><span class="terminal__line">Note: You didn't use the -out option to save this plan, so Terraform can't</span><span class="terminal__line">guarantee to take exactly these actions if you run "terraform apply" now.</span></pre>
+</div>
+<p>
+  先頭の <code>+</code> は「作成する」という意味です。<code>(known after apply)</code> の項目は、実際に作るまで値が決まりません。
+  最後の行の <code>Plan: 1 to add, 0 to change, 0 to destroy.</code> が、追加・変更・削除の件数の要約です。
+</p>
+<p>
+  では <code>terraform apply</code> で実際に作ります。<code>apply</code> は実行計画をもう一度表示してから確認を求めるので、内容を確かめたうえで <code>yes</code> と入力して <kbd>Enter</kbd> を押します。<code>yes</code> 以外を入力すると中止されます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello will be created</span><span class="terminal__line">  + resource "local_file" "hello" {</span><span class="terminal__line">…</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 1 to add, 0 to change, 0 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Do you want to perform these actions?</span><span class="terminal__line">  Terraform will perform the actions described above.</span><span class="terminal__line">  Only 'yes' will be accepted to approve.</span><span class="terminal__line"></span><span class="terminal__line">  Enter a value: yes</span><span class="terminal__line">local_file.hello: Creating...</span><span class="terminal__line">local_file.hello: Creation complete after 0s [id=ae9c7cc6581fe6b7a01af3ee5fa123a4afc9bac1]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 1 added, 0 changed, 0 destroyed.</span></pre>
+</div>
+<p>
+  途中の実行計画は <code>plan</code> と同じなので省略しています。また、<code>plan</code> の最後に出ていた <code>Note: You didn't use the -out option ...</code> は、<code>apply</code> では表示されません。
+  ファイルができたか確かめます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">Hello, Terraform!</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -la output</span><span class="terminal__line">total 8</span><span class="terminal__line">drwxr-xr-x@ 3 yourname  staff   96 10月  4 12:34 .</span><span class="terminal__line">drwxr-xr-x@ 7 yourname  staff  224 10月  4 12:34 ..</span><span class="terminal__line">-rwxr-xr-x@ 1 yourname  staff   18 10月  4 12:34 hello.txt</span></pre>
+</div>
+<p>
+  <code>output/</code> ディレクトリは事前に作っていませんが、<code>local_file</code> が作ってくれました。
+  なお、<code>plan</code> では <code>file_permission = "0777"</code>（既定値）と表示されましたが、実際のファイルの権限は <code>-rwxr-xr-x</code> になっています。手元の umask の設定によって、表示とは違う権限で作られます。
+</p>
+<div class="callout callout--tip">
+  <span class="callout__icon" aria-hidden="true">💡</span>
+  <div class="callout__body">
+    <p class="callout__title"><code>filename</code> の表示が <code>./output/hello.txt</code> になる理由</p>
+    <p><code>main.tf</code> には <code>${path.module}/output/hello.txt</code> と書きましたが、実行計画では <code>./output/hello.txt</code> と表示されます。<code>terraform</code> を実行しているディレクトリ自体がモジュールのルートなので、<code>path.module</code> が <code>.</code> になるためです。</p>
+  </div>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>Apply complete! Resources: 1 added, 0 changed, 0 destroyed.</code> が表示され、<code>cat output/hello.txt</code> で <code>Hello, Terraform!</code> が表示されることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">state を見る</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  Terraform は、自分が作ったリソースを <strong>state</strong>（状態）に記録しています。<code>apply</code> の後、作業ディレクトリに <code>terraform.tfstate</code> というファイルが増えています。
+  まず、コマンドで state の中身を確認します。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform state list</span><span class="terminal__line">local_file.hello</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform state show local_file.hello</span><span class="terminal__line"># local_file.hello:</span><span class="terminal__line">resource "local_file" "hello" {</span><span class="terminal__line">    content              = &lt;&lt;-EOT</span><span class="terminal__line">        Hello, Terraform!</span><span class="terminal__line">    EOT</span><span class="terminal__line">    content_base64sha256 = "6wKS0JLRbqCUNW2dBDS6ihyRntb8v6POQLyDI/NZqBY="</span><span class="terminal__line">    content_base64sha512 = "MX78V3WKEUXOuUnAf2zhHGNSK4kET4IefngGjF0EWEtf2f8sSJvu//UH2UkFthAtRB3oxr7HUo3gIf2wwEw6tQ=="</span><span class="terminal__line">    content_md5          = "8478c39679b7757c7b0e23933667b124"</span><span class="terminal__line">    content_sha1         = "ae9c7cc6581fe6b7a01af3ee5fa123a4afc9bac1"</span><span class="terminal__line">    content_sha256       = "eb0292d092d16ea094356d9d0434ba8a1c919ed6fcbfa3ce40bc8323f359a816"</span><span class="terminal__line">    content_sha512       = "317efc57758a1145ceb949c07f6ce11c63522b89044f821e7e78068c5d04584b5fd9ff2c489beefff507d94905b6102d441de8c6bec7528de021fdb0c04c3ab5"</span><span class="terminal__line">    directory_permission = "0777"</span><span class="terminal__line">    file_permission      = "0777"</span><span class="terminal__line">    filename             = "./output/hello.txt"</span><span class="terminal__line">    id                   = "ae9c7cc6581fe6b7a01af3ee5fa123a4afc9bac1"</span><span class="terminal__line">}</span></pre>
+</div>
+<p>
+  <code>terraform state list</code> は、state に記録されているリソースの一覧です。<code>terraform state show &lt;名前&gt;</code> は、1 つのリソースの属性をすべて表示します。
+  作る前は <code>(known after apply)</code> だった <code>id</code> やハッシュ値が、ここでは確定しています。
+  <code>terraform show</code> を実行すると、state 全体を同じ形式で表示します（いまはリソースが 1 つなので、出力は <code>state show</code> と同じです）。
+</p>
+<p>何も変えずに、もう一度 <code>plan</code> を実行してみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">local_file.hello: Refreshing state... [id=ae9c7cc6581fe6b7a01af3ee5fa123a4afc9bac1]</span><span class="terminal__line"></span><span class="terminal__line">No changes. Your infrastructure matches the configuration.</span><span class="terminal__line"></span><span class="terminal__line">Terraform has compared your real infrastructure against your configuration</span><span class="terminal__line">and found no differences, so no changes are needed.</span></pre>
+</div>
+<p>
+  1 行目の <code>Refreshing state...</code> は、state に記録された <code>id</code> をもとに実物を読み直している表示です。
+  Terraform は「設定（<code>main.tf</code>）」「state」「実物」の 3 つを比べて実行計画を作ります。今回は 3 つが一致しているので、<code>No changes.</code> になりました。
+</p>
+<p>次に、state のファイルそのものを見てみます。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -la</span><span class="terminal__line">total 24</span><span class="terminal__line">drwxr-xr-x@ 7 yourname  staff   224 10月  4 12:34 .</span><span class="terminal__line">drwxr-xr-x@ 3 yourname  staff    96 10月  4 12:34 ..</span><span class="terminal__line">drwxr-xr-x@ 3 yourname  staff    96 10月  4 12:34 .terraform</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff  2350 10月  4 12:34 .terraform.lock.hcl</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff   349 10月  4 12:34 main.tf</span><span class="terminal__line">drwxr-xr-x@ 3 yourname  staff    96 10月  4 12:34 output</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff  1639 10月  4 12:34 terraform.tfstate</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cat terraform.tfstate</span><span class="terminal__line">{</span><span class="terminal__line">  "version": 4,</span><span class="terminal__line">  "terraform_version": "1.16.2",</span><span class="terminal__line">  "serial": 1,</span><span class="terminal__line">  "lineage": "67454153-4318-087a-7ee2-d11cf9e96de7",</span><span class="terminal__line">  "outputs": {},</span><span class="terminal__line">  "resources": [</span><span class="terminal__line">    {</span><span class="terminal__line">      "mode": "managed",</span><span class="terminal__line">      "type": "local_file",</span><span class="terminal__line">      "name": "hello",</span><span class="terminal__line">      "provider": "provider[\"registry.terraform.io/hashicorp/local\"]",</span><span class="terminal__line">      "instances": [</span><span class="terminal__line">        {</span><span class="terminal__line">          "schema_version": 0,</span><span class="terminal__line">          "attributes": {</span><span class="terminal__line">            "content": "Hello, Terraform!\n",</span><span class="terminal__line">            …</span><span class="terminal__line">            "filename": "./output/hello.txt",</span><span class="terminal__line">            "id": "ae9c7cc6581fe6b7a01af3ee5fa123a4afc9bac1",</span><span class="terminal__line">            …</span><span class="terminal__line">          },</span><span class="terminal__line">          …</span><span class="terminal__line">        }</span><span class="terminal__line">      ]</span><span class="terminal__line">    }</span><span class="terminal__line">  ],</span><span class="terminal__line">  "check_results": null</span><span class="terminal__line">}</span></pre>
+</div>
+<p>
+  中身は JSON です（長いので一部を「…」で省略しています）。<code>resources</code> に、<code>local_file.hello</code> の属性がそのまま記録されています。
+  先頭のおもな項目は次のとおりです。
+</p>
+<ul>
+  <li><code>version</code>: state ファイルの形式の版（4）</li>
+  <li><code>serial</code>: state の内容が変わるたびに増える番号（新旧の判定に使う）</li>
+  <li><code>lineage</code>: state の作成時に決まる識別子です。値は環境ごとに異なります</li>
+</ul>
+<div class="callout callout--warning">
+  <span class="callout__icon" aria-hidden="true">⚠️</span>
+  <div class="callout__body">
+    <p class="callout__title">state は手で編集しない</p>
+    <p><code>terraform.tfstate</code> は Terraform が読み書きするファイルです。手で書き換えると、設定や実物との対応が崩れる場合もあります。中身の確認には <code>terraform state list</code> / <code>terraform state show</code> を使いましょう。</p>
+  </div>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>terraform state list</code> で <code>local_file.hello</code> が表示され、変更なしの <code>plan</code> が <code>No changes. Your infrastructure matches the configuration.</code> を表示することを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">設定を変えて、置換（<code>-/+</code>）を観察する</h3>
+        </div>
+        <div class="step__body">
+
+<p>設定を変えると、Terraform は state と比べて差分を出します。<code>local_file.hello</code> の <code>content</code> を変えてみます。</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--remove">-  content  = "Hello, Terraform!\n"</span><span class="diff-line diff-line--add">+  content  = "Hello again, Terraform!\n"</span></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">local_file.hello: Refreshing state... [id=ae9c7cc6581fe6b7a01af3ee5fa123a4afc9bac1]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">-/+ destroy and then create replacement</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello must be replaced</span><span class="terminal__line">-/+ resource "local_file" "hello" {</span><span class="terminal__line">      ~ content              = &lt;&lt;-EOT # forces replacement</span><span class="terminal__line">          - Hello, Terraform!</span><span class="terminal__line">          + Hello again, Terraform!</span><span class="terminal__line">        EOT</span><span class="terminal__line">      ~ content_base64sha256 = "6wKS0JLRbqCUNW2dBDS6ihyRntb8v6POQLyDI/NZqBY=" -&gt; (known after apply)</span><span class="terminal__line">      …</span><span class="terminal__line">      ~ id                   = "ae9c7cc6581fe6b7a01af3ee5fa123a4afc9bac1" -&gt; (known after apply)</span><span class="terminal__line">        # (3 unchanged attributes hidden)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 1 to add, 0 to change, 1 to destroy.</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  今度は記号が <code>-/+</code>（<code>destroy and then create replacement</code>）になりました。リソース行には <code>must be replaced</code>、<code>content</code> の行には <code># forces replacement</code> と付いています。
+  <code>local_file</code> は <code>content</code> を書き換えて更新する（<code>~</code> の update）のではなく、いったん削除して作り直す「置換」になります。
+  どの属性の変更が置換になるかはリソースの種類ごとに決まっていて、<code># forces replacement</code> がその目印です。
+  実際のクラウドのリソースでは、置換は「作り直し」を意味するので、<code>plan</code> でこの表示を見落とさないことが大切です。
+</p>
+<p>
+  中ほどの「…」は、ハッシュ値の行（<code>content_md5</code> など）を省略した箇所です。最後の「…」は、ステップ 3 と同じ <code>Note:</code> の部分です。
+  <code>apply</code> して確かめます（以降、<code>apply</code> の出力は実行計画の部分を「…」で省略します）。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply</span><span class="terminal__line">…</span><span class="terminal__line">Plan: 1 to add, 0 to change, 1 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Do you want to perform these actions?</span><span class="terminal__line">  Terraform will perform the actions described above.</span><span class="terminal__line">  Only 'yes' will be accepted to approve.</span><span class="terminal__line"></span><span class="terminal__line">  Enter a value: yes</span><span class="terminal__line">local_file.hello: Destroying... [id=ae9c7cc6581fe6b7a01af3ee5fa123a4afc9bac1]</span><span class="terminal__line">local_file.hello: Destruction complete after 0s</span><span class="terminal__line">local_file.hello: Creating...</span><span class="terminal__line">local_file.hello: Creation complete after 0s [id=5ef8bf606a7ddb96430e62dd3cd11c5cc546b4f8]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 1 added, 0 changed, 1 destroyed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">Hello again, Terraform!</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls -la terraform.tfstate*</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff  1645 10月  4 12:34 terraform.tfstate</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff  1639 10月  4 12:34 terraform.tfstate.backup</span></pre>
+</div>
+<p>
+  <code>Destroying...</code> の後に <code>Creating...</code> が続き、計画どおりに置換されました。
+  2 回目の <code>apply</code> から、1 つ前の state が <code>terraform.tfstate.backup</code> として残るようになります。
+</p>
+<p>
+  state の <code>serial</code> も増えています（<code>grep serial terraform.tfstate</code> で確かめられます）。<code>serial</code> は state の新旧を見分けるための番号で、state の内容が変わると増えます。1 回の <code>apply</code> で増える数は 1 とは限らず、内容が変わらなければ増えません。
+</p>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>plan</code> で <code>-/+</code> と <code># forces replacement</code> が表示されること、<code>apply</code> 後の <code>output/hello.txt</code> が <code>Hello again, Terraform!</code> になり、<code>terraform.tfstate.backup</code> ができていることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>random_pet</code> で依存を作り、手で消したファイルを戻す</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  2 つ目のリソースとして、ランダムなペットの名前を作る <code>random_pet</code> を追加します。<code>length = 2</code> で、2 語をつないだ名前になります。
+  さらに、<code>local_file.hello</code> の <code>content</code> で、その名前（<code>random_pet.greeter.id</code>）を参照します。
+</p>
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line diff-line--add">+resource "random_pet" "greeter" {</span><span class="diff-line diff-line--add">+  length = 2</span><span class="diff-line diff-line--add">+}</span><span class="diff-line diff-line--add">+</span><span class="diff-line"> resource "local_file" "hello" {</span><span class="diff-line">   filename = "${path.module}/output/hello.txt"</span><span class="diff-line diff-line--remove">-  content  = "Hello again, Terraform!\n"</span><span class="diff-line diff-line--add">+  content  = "Hello, ${random_pet.greeter.id}!\n"</span><span class="diff-line"> }</span></pre>
+</div>
+<p>これで <code>main.tf</code> は完成です。全文は次のとおりです。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">HCL</span>
+    <span class="code-block__filename">main.tf</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-hcl">terraform {
+  required_version = "&gt;= 1.9"
+
+  required_providers {
+    local = {
+      source  = "hashicorp/local"
+      version = "~&gt; 2.9"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~&gt; 3.9"
+    }
+  }
+}
+
+resource "random_pet" "greeter" {
+  length = 2
+}
+
+resource "local_file" "hello" {
+  filename = "${path.module}/output/hello.txt"
+  content  = "Hello, ${random_pet.greeter.id}!\n"
+}</code></pre>
+</div>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">local_file.hello: Refreshing state... [id=5ef8bf606a7ddb96430e62dd3cd11c5cc546b4f8]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line">-/+ destroy and then create replacement</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello must be replaced</span><span class="terminal__line">-/+ resource "local_file" "hello" {</span><span class="terminal__line">      ~ content              = &lt;&lt;-EOT</span><span class="terminal__line">            Hello again, Terraform!</span><span class="terminal__line">        EOT -&gt; (known after apply) # forces replacement</span><span class="terminal__line">      …</span><span class="terminal__line">        # (3 unchanged attributes hidden)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # random_pet.greeter will be created</span><span class="terminal__line">  + resource "random_pet" "greeter" {</span><span class="terminal__line">      + id        = (known after apply)</span><span class="terminal__line">      + length    = 2</span><span class="terminal__line">      + separator = "-"</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 2 to add, 0 to change, 1 to destroy.</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>random_pet.greeter</code> は新規作成（<code>+</code>）です。<code>local_file.hello</code> は、<code>content</code> がペットの名前しだいで決まるので、<code>-&gt; (known after apply)</code> と表示され、置換になります。
+  <code>separator = "-"</code> は、<code>random_pet</code> の区切り文字の既定値です。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply</span><span class="terminal__line">…</span><span class="terminal__line">  Enter a value: yes</span><span class="terminal__line">local_file.hello: Destroying... [id=5ef8bf606a7ddb96430e62dd3cd11c5cc546b4f8]</span><span class="terminal__line">local_file.hello: Destruction complete after 0s</span><span class="terminal__line">random_pet.greeter: Creating...</span><span class="terminal__line">random_pet.greeter: Creation complete after 0s [id=living-werewolf]</span><span class="terminal__line">local_file.hello: Creating...</span><span class="terminal__line">local_file.hello: Creation complete after 0s [id=1c13d57baf72122fbbeeb1512ea372a132b1a16d]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 2 added, 0 changed, 1 destroyed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">Hello, living-werewolf!</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform state list</span><span class="terminal__line">local_file.hello</span><span class="terminal__line">random_pet.greeter</span></pre>
+</div>
+<p>
+  出力の順番に注目してください。<code>random_pet.greeter</code> の作成が終わってから、<code>local_file.hello</code> の作成が始まっています。
+  <code>main.tf</code> では <code>local_file</code> の方を後ろに書いていますが、順番を決めているのは書いた位置ではなく参照です。
+  <code>random_pet.greeter.id</code> を参照したことで、Terraform は「<code>local_file.hello</code> は <code>random_pet.greeter</code> に依存する」と判断し、依存される側を先に作ります（暗黙の依存）。
+</p>
+<div class="callout callout--note">
+  <span class="callout__icon" aria-hidden="true">ℹ️</span>
+  <div class="callout__body">
+    <p class="callout__title">ペットの名前は実行ごとに変わる</p>
+    <p><code>living-werewolf</code> は執筆時の出力例です。<code>random_pet</code> の値は作成のたびランダムで決まるので、みなさんの環境では別の名前になります。<code>hello.txt</code> の中身や、<code>id</code> のハッシュ値も同様に変わります。一度作った後は state に記録されるので、この後の <code>plan</code> / <code>apply</code> でも同じ名前のまま使われます。</p>
+  </div>
+</div>
+<p>
+  次に、Terraform の外で実物を変えたらどうなるかを試します。<code>output/hello.txt</code> を手で削除してから <code>plan</code> を実行します。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm output/hello.txt</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=living-werewolf]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=1c13d57baf72122fbbeeb1512ea372a132b1a16d]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  + create</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello will be created</span><span class="terminal__line">  + resource "local_file" "hello" {</span><span class="terminal__line">      + content              = &lt;&lt;-EOT</span><span class="terminal__line">            Hello, living-werewolf!</span><span class="terminal__line">        EOT</span><span class="terminal__line">      …</span><span class="terminal__line">      + filename             = "./output/hello.txt"</span><span class="terminal__line">      + id                   = (known after apply)</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 1 to add, 0 to change, 0 to destroy.</span><span class="terminal__line">…</span></pre>
+</div>
+<p>
+  <code>Refreshing state...</code> で実物を読み直した結果、ファイルが無くなっていることに気づき、<code>local_file.hello will be created</code>（作成）を計画しました。
+  このように、Terraform の外で実物が変わることを「ドリフト」と呼びます。今回の環境では、ドリフトを知らせる「Objects have changed outside of Terraform」という注記は表示されず、単に「作成」として表示されました。
+  <code>apply</code> すると、設定どおりのファイルが作り直されます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform apply</span><span class="terminal__line">…</span><span class="terminal__line">  Enter a value: yes</span><span class="terminal__line">local_file.hello: Creating...</span><span class="terminal__line">local_file.hello: Creation complete after 0s [id=1c13d57baf72122fbbeeb1512ea372a132b1a16d]</span><span class="terminal__line"></span><span class="terminal__line">Apply complete! Resources: 1 added, 0 changed, 0 destroyed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat output/hello.txt</span><span class="terminal__line">Hello, living-werewolf!</span></pre>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>apply</code> の出力で <code>random_pet.greeter</code> が <code>local_file.hello</code> より先に作られ、<code>hello.txt</code> にペットの名前が入ること、手で消したファイルが <code>plan</code> で <code>will be created</code> として検出され、<code>apply</code> で元に戻ることを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title"><code>destroy</code> で片付け、Git で管理するファイルを決める</h3>
+        </div>
+        <div class="step__body">
+
+<p>
+  最後に、作ったリソースをすべて削除します。<code>terraform plan -destroy</code> で、削除の計画だけを先に確認できます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform plan -destroy</span><span class="terminal__line">random_pet.greeter: Refreshing state... [id=living-werewolf]</span><span class="terminal__line">local_file.hello: Refreshing state... [id=1c13d57baf72122fbbeeb1512ea372a132b1a16d]</span><span class="terminal__line"></span><span class="terminal__line">Terraform used the selected providers to generate the following execution</span><span class="terminal__line">plan. Resource actions are indicated with the following symbols:</span><span class="terminal__line">  - destroy</span><span class="terminal__line"></span><span class="terminal__line">Terraform will perform the following actions:</span><span class="terminal__line"></span><span class="terminal__line">  # local_file.hello will be destroyed</span><span class="terminal__line">  - resource "local_file" "hello" {</span><span class="terminal__line">      - content              = &lt;&lt;-EOT</span><span class="terminal__line">            Hello, living-werewolf!</span><span class="terminal__line">        EOT -&gt; null</span><span class="terminal__line">      …</span><span class="terminal__line">      - filename             = "./output/hello.txt" -&gt; null</span><span class="terminal__line">      - id                   = "1c13d57baf72122fbbeeb1512ea372a132b1a16d" -&gt; null</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">  # random_pet.greeter will be destroyed</span><span class="terminal__line">  - resource "random_pet" "greeter" {</span><span class="terminal__line">      - id        = "living-werewolf" -&gt; null</span><span class="terminal__line">      - length    = 2 -&gt; null</span><span class="terminal__line">      - separator = "-" -&gt; null</span><span class="terminal__line">    }</span><span class="terminal__line"></span><span class="terminal__line">Plan: 0 to add, 0 to change, 2 to destroy.</span><span class="terminal__line">…</span></pre>
+</div>
+<p>記号 <code>-</code> は削除です。2 つとも削除されることを確かめたら、<code>terraform destroy</code> を実行し、<code>yes</code> と入力します。</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> terraform destroy</span><span class="terminal__line">…</span><span class="terminal__line">Plan: 0 to add, 0 to change, 2 to destroy.</span><span class="terminal__line"></span><span class="terminal__line">Do you really want to destroy all resources?</span><span class="terminal__line">  Terraform will destroy all your managed infrastructure, as shown above.</span><span class="terminal__line">  There is no undo. Only 'yes' will be accepted to confirm.</span><span class="terminal__line"></span><span class="terminal__line">  Enter a value: yes</span><span class="terminal__line">local_file.hello: Destroying... [id=1c13d57baf72122fbbeeb1512ea372a132b1a16d]</span><span class="terminal__line">local_file.hello: Destruction complete after 0s</span><span class="terminal__line">random_pet.greeter: Destroying... [id=living-werewolf]</span><span class="terminal__line">random_pet.greeter: Destruction complete after 0s</span><span class="terminal__line"></span><span class="terminal__line">Destroy complete! Resources: 2 destroyed.</span></pre>
+</div>
+<p>
+  作るときとは逆に、依存している <code>local_file.hello</code> を先に削除し、その後で <code>random_pet.greeter</code> を削除しています。
+  削除した後のディレクトリと state を確認します。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -la</span><span class="terminal__line">total 32</span><span class="terminal__line">drwxr-xr-x@ 8 yourname  staff   256 10月  4 12:35 .</span><span class="terminal__line">drwxr-xr-x@ 3 yourname  staff    96 10月  4 12:34 ..</span><span class="terminal__line">drwxr-xr-x@ 3 yourname  staff    96 10月  4 12:34 .terraform</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff  2350 10月  4 12:34 .terraform.lock.hcl</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff   414 10月  4 12:34 main.tf</span><span class="terminal__line">drwxr-xr-x@ 2 yourname  staff    64 10月  4 12:35 output</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff   182 10月  4 12:35 terraform.tfstate</span><span class="terminal__line">-rw-r--r--@ 1 yourname  staff  2228 10月  4 12:35 terraform.tfstate.backup</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat terraform.tfstate</span><span class="terminal__line">{</span><span class="terminal__line">  "version": 4,</span><span class="terminal__line">  "terraform_version": "1.16.2",</span><span class="terminal__line">  "serial": 11,</span><span class="terminal__line">  "lineage": "67454153-4318-087a-7ee2-d11cf9e96de7",</span><span class="terminal__line">  "outputs": {},</span><span class="terminal__line">  "resources": [],</span><span class="terminal__line">  "check_results": null</span><span class="terminal__line">}</span><span class="terminal__line"><span class="terminal__prompt">$</span> terraform state list</span></pre>
+</div>
+<p>
+  <code>terraform.tfstate</code> の <code>resources</code> は空（<code>[]</code>）になり、<code>terraform state list</code> は何も表示しません。<code>lineage</code> は最初から同じ値のままです。
+  空になった <code>output/</code> ディレクトリは残るので、<code>rmdir output</code> で削除しておきます。
+</p>
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rmdir output</span></pre>
+</div>
+<p>
+  ここまでで、作業ディレクトリには次のファイルがあります。Git で管理するもの・しないものを分けておきましょう。
+</p>
+<ul>
+  <li><strong>コミットする</strong>: <code>main.tf</code>（設定そのもの）、<code>.terraform.lock.hcl</code>（チーム全員が同じプロバイダーの版とハッシュを使うため）</li>
+  <li><strong>コミットしない</strong>: <code>.terraform/</code>（ダウンロードしたプロバイダー。<code>init</code> すれば作り直せる）、<code>terraform.tfstate</code> と <code>terraform.tfstate.backup</code>（実物の属性をそのまま含み、パスワードなどの機密情報が入ることもある）、<code>output/</code>（<code>apply</code> で作られる生成物）</li>
+</ul>
+<p>作業ディレクトリに <code>.gitignore</code> を作り、コミットしないものを書きます。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">gitignore</span>
+    <span class="code-block__filename">.gitignore</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext"># Terraform が作業用に作るディレクトリ（プロバイダーの実体が入る）
+.terraform/
+
+# state。リソースの実際の値が入るのでコミットしない
+*.tfstate
+*.tfstate.*
+
+# このレッスンで Terraform が生成するファイル
+output/</code></pre>
+</div>
+<p>
+  lock ファイル <code>.terraform.lock.hcl</code> は <code>.gitignore</code> に書きません。<code>init</code> の出力でも、バージョン管理に含めるよう案内されていました。
+</p>
+<div class="callout callout--note">
+  <span class="callout__icon" aria-hidden="true">ℹ️</span>
+  <div class="callout__body">
+    <p class="callout__title">state を共有したいときは</p>
+    <p>state をコミットしない代わりに、チームで共有するときはリモートのバックエンド（クラウドのストレージなど）に state を置きます。このトラックの 04「リモートステート管理」で扱います。</p>
+  </div>
+</div>
+<div class="callout callout--note">
+  <span class="callout__icon" aria-hidden="true">ℹ️</span>
+  <div class="callout__body">
+    <p class="callout__title">この教材リポジトリの完成コードについて</p>
+    <p>完成コードを置いているブランチ <code>infra/terraform/01-basics</code> では、リポジトリのルートの <code>.gitignore</code> が <code>**/.terraform.lock.hcl</code> を無視する設定になっているため、lock ファイルは含まれていません。自分のプロジェクトでは、上のとおり lock ファイルをコミットしてください。</p>
+  </div>
+</div>
+<div class="step__check">
+  <p class="step__check-title">✅ 確認ポイント</p>
+  <p><code>terraform destroy</code> が <code>Destroy complete! Resources: 2 destroyed.</code> で終わり、<code>terraform state list</code> が何も表示しないこと、<code>.gitignore</code> に state と <code>.terraform/</code> が入っていて lock ファイルは入っていないことを確認してください。</p>
+</div>
+
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>init</code> 前の <code>plan</code> が <code>Inconsistent dependency lock file</code> になることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>terraform init</code> で <code>.terraform/</code> と <code>.terraform.lock.hcl</code> ができ、それぞれの役割を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>fmt</code> / <code>validate</code> / <code>plan</code> / <code>apply</code> の順に実行し、<code>output/hello.txt</code> を作った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>terraform state list</code> / <code>terraform state show</code> で state の中身を確認した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>plan</code> の <code>+</code> / <code>-/+</code> / <code>-</code> と <code># forces replacement</code> の意味を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">参照によって <code>random_pet.greeter</code> が <code>local_file.hello</code> より先に作られることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">手で消したファイルが <code>plan</code> で検出され、<code>apply</code> で元に戻ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>terraform destroy</code> で片付け、<code>.gitignore</code> で state と <code>.terraform/</code> を除外した</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>plan</code> や <code>apply</code> が <code>Inconsistent dependency lock file</code> で止まる</p>
+          <p>まだ <code>terraform init</code> を実行していないか、別のディレクトリで実行しています。<code>main.tf</code> があるディレクトリで <code>terraform init</code> を実行してください。エラー文には「init していない」とは書かれないので注意しましょう。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>apply</code> が <code>Apply cancelled.</code> で終わる</p>
+          <p>確認プロンプト <code>Enter a value:</code> には <code>yes</code> と入力する必要があります。<code>y</code> や <code>Yes</code> など <code>yes</code> 以外を入力すると、<code>Apply cancelled.</code> と表示され、何も変更されずに終わります。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">内容を変えただけなのに「置換」になる</p>
+          <p><code>local_file</code> は、<code>content</code> を変えると更新ではなく置換（<code>-/+</code>）になります。故障ではありません。<code>plan</code> で <code># forces replacement</code> の付いた属性が、置換の原因です。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>init</code> でプロバイダーを取得し、<code>plan</code> で実行計画を確かめてから <code>apply</code> で反映する、という Terraform の基本の流れを体験しました。
+        Terraform は設定・state・実物の 3 つを比べて計画を作ること、設定の変更が置換になる場合があること、参照から作成の順番が決まることも確かめました。
+        次の項目では、変数（variables）とアウトプット（outputs）を使って、設定に値を渡したり結果を取り出したりできるようにします。
+      </p>
+
+      <h2 id="references">参考資料</h2>
+      <ul>
+        <li><a href="https://developer.hashicorp.com/terraform/install">Install Terraform</a></li>
+        <li><a href="https://developer.hashicorp.com/terraform/cli/commands">Terraform CLI のコマンド一覧</a>（<code>init</code> / <code>plan</code> / <code>apply</code> / <code>destroy</code> / <code>fmt</code> / <code>validate</code> / <code>state</code>）</li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/state">State</a></li>
+        <li><a href="https://developer.hashicorp.com/terraform/language/files/dependency-lock">Dependency Lock File</a></li>
+        <li><a href="https://registry.terraform.io/providers/hashicorp/local/latest/docs/resources/file">local_file</a>（hashicorp/local）</li>
+        <li><a href="https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/pet">random_pet</a>（hashicorp/random）</li>
+      </ul>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>infra/terraform/01-basics</code> の <code>infra/terraform/01-basics/</code> ディレクトリにあります。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../../../index.html">
+          <span class="lesson-nav__direction">← カタログ</span>
+          <span class="lesson-nav__title">ハンズオン教材カタログ</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">02: 変数とアウトプット</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../../assets/js/main.js"></script>
+</body>
+</html>
