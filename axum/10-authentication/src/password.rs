@@ -36,7 +36,7 @@ pub fn warm_up() {
     dummy_hash();
 }
 
-// argon2 は CPU を数十ミリ秒占有する。async のハンドラの中で直接呼ぶと、
+// argon2 は CPU を十数ミリ秒占有する。async のハンドラの中で直接呼ぶと、
 // その間そのワーカースレッドで他のリクエストが進まないので、spawn_blocking の専用スレッドに逃がす
 pub async fn hash_password_blocking(password: String) -> Result<String, AppError> {
     tokio::task::spawn_blocking(move || hash_password(&password))

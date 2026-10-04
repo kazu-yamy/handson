@@ -46,11 +46,11 @@ impl RegisterRequest {
             );
         }
 
-        // 下限は NIST SP 800-63B の最小 8 文字。上限はハッシュ計算に使わせすぎないため
-        if !(8..=128).contains(&self.password.chars().count()) {
+        // 下限 15 は NIST SP 800-63B-4（パスワードだけで認証する場合は 15 文字以上）に合わせた値。上限は極端に長い入力を弾くため
+        if !(15..=128).contains(&self.password.chars().count()) {
             fields.insert(
                 "password".to_string(),
-                vec!["password must be 8 to 128 characters".to_string()],
+                vec!["password must be 15 to 128 characters".to_string()],
             );
         }
 
@@ -163,7 +163,7 @@ pub async fn login(
 ) -> Result<Json<AuthResponse>, AppError> {
     let Json(payload) = payload?;
     let email = payload.email.trim().to_lowercase();
-    // 登録時の上限（128 文字）を超えるパスワードは正しいはずが無いので、計算せずに失敗扱いにする
+    // 登録時の上限（128 文字）を超えるパスワードは正しいはずが無いので、無駄な計算を省くため失敗扱いにする（argon2 の計算時間は入力の長さにほとんど左右されない）
     if payload.password.chars().count() > 128 {
         return Err(AppError::Unauthorized(LOGIN_FAILED));
     }

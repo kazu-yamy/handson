@@ -28,7 +28,7 @@ async fn register_creates_user_and_stores_only_the_hash(pool: SqlitePool) {
 
     let (status, body) = send(
         app.clone(),
-        register_request("alice", "alice@example.com", "password123"),
+        register_request("alice", "alice@example.com", "password-123456"),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -48,7 +48,7 @@ async fn register_creates_user_and_stores_only_the_hash(pool: SqlitePool) {
     .await
     .unwrap();
     assert!(stored.starts_with("$argon2id$"));
-    assert!(!stored.contains("password123"));
+    assert!(!stored.contains("password-123456"));
 
     // 登録した user は既存の GET /users からも見える
     let (_, users) = send(app, get("/users")).await;
@@ -62,7 +62,7 @@ async fn register_creates_user_and_stores_only_the_hash(pool: SqlitePool) {
 async fn register_trims_and_lowercases_the_email(pool: SqlitePool) {
     let (status, _) = send(
         test_app(pool.clone()),
-        register_request("alice", "  Alice@Example.COM ", "password123"),
+        register_request("alice", "  Alice@Example.COM ", "password-123456"),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -79,7 +79,7 @@ async fn register_with_duplicate_email_is_conflict_and_rolls_back(pool: SqlitePo
     let app = test_app(pool.clone());
     let (status, _) = send(
         app.clone(),
-        register_request("alice", "alice@example.com", "password123"),
+        register_request("alice", "alice@example.com", "password-123456"),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -113,6 +113,10 @@ async fn register_reports_every_invalid_field_at_once(pool: SqlitePool) {
     for field in ["name", "email", "password"] {
         assert!(body["error"]["fields"][field].is_array(), "{field}");
     }
+    assert_eq!(
+        body["error"]["fields"]["password"][0],
+        "password must be 15 to 128 characters"
+    );
 
     // 検証で弾かれたときは何も保存されない
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
@@ -153,7 +157,7 @@ fn now_unix() -> i64 {
 async fn register_returns_a_token_and_stores_only_its_hash(pool: SqlitePool) {
     let (status, body) = send(
         test_app(pool.clone()),
-        register_request("alice", "alice@example.com", "password123"),
+        register_request("alice", "alice@example.com", "password-123456"),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -186,12 +190,12 @@ async fn login_with_right_password_returns_a_new_token(pool: SqlitePool) {
     let app = test_app(pool.clone());
     let (_, registered) = send(
         app.clone(),
-        register_request("alice", "alice@example.com", "password123"),
+        register_request("alice", "alice@example.com", "password-123456"),
     )
     .await;
 
     // メールの大文字小文字や前後の空白は無視する
-    let (status, body) = send(app, login_request(" Alice@Example.com ", "password123")).await;
+    let (status, body) = send(app, login_request(" Alice@Example.com ", "password-123456")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["user"], registered["user"]);
     assert_ne!(body["token"], registered["token"]); // ログインのたびに新しいトークン
@@ -209,7 +213,7 @@ async fn login_failures_look_the_same(pool: SqlitePool) {
     let app = test_app(pool.clone());
     send(
         app.clone(),
-        register_request("alice", "alice@example.com", "password123"),
+        register_request("alice", "alice@example.com", "password-123456"),
     )
     .await;
 
@@ -220,7 +224,7 @@ async fn login_failures_look_the_same(pool: SqlitePool) {
     .await;
     let (unknown_status, unknown_email) = send(
         app.clone(),
-        login_request("nobody@example.com", "password123"),
+        login_request("nobody@example.com", "password-123456"),
     )
     .await;
 
@@ -246,7 +250,7 @@ async fn login_failures_look_the_same(pool: SqlitePool) {
 async fn login_failure_has_www_authenticate_header(pool: SqlitePool) {
     use tower::ServiceExt;
     let response = test_app(pool)
-        .oneshot(login_request("nobody@example.com", "password123"))
+        .oneshot(login_request("nobody@example.com", "password-123456"))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
