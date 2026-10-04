@@ -1,0 +1,1466 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>16: リリースビルドと署名 | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">16</li>
+        </ol>
+        <h1 class="lesson-title">リリースビルドと署名</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分（任意の確認を除く）</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 15 でテストを仕上げた人。Android トラックの最後の項目です</li>
+          <li class="lesson-meta__item">📋 前提: 15 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること。エミュレータからインターネットに接続できること（最初の一覧を API から取得します）。ターミナルでシェルの関数と環境変数を使えること</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../15-testing/index.html">15: テストの仕上げ</a></li>
+          <li class="lesson-meta__item">🧩 版: 依存の追加はありません。AGP 9.4.1（R8 9.4.24）/ Gradle 9.6.0 / Android SDK Build-Tools 37.0.0（<code>aapt2</code>・<code>zipalign</code>・<code>apksigner</code>）/ Command-line Tools の <code>apkanalyzer</code> と <code>retrace</code> 9.0.32 / Android Studio 同梱の JBR の <code>keytool</code>・<code>jarsigner</code> / Kotlin 2.4.20 / Compose BOM 2026.09.00</li>
+          <li class="lesson-meta__item">🌿 完成コード: ブランチ <code>android/16-release</code></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>debug と release の APK の違い（デバッグ可能かどうか・サイズ・クラスの名前）を、<code>aapt2</code> と <code>apkanalyzer</code> で確かめられる</li>
+          <li>R8 の出力（<code>usage.txt</code>・<code>seeds.txt</code>・<code>configuration.txt</code>・<code>resources.txt</code>・<code>mapping.txt</code>）から、消えたコードと残ったコードの理由を読み取れる</li>
+          <li>release でわざと落としたスタックトレースを、<code>retrace</code> と <code>mapping.txt</code> で元のクラス・ファイル・行に戻せる</li>
+          <li><code>keytool</code> で作った自分の鍵で APK に署名し、<code>versionCode</code> を上げた APK でデータを残したまま更新できる。ダウングレードと署名違いが拒否されることを確かめられる</li>
+          <li>AAB（<code>bundleRelease</code>）の中身を確かめ、<code>jarsigner</code> で署名できる。鍵とパスワードをリポジトリに入れない理由を説明できる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>15 までで、Todo アプリの機能とテストがそろいました。この項目では、アプリを配る形にします。新しい機能は作りません。コードの変更は 2 ファイル・10 行だけで、ほとんどはコマンドの実習です。</p>
+      <p>これまでの項目では、release の APK を debug 用の鍵で一時的に署名し、起動の確認だけをしてきました。この項目では、release の APK の中身を debug と比べ、R8 が何を消して何を残したかを、R8 自身の出力で確かめます。続けて、release で起きたクラッシュを読めるように戻す方法と、自分の鍵での署名・更新・AAB を扱います。</p>
+
+      <h3 id="what-we-build">この項目でやること</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>やること</th><th>変えるファイル</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>release の APK を debug と比べる</td><td>なし</td></tr>
+            <tr><td>2</td><td>R8 の出力を読む</td><td>なし</td></tr>
+            <tr><td>3</td><td>わざと落とし、<code>retrace</code> でスタックトレースを戻す</td><td>一時的に <code>TodoBackupScheduler.kt</code>（最後に戻す）</td></tr>
+            <tr><td>4</td><td>自分の鍵を作り、APK に署名して入れる</td><td>なし（鍵はプロジェクトの外に作る）</td></tr>
+            <tr><td>5</td><td><code>versionCode</code> を上げて更新する</td><td><code>app/build.gradle.kts</code>・<code>.gitignore</code></td></tr>
+            <tr><td>6</td><td>AAB を作って中身を見る</td><td>なし</td></tr>
+            <tr><td>7</td><td>まとめて確認する（テスト・lint、release の起動、後片付け）</td><td>なし</td></tr>
+            </tbody>
+          </table>
+      <p>15 の完成コードから変えるのは、<code>app/build.gradle.kts</code>（<code>versionCode</code>・<code>versionName</code> とコメント）と <code>.gitignore</code>（鍵のファイルを除外）です。準備の名前の変更を除くと、追加 8 行・削除 2 行です。ビルド・署名・インストールを何度も繰り返します。ビルドは 1 回あたり 20 秒〜1 分ほどです。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">鍵とパスワードはリポジトリに入れない</p>
+              <p>この項目では、署名の鍵を自分で作ります。鍵はプロジェクトの外の作業用ディレクトリに作り、最後に削除します。パスワードは、コマンドが聞いてきたときに入力します。コマンドの引数やファイルに書きません。<code>app/build.gradle.kts</code> にも、鍵の場所やパスワードを読む設定（<code>signingConfigs</code>）を入れません。理由はステップ 4 で説明します。</p>
+            </div>
+          </div>
+
+      <h3 id="versions">使用バージョン</h3>
+      <p>依存の追加はありません。この項目で使う道具は、Android SDK と Android Studio に入っています。</p>
+
+          <table>
+            <thead>
+            <tr><th>道具</th><th>入っている場所</th><th>版</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>R8（コードとリソースの縮小・難読化）</td><td>AGP に内蔵</td><td>R8 9.4.24（AGP 9.4.1）</td></tr>
+            <tr><td><code>aapt2</code>・<code>zipalign</code>・<code>apksigner</code></td><td>Android SDK Build-Tools（<code>~/Library/Android/sdk/build-tools/37.0.0/</code>）</td><td>37.0.0</td></tr>
+            <tr><td><code>apkanalyzer</code>・<code>retrace</code></td><td>Android SDK Command-line Tools（<code>~/Library/Android/sdk/cmdline-tools/latest/bin/</code>）</td><td><code>retrace</code> は 9.0.32</td></tr>
+            <tr><td><code>keytool</code>・<code>jarsigner</code></td><td>Android Studio に同梱の JBR（<code>/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin/</code>）</td><td>Android Studio に同梱の版</td></tr>
+            <tr><td><code>adb</code></td><td>Android SDK Platform-Tools</td><td>—</td></tr>
+            </tbody>
+          </table>
+      <p>Kotlin 2.4.20・AGP 9.4.1・Gradle 9.6.0・Compose BOM 2026.09.00・minSdk 26・targetSdk 37 は 15 のままです。エミュレータも 15 と同じ <code>Handson_Android36</code>（API 36）を使います。</p>
+
+      <h2 id="prepare">準備</h2>
+      <p>15 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 16 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid15&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid16&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid15&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid16&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span></pre>
+</div>
+          <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // Step 1: 変数・関数・文字列テンプレート・when 式</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid15&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid16&quot;</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できる。型は推論されるが、ここでは Int のまま</span><span class="diff-line">  var counter = 0</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          counter = 0</span><span class="diff-line">          assertEquals(1, incrementCounter())</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid15&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid16&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+          <p>パッケージ名と <code>applicationId</code>（<code>com.handson.android01</code>）は 15 と同じく変えません。</p>
+          <h4>道具に <code>PATH</code> を通す</h4>
+          <p>この項目では SDK の道具を何度も使います。毎回フルパスで書くと長いので、ターミナルを開いたら最初に <code>PATH</code> へ足します。<code>build-tools/37.0.0</code> は筆者の環境の版です。<code>~/Library/Android/sdk/build-tools/</code> にインストール済みの版に読み替えてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export PATH=&quot;$HOME/Library/Android/sdk/build-tools/37.0.0:$HOME/Library/Android/sdk/cmdline-tools/latest/bin:$HOME/Library/Android/sdk/platform-tools:/Applications/Android Studio.app/Contents/jbr/Contents/Home/bin:$PATH&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> retrace --help 2&gt;&amp;1 | head -1</span><span class="terminal__line">Retrace 9.0.32 (build c3ce613f2fe60ca6edc3c2103508e6c966d7fc51 from go/r8bot (luci-r8-custom-ci-jammy-17-ap6r))</span></pre>
+</div>
+          <h4>作業用ディレクトリを作る</h4>
+          <p>署名した APK・鍵・スタックトレースは、プロジェクトの外の作業用ディレクトリに置きます。空のディレクトリを 1 つ決めて、その絶対パスを <code>W</code> という変数に入れます。<code>&lt;作業用ディレクトリ&gt;</code> の部分を、自分で決めたパスに置き換えてください。プロジェクトの中や、Git で管理しているディレクトリの中は避けます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> export W=&lt;作業用ディレクトリ&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p &quot;$W/keys&quot; &quot;$W/out&quot;</span></pre>
+</div>
+          <p>ターミナルを開き直したときは、<code>PATH</code> と <code>W</code> の 2 つの <code>export</code> をもう一度実行します（ステップ 3 で定義する <code>dbgsign</code> も同じです）。</p>
+          <h4>エミュレータを起動する</h4>
+          <p>エミュレータを 15 と同じ手順で起動しておきます。起動し終わるまで 20 秒ほどかかるので、2 行目の <code>adb wait-for-device</code> で待ちます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb wait-for-device shell &#x27;while [ &quot;$(getprop sys.boot_completed)&quot; != 1 ]; do sleep 1; done&#x27;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">emulator-5554	device</span></pre>
+</div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">release の APK を debug と比べる</h3>
+        </div>
+        <div class="step__body">
+          <p>debug と release の APK を両方ビルドして、中身を比べます。release は 01 から <code>optimization { enable = true }</code> を設定しているので、R8 がコードとリソースを縮小し、名前を短く置き換えます（難読化）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:assembleDebug :app:assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:minifyReleaseWithR8</span><span class="terminal__line">&gt; Task :app:convertShrunkResourcesToBinaryRelease</span><span class="terminal__line">&gt; Task :app:optimizeReleaseResources</span><span class="terminal__line">&gt; Task :app:mergeReleaseComposeMapping</span><span class="terminal__line">&gt; Task :app:compileReleaseArtProfile</span><span class="terminal__line">&gt; Task :app:packageRelease</span><span class="terminal__line">&gt; Task :app:assembleRelease</span><span class="terminal__line">&gt; Task :app:createReleaseApkListingFileRedirect</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 1m 5s</span><span class="terminal__line">97 actionable tasks: 97 executed</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+          <p><code>minifyReleaseWithR8</code> が R8 のタスクです。debug の APK は <code>app-debug.apk</code>、release は <code>app-release-unsigned.apk</code> です。release には署名の設定が無いので、名前のとおり署名されていません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -l app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release-unsigned.apk | awk &#x27;{print $5, $9}&#x27;</span><span class="terminal__line">16028722 app/build/outputs/apk/debug/app-debug.apk</span><span class="terminal__line">1999003 app/build/outputs/apk/release/app-release-unsigned.apk</span></pre>
+</div>
+          <h4>デバッグ可能かどうか</h4>
+          <p><code>aapt2 dump badging</code> は、APK のマニフェストの要点を表示します。パッケージ名の行と、デバッグ可能を表す <code>application-debuggable</code> の行だけを取り出します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> aapt2 dump badging app/build/outputs/apk/debug/app-debug.apk | grep -E &#x27;^package:|application-debuggable&#x27;</span><span class="terminal__line">package: name=&#x27;com.handson.android01&#x27; versionCode=&#x27;1&#x27; versionName=&#x27;1.0&#x27; platformBuildVersionName=&#x27;17&#x27; platformBuildVersionCode=&#x27;37&#x27; compileSdkVersion=&#x27;37&#x27; compileSdkVersionCodename=&#x27;17&#x27;</span><span class="terminal__line">application-debuggable</span><span class="terminal__line"><span class="terminal__prompt">$</span> aapt2 dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -E &#x27;^package:|application-debuggable&#x27;</span><span class="terminal__line">package: name=&#x27;com.handson.android01&#x27; versionCode=&#x27;1&#x27; versionName=&#x27;1.0&#x27; platformBuildVersionName=&#x27;17&#x27; platformBuildVersionCode=&#x27;37&#x27; compileSdkVersion=&#x27;37&#x27; compileSdkVersionCodename=&#x27;17&#x27;</span></pre>
+</div>
+          <p><code>application-debuggable</code> は debug にだけ出ます。デバッグ可能なアプリは、中のデータを <code>adb shell run-as</code> で読めます。筆者が debug の APK を入れて <code>run-as com.handson.android01 ls</code> を実行すると、<code>databases</code> や <code>files</code> などのディレクトリの一覧が出ました。release の APK では <code>run-as: package not debuggable: com.handson.android01</code> と拒否されました。配るのは release です。<code>versionCode='1' versionName='1.0'</code> は両方同じで、ステップ 5 で上げます。</p>
+          <h4>クラスの名前</h4>
+          <p><code>apkanalyzer dex packages</code> は、APK の中のパッケージ・クラス・メソッド・フィールドを 1 行ずつ表示します。行の先頭が <code>C</code> の行がクラスです。アプリのパッケージ（<code>com.handson.android01</code>）のクラスを数えます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> apkanalyzer dex packages --defined-only app/build/outputs/apk/debug/app-debug.apk | grep -c &#x27;^C .*com.handson.android01&#x27;</span><span class="terminal__line">396</span><span class="terminal__line"><span class="terminal__prompt">$</span> apkanalyzer dex packages --defined-only app/build/outputs/apk/release/app-release-unsigned.apk | grep -c &#x27;^C .*com.handson.android01&#x27;</span><span class="terminal__line">5</span><span class="terminal__line"><span class="terminal__prompt">$</span> apkanalyzer dex packages --defined-only app/build/outputs/apk/release/app-release-unsigned.apk | grep &#x27;^C .*com.handson.android01&#x27;</span><span class="terminal__line">C d 8	8	495	com.handson.android01.data.AppDatabase_Impl</span><span class="terminal__line">C d 2	2	94	com.handson.android01.data.AppDatabase</span><span class="terminal__line">C d 6	6	1188	com.handson.android01.MainActivity</span><span class="terminal__line">C d 4	4	593	com.handson.android01.TodoApplication</span><span class="terminal__line">C d 2	2	368	com.handson.android01.work.TodoBackupWorker</span></pre>
+</div>
+          <p>各行は <code>種類 状態 定義メソッド数 参照メソッド数 サイズ 名前</code> の順です。種類は <code>P</code>（パッケージ）・<code>C</code>（クラス）・<code>M</code>（メソッド）・<code>F</code>（フィールド）です。</p>
+
+          <table>
+            <thead>
+            <tr><th></th><th>debug</th><th>release</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>APK のサイズ</td><td>16,028,722 バイト（約 16.0MB）</td><td>1,999,003 バイト（約 2.0MB。14・15 と同じ値）</td></tr>
+            <tr><td><code>application-debuggable</code></td><td>あり</td><td>なし</td></tr>
+            <tr><td><code>com.handson.android01</code> のクラス</td><td>396 個</td><td>5 個</td></tr>
+            </tbody>
+          </table>
+          <ul>
+            <li>release では、アプリのクラスのうち 5 個だけが元の名前で残りました。ほかのクラスは消されたか、<code>zr2</code> のような短い名前に置き換えられ、<code>com.handson.android01</code> のパッケージには出てきません。</li>
+            <li>残った 5 個は、名前で参照されるクラスです。たとえば <code>TodoApplication</code> と <code>MainActivity</code> はマニフェストに書かれています。<code>TodoBackupWorker</code> の名前が残る理由は、ステップ 2 で R8 の設定から確かめます。</li>
+            <li>クラスの数でなく行の数を <code>grep -c com.handson.android01</code> で数えると、debug は 2,613 行、release は 68 行でした。メソッドやフィールドの行も数えるので、クラスの数にはなりません。</li>
+            <li>数値は筆者の環境での 1 回の測定です。debug の APK のサイズは、クリーンな状態から作った値です。15 の完成コードも、クリーンな状態から作ると同じ 16,028,722 バイトになります（15 の教材の約 19.0MB は、クリーンでない状態で測った値と見られます）。release の APK も 15 と同じ 1,999,003 バイトでした。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>debug の APK にだけ <code>application-debuggable</code> が出て、release の APK のほうが小さく、アプリのクラスが数個しか残っていなければ OK です。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">R8 の出力を読む</h3>
+        </div>
+        <div class="step__body">
+          <p>R8 は、何を消し、何をなぜ残したかを <code>app/build/outputs/mapping/release/</code> にファイルで書き出します。release をビルドするたびに書き直されます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -l app/build/outputs/mapping/release/ | awk &#x27;NR &gt; 1 {print $5, $9}&#x27;</span><span class="terminal__line">346711 configanalyzer.html</span><span class="terminal__line">104748 configanalyzer.pb</span><span class="terminal__line">60493 configuration.txt</span><span class="terminal__line">4687407 mapping.prt</span><span class="terminal__line">41556611 mapping.txt</span><span class="terminal__line">22459 resources.txt</span><span class="terminal__line">99373 seeds.txt</span><span class="terminal__line">4293108 usage.txt</span></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>ファイル</th><th>中身</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>usage.txt</code></td><td>使われていないので消したクラス・メソッド・フィールド</td></tr>
+            <tr><td><code>seeds.txt</code></td><td>keep ルールに当たったもの（<code>-keepnames</code> のように、消すことは許すルールに当たったものも含む）</td></tr>
+            <tr><td><code>configuration.txt</code></td><td>R8 に渡された設定（keep ルール）の全体</td></tr>
+            <tr><td><code>resources.txt</code></td><td>残したリソースとその理由、消したリソース（<code>is not reachable</code>）</td></tr>
+            <tr><td><code>mapping.txt</code></td><td>元の名前と、置き換えた短い名前の対応表（約 41.5MB）。ステップ 3 で使う</td></tr>
+            <tr><td><code>configanalyzer.html</code></td><td>R8 の設定のレポート（筆者は開いて確かめていません）</td></tr>
+            </tbody>
+          </table>
+          <h4>消えたもの（<code>usage.txt</code>）</h4>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -c &#x27;^com.handson.android01.kotlin&#x27; app/build/outputs/mapping/release/usage.txt</span><span class="terminal__line">23</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep &#x27;^com.handson.android01.kotlin&#x27; app/build/outputs/mapping/release/usage.txt | head -5</span><span class="terminal__line">com.handson.android01.kotlin.BasicsKt</span><span class="terminal__line">com.handson.android01.kotlin.CollectionsKt$sortedByIdDescending$$inlined$sortedBy$1</span><span class="terminal__line">com.handson.android01.kotlin.CollectionsKt</span><span class="terminal__line">com.handson.android01.kotlin.CoroutinesKt$fetchTodos$1</span><span class="terminal__line">com.handson.android01.kotlin.CoroutinesKt$fetchTodosAndCount$2$count$1</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n &#x27;TodoListScreenPreviews&#x27; app/build/outputs/mapping/release/usage.txt | head -5</span><span class="terminal__line">30566:com.handson.android01.ui.screens.ComposableSingletons$TodoListScreenPreviewsKt</span><span class="terminal__line">30577:com.handson.android01.ui.screens.TodoListScreenPreviewsKt</span></pre>
+</div>
+          <ul>
+            <li><code>com.handson.android01.kotlin</code> は、02 で書いた文法の練習のコードです。テストからしか使っていないので、アプリからは消えました（23 行）。</li>
+            <li>03 から書いてきた Preview の関数（<code>TodoListScreenPreviewsKt</code>）も消えています。Preview は Android Studio で見るためのもので、アプリの実行では呼ばれません。</li>
+            <li><code>usage.txt</code> は全部で 61,030 行ありました。ほとんどはライブラリの使っていない部分です。</li>
+          </ul>
+          <h4>残したもの（<code>seeds.txt</code>）</h4>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n &#x27;TodoBackupWorker&#x27; app/build/outputs/mapping/release/seeds.txt</span><span class="terminal__line">17:com.handson.android01.work.TodoBackupWorker</span><span class="terminal__line">305:com.handson.android01.work.TodoBackupWorker: TodoBackupWorker(android.content.Context,androidx.work.WorkerParameters,com.handson.android01.data.TodoRepository)</span></pre>
+</div>
+          <p>行番号は環境ごとに変わります。<code>seeds.txt</code>（1,005 行）は、keep ルールに当たったものの一覧です。14 で書いた <code>TodoBackupWorker</code> は、クラスとコンストラクタの 2 行が載っています。では、どのルールに当たったのでしょうか。</p>
+          <h4>R8 に渡された設定（<code>configuration.txt</code>）</h4>
+          <p><code>configuration.txt</code> には、R8 に渡された keep ルールが、持ち込んだライブラリごとの節に分かれて並んでいます。節の見出しの行を数え、いくつかのライブラリの節を探します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -c &#x27;The proguard configuration file for the following section is&#x27; app/build/outputs/mapping/release/configuration.txt</span><span class="terminal__line">54</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n &#x27;The proguard configuration file for the following section is&#x27; app/build/outputs/mapping/release/configuration.txt | grep -E &#x27;work-runtime|hilt-work|room3-runtime|ktor|kotlinx-serialization&#x27;</span><span class="terminal__line">93:# The proguard configuration file for the following section is androidx.hilt:hilt-work:1.4.0 (extracted file: ~/.gradle/caches/9.6.0/transforms/4959f3e8c5578adb6ffb42507bff3f54/transformed/hilt-work-1.4.0/proguard.txt)</span><span class="terminal__line">128:# The proguard configuration file for the following section is androidx.work:work-runtime:2.12.0 (extracted file: ~/.gradle/caches/9.6.0/transforms/367c4ff70276bb94563a29d425d687cc/transformed/work-runtime-2.12.0/proguard.txt)</span><span class="terminal__line">643:# The proguard configuration file for the following section is androidx.room3:room3-runtime-android:3.0.3 (extracted file: ~/.gradle/caches/9.6.0/transforms/9fc0846a4530243daa7c5795ffa188a6/transformed/room3-runtime/proguard.txt)</span><span class="terminal__line">688:# The proguard configuration file for the following section is io.ktor:ktor-utils-jvm:3.6.0 (extracted file: ~/.gradle/caches/9.6.0/transforms/6fe589a5642275f17461a5b14ae7550a/transformed/shrink-rules/lib/META-INF/proguard/ktor.pro)</span><span class="terminal__line">781:# The proguard configuration file for the following section is org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.11.0 (extracted file: ~/.gradle/caches/9.6.0/transforms/b8f642042784da0f63e6ed1ec3fce0ed/transformed/shrink-rules/lib/META-INF/com.android.tools/r8/kotlinx-serialization-common.pro)</span><span class="terminal__line">830:# The proguard configuration file for the following section is org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.11.0 (extracted file: ~/.gradle/caches/9.6.0/transforms/b8f642042784da0f63e6ed1ec3fce0ed/transformed/shrink-rules/lib/META-INF/com.android.tools/r8/kotlinx-serialization-r8.pro)</span></pre>
+</div>
+          <p>節は 54 個ありました。先頭の節（1 行目）は AGP 自身の既定のルールで、その後に hilt-work・work-runtime・Room 3・Ktor・kotlinx.serialization などの節が続きます。行番号とキャッシュのパスは環境ごとに変わります。</p>
+          <p>hilt-work と work-runtime の節には、<code>-keepnames</code> のルールがあります。<code>ListenableWorker</code> を継承したクラス（<code>TodoBackupWorker</code> もその 1 つ）の名前を変えないルールです。<code>TodoBackupWorker</code> の名前が残ったのは、このルールのためです。アプリの <code>app/src/main/keepRules/rules.keep</code> は、プロジェクトを作ったときのコメントだけです。14 で Worker を足しても、自前のルールは要りませんでした。ライブラリが自分の keep ルール（consumer rules）を AAR に入れて持ち込み、自分で守っているからです。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: hilt-work と work-runtime の節の中身を読む（読むだけでもよい）</summary>
+            <div class="disclosure__body">
+          <p>この確認は任意です。読むだけでもかまいません。hilt-work と work-runtime の節の中身を表示します。上の <code>grep -n</code> で出た行番号に合わせて、<code>sed</code> の行の範囲を変えてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> sed -n &#x27;94,95p;129,143p&#x27; app/build/outputs/mapping/release/configuration.txt</span><span class="terminal__line"># Keep class names of Hilt injected Workers since their name are used as a multibinding map key.</span><span class="terminal__line">-keepnames @androidx.hilt.work.HiltWorker class * extends androidx.work.ListenableWorker</span><span class="terminal__line"># Keep ListenableWorker / Worker if not removed during shrinking</span><span class="terminal__line">-keepnames class * extends androidx.work.ListenableWorker</span><span class="terminal__line"># Keep all constructors on ListenableWorker, Worker if class is kept</span><span class="terminal__line">-keepclassmembers public class * extends androidx.work.ListenableWorker {</span><span class="terminal__line">    public &lt;init&gt;(...);</span><span class="terminal__line">}</span><span class="terminal__line"></span><span class="terminal__line"># We need to keep WorkerParameters for the ListenableWorker constructor that is used by the</span><span class="terminal__line"># default instantiation strategy in WorkerFactory.</span><span class="terminal__line">-keep class androidx.work.WorkerParameters</span><span class="terminal__line"></span><span class="terminal__line"># Keep InputMerger if not removed during shrinking</span><span class="terminal__line">-keepnames class * extends androidx.work.InputMerger</span><span class="terminal__line"># Keep constructor on InputMerger if class is kept</span><span class="terminal__line">-keepclassmembers class * extends androidx.work.InputMerger { void &lt;init&gt;(); }</span></pre>
+</div>
+          <ul>
+            <li><code>-keepnames</code> は「消さなかった場合は、名前を変えない」というルールです。名前を変えない理由として、hilt-work の節のコメントには「Hilt で注入する Worker のクラス名は、multibinding のマップのキーに使われる」とあります。work-runtime の節は、名前を保つ指定だけで理由は書いていません。</li>
+            <li><code>-keepclassmembers</code> は、クラスが残った場合にコンストラクタも残すルールです。<code>seeds.txt</code> にコンストラクタの行があったのはこのためです。</li>
+          </ul>
+
+            </div>
+          </details>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">自分でリフレクションを書いたら keep ルールが要る</p>
+              <p>このアプリでリフレクション（名前でクラスやメソッドを探す仕組み）を使う所は、すべてライブラリのルールで守られています。自分でリフレクションを書いた場合は、R8 がその参照を追えずに消したり名前を変えたりすることがあります。そのときは <code>rules.keep</code> に <code>-keep class 完全修飾クラス名 { *; }</code> のようなルールを足します。この項目では試しません。</p>
+            </div>
+          </div>
+          <h4>残したリソースと消したリソース（<code>resources.txt</code>）</h4>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -c &#x27;reachable from&#x27; app/build/outputs/mapping/release/resources.txt</span><span class="terminal__line">122</span><span class="terminal__line"><span class="terminal__prompt">$</span> head -5 app/build/outputs/mapping/release/resources.txt</span><span class="terminal__line">attr:alpha:2130903042 reachable from from dex</span><span class="terminal__line">attr:font:2130903054 reachable from int[] androidx.core.R$styleable.FontFamilyFont</span><span class="terminal__line">attr:fontProviderAuthority:2130903055 reachable from int[] androidx.core.R$styleable.FontFamily</span><span class="terminal__line">attr:fontProviderCerts:2130903056 reachable from int[] androidx.core.R$styleable.FontFamily</span><span class="terminal__line">attr:fontProviderFallbackQuery:2130903057 reachable from int[] androidx.core.R$styleable.FontFamily</span></pre>
+</div>
+          <p><code>optimization { enable = true }</code> は、コードだけでなくリソースも縮小します。<code>resources.txt</code>（339 行）には、残したリソースと、どこから参照されているか（<code>reachable from …</code>）が載ります。<code>from from</code> と重なって見える行もありますが、筆者の環境での出力のままです。</p>
+          <p>消したリソース（どこからも参照されないリソース）の行も載ります。形は <code>reachable from</code> ではなく <code>is not reachable.</code> です。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -c &#x27;is not reachable&#x27; app/build/outputs/mapping/release/resources.txt</span><span class="terminal__line">217</span></pre>
+</div>
+          <p>1 回の実測では、339 行のうち 217 行がこの形でした。たとえば <code>anim:fragment_fast_out_extra_slow_in:… is not reachable.</code> のような行です（<code>…</code> は省略）。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: <code>-whyareyoukeeping</code> で、クラスが消されない理由を R8 に聞く（読むだけでもよい）</summary>
+            <div class="disclosure__body">
+          <p>この確認は任意です。読むだけでもかまいません。R8 には、指定したクラスを残した理由をビルドの出力に書かせるルール <code>-whyareyoukeeping</code> があります。<code>rules.keep</code> の末尾に 1 行足します。最後の <code>#}</code> の行の後で改行してから書いてください（このファイルは末尾に改行がありません）。</p>
+<!-- verify:temp -->
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/keepRules/rules.keep</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  #-keepclassmembers class fqcn.of.javascript.interface.for.webview {</span><span class="diff-line">  #   public *;</span><span class="diff-line">  #}</span><span class="diff-line diff-line--add">+ -whyareyoukeeping class com.handson.android01.work.TodoBackupWorker</span></pre>
+</div>
+          <p>R8 のタスクだけを流し直します。<code>--rerun</code> を付けないと、前回と入力が同じときは <code>UP-TO-DATE</code> で飛ばされて、何も出力されません（筆者が付けずにもう一度実行して確かめました）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:minifyReleaseWithR8 --rerun</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:minifyReleaseWithR8</span><span class="terminal__line">com.handson.android01.work.TodoBackupWorker</span><span class="terminal__line">|- is referenced from:</span><span class="terminal__line">|  void com.handson.android01.TodoApplication.onCreate()</span><span class="terminal__line">|- is defined in library method overridden by:</span><span class="terminal__line">|  com.handson.android01.TodoApplication</span><span class="terminal__line">|- is referenced from xml:</span><span class="terminal__line">|  AndroidManifest.xml</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 21s</span><span class="terminal__line">32 actionable tasks: 1 executed, 31 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+          <ul>
+            <li><code>TodoBackupWorker</code> が残った理由は、work-runtime の keep ルールではなく、<code>TodoApplication.onCreate()</code> から参照されていることでした。<code>onCreate()</code> が呼ぶ <code>TodoBackupScheduler.schedulePeriodicBackup()</code> が <code>PeriodicWorkRequestBuilder&lt;TodoBackupWorker&gt;</code> で使っていて、R8 がこの関数を <code>onCreate()</code> に埋め込んだ（インライン化した）ためです。</li>
+            <li><code>-keepnames</code> は「名前を変えない」ルールで、「消さない」ルールではありません。<code>-whyareyoukeeping</code> が説明するのは「消さない理由」なので、<code>-keepnames</code> は出てきません。</li>
+            <li>後半の 2 項目（<code>is defined in library method overridden by</code> と <code>is referenced from xml</code>）は、参照元の <code>TodoApplication.onCreate()</code> が消されない理由と読めます。<code>onCreate()</code> は <code>Application</code> のメソッドを上書きしていて、<code>TodoApplication</code> はマニフェストに書かれているからです。マニフェストに <code>TodoBackupWorker</code> は書かれていません。<code>TodoApplication</code> に同じルールを書くと <code>is referenced from xml: AndroidManifest.xml</code> だけが出ることを、筆者は確かめました。</li>
+          </ul>
+          <p>確かめたら、足した 1 行を消して元に戻します。<code>rules.keep</code> は 15 のままにします。</p>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>usage.txt</code> に <code>com.handson.android01.kotlin</code> の行があり、<code>seeds.txt</code> に <code>TodoBackupWorker</code> の 2 行があれば OK です。<code>configuration.txt</code> に hilt-work と work-runtime の節があることも確かめます。<code>-whyareyoukeeping</code> を試した場合は、<code>rules.keep</code> を元に戻したことも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">わざと落とし、retrace でスタックトレースを戻す</h3>
+        </div>
+        <div class="step__body">
+          <p>release の APK は名前が置き換えられているので、クラッシュしたときのスタックトレースも読みにくくなります。わざと落として、<code>retrace</code> で元に戻します。起動するとすぐ落ちるように、<code>TodoBackupScheduler</code> の <code>schedulePeriodicBackup()</code> の先頭に、一時的に <code>error(...)</code> を入れます。14 から、<code>TodoApplication.onCreate()</code> がアプリの起動のたびにこの関数を呼んでいます。</p>
+<!-- verify:temp -->
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/work/TodoBackupScheduler.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      // 1 日に 1 回のバックアップ。周期は「この間に 1 回」で、時刻は決まらない（Doze などで後ろにずれる）。最短は 15 分。</span><span class="diff-line">      // 起動のたびに呼ぶが、同じ名前の予約があれば何もしない（KEEP）。CANCEL_AND_REENQUEUE（旧 REPLACE）にすると、起動のたびに周期が最初からになる</span><span class="diff-line">      fun schedulePeriodicBackup() {</span><span class="diff-line diff-line--add">+         error(&quot;retrace の練習: わざと落とす&quot;)</span><span class="diff-line">          val request = PeriodicWorkRequestBuilder&lt;TodoBackupWorker&gt;(1, TimeUnit.DAYS)</span><span class="diff-line">              .setConstraints(constraints)</span><span class="diff-line">              .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 23s</span></pre>
+</div>
+          <h4>debug 用の鍵で一時的に署名する</h4>
+          <p><code>app-release-unsigned.apk</code> は署名されていないので、そのままではインストールできません。15 までと同じく、debug 用の鍵（<code>~/.android/debug.keystore</code>）で一時的に署名します。この項目では何度も使うので、シェルの関数 <code>dbgsign</code> にします。パスワードの <code>android</code> は、debug 用の鍵の既定の値として公開されているものです。自分の鍵のパスワードは、このようにコマンドに書きません（ステップ 4）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> dbgsign() { apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out &quot;$2&quot; &quot;$1&quot; &amp;&amp; rm -f &quot;$2.idsig&quot;; }</span></pre>
+</div>
+          <ul>
+            <li>AGP が出す APK は、すでに 4 バイト境界にそろっています（下のとおり、<code>zipalign -c</code> が整列済みと答えます）。そのため、14・15 と同じく <code>zipalign</code> は使わず、<code>apksigner</code> で署名するだけです。</li>
+            <li><code>apksigner</code> は、署名した APK の隣に <code>.idsig</code> のファイルも作ります。v4 署名（Android 11 以降の方式）のファイルです（<code>apksigner sign --help</code> の <code>--v4-signing-enabled</code> の説明による）。この項目では使わないので、<code>dbgsign</code> では消します。</li>
+            <li><code>dbgsign</code> は、ステップ 5・7 でも使います。ターミナルを開き直したときは、この定義ももう一度実行してください。</li>
+          </ul>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> zipalign -c -v 4 app/build/outputs/apk/release/app-release-unsigned.apk | tail -1</span><span class="terminal__line">Verification successful</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> dbgsign app/build/outputs/apk/release/app-release-unsigned.apk &quot;$W/out/crash.apk&quot;</span><span class="terminal__line">WARNING: A restricted method in java.lang.System has been called</span><span class="terminal__line">WARNING: java.lang.System::loadLibrary has been called by org.conscrypt.NativeLibraryUtil in an unnamed module (file:（SDK のパス）/build-tools/37.0.0/lib/apksigner.jar)</span><span class="terminal__line">WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module</span><span class="terminal__line">WARNING: Restricted methods will be blocked in a future release unless native access is enabled</span></pre>
+</div>
+          <p><code>WARNING</code> の 4 行は、<code>apksigner</code> を動かした Java が出す警告です。署名は成功しています。以降の <code>apksigner</code> の出力では省きます。筆者の環境の Java（Android Studio 同梱）は 25.0.3 です。15 までの教材では出ていなかったので、Java の版が違うためと見られます。</p>
+          <h4>落ちるところを見る</h4>
+          <p>15 の最後にアプリをアンインストールしたので、最初の <code>adb uninstall</code> は失敗します。失敗してもかまいません。インストールしたら、ログを消してから起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Failure [DELETE_FAILED_INTERNAL_ERROR]</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb install &quot;$W/out/crash.apk&quot;</span><span class="terminal__line">Performing Streamed Install</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -c</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>数秒待ってから、クラッシュだけが入るバッファ（<code>-b crash</code>）をファイルに保存して表示します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -b crash &gt; &quot;$W/out/crash.txt&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> cat &quot;$W/out/crash.txt&quot;</span><span class="terminal__line">--------- beginning of crash</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: FATAL EXCEPTION: main</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: Process: com.handson.android01, PID: 3739</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: java.lang.RuntimeException: Unable to create application com.handson.android01.TodoApplication: java.lang.IllegalStateException: retrace の練習: わざと落とす</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: 	at android.app.ActivityThread.handleBindApplication(ActivityThread.java:7836)</span><span class="terminal__line">（中略）</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: Caused by: java.lang.IllegalStateException: retrace の練習: わざと落とす</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: 	at com.handson.android01.TodoApplication.onCreate(r8-map-id-2320b1755f87fbfd7ddbe2ba80f7a1ca99ec6a3693109db2dc7937ba2a8a11fa:12)</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: 	at android.app.Instrumentation.callApplicationOnCreate(Instrumentation.java:1381)</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: 	at android.app.ActivityThread.handleBindApplication(ActivityThread.java:7830)</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: 	... 9 more</span></pre>
+</div>
+          <ul>
+            <li>ファイルは全部で 19 行です。（中略）の所には、Android の内部のフレームが 9 行並びます。</li>
+            <li>アプリのフレームは <code>TodoApplication.onCreate</code> の 1 つだけです。<code>error(...)</code> を書いた <code>schedulePeriodicBackup()</code> は出てきません。R8 がこの関数を <code>onCreate()</code> に埋め込んだ（インライン化した）ためです。</li>
+            <li>ファイル名の位置には、元のファイル名ではなく <code>r8-map-id-</code> と 64 桁の 16 進数が入り、行番号は <code>:12</code> です。この ID で、どの <code>mapping.txt</code> と対応するかが分かります。<code>mapping.txt</code> のヘッダーには、同じ ID を書いた <code>pg_map_id</code> の行があります（<code>grep pg_map_id app/build/outputs/mapping/release/mapping.txt</code> で探せます）。</li>
+            <li>時刻とプロセス ID は、実行のたびに変わります。ID の値は <code>mapping.txt</code> の中身から決まるので、コードや依存・ツールの版が変わると変わります。</li>
+          </ul>
+          <h4><code>retrace</code> で戻す</h4>
+          <p><code>retrace</code> に、このビルドの <code>mapping.txt</code> と、保存したスタックトレースを渡します。<code>logcat</code> の行頭の時刻などが付いたままでも読めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> retrace app/build/outputs/mapping/release/mapping.txt &quot;$W/out/crash.txt&quot;</span><span class="terminal__line">--------- beginning of crash</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: FATAL EXCEPTION: main</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: Process: com.handson.android01, PID: 3739</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: java.lang.RuntimeException: Unable to create application com.handson.android01.TodoApplication: java.lang.IllegalStateException: retrace の練習: わざと落とす</span><span class="terminal__line">（中略）</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: Caused by: java.lang.IllegalStateException: retrace の練習: わざと落とす</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: 	at com.handson.android01.work.TodoBackupScheduler.schedulePeriodicBackup(TodoBackupScheduler.kt:25)</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: 	at com.handson.android01.TodoApplication.onCreate(TodoApplication.kt:26)</span><span class="terminal__line">（中略）</span><span class="terminal__line">10-04 16:27:16.395  3739  3739 E AndroidRuntime: 	... 9 more</span></pre>
+</div>
+          <ul>
+            <li>1 つだった <code>TodoApplication.onCreate</code> のフレームが、メソッド名・ファイル名・行番号の付いた 2 つのフレームに展開されました。インライン化された関数も、元の呼び出しの形に戻ります。</li>
+            <li><code>TodoApplication.kt:26</code> は、<code>onCreate()</code> の中の <code>backupScheduler.schedulePeriodicBackup()</code> の行です。</li>
+            <li><code>TodoBackupScheduler.kt:25</code> は、<code>error(...)</code> を入れた行です（<code>fun schedulePeriodicBackup() {</code> が 24 行目で、その次の行）。どの行で落ちたかまで分かります。</li>
+            <li>候補が複数あるときの <code>&lt;OR&gt;</code> の表示は出ませんでした。</li>
+          </ul>
+          <p><code>mapping.txt</code> の中も少し見ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> head -3 app/build/outputs/mapping/release/mapping.txt</span><span class="terminal__line"># compiler: R8</span><span class="terminal__line"># compiler_version: 9.4.24</span><span class="terminal__line"># min_api: 26</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n &#x27;TodoBackupScheduler -&gt; &#x27; app/build/outputs/mapping/release/mapping.txt</span><span class="terminal__line">258464:com.handson.android01.work.TodoBackupScheduler -&gt; wr2:</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -n &#x27;^com.handson.android01.TodoApplication -&gt;&#x27; app/build/outputs/mapping/release/mapping.txt</span><span class="terminal__line">254746:com.handson.android01.TodoApplication -&gt; com.handson.android01.TodoApplication:</span></pre>
+</div>
+          <p><code>TodoBackupScheduler</code> は <code>wr2</code> という名前に置き換えられ、<code>TodoApplication</code> は元の名前のままです。<code>retrace</code> は、この対応表を逆にたどって名前を戻しています。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">配ったビルドの <code>mapping.txt</code> を残しておく</p>
+              <p><code>mapping.txt</code> は、release をビルドするたびに書き直されます。コード・依存・AGP の版が変わると、<code>mapping.txt</code> の中身も変わり、そのビルドのスタックトレースは別のビルドの <code>mapping.txt</code> では正しく戻せません。クラッシュの報告を後で読めるように、配ったビルドの <code>mapping.txt</code> をコピーして残しておきます。この後、コードを戻してビルドし直すので、ここでコピーしておきます。ステップ 6 で見るとおり、AAB には <code>mapping.txt</code> が同梱されます。</p>
+            </div>
+          </div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp app/build/outputs/mapping/release/mapping.txt &quot;$W/out/mapping-crash.txt&quot;</span></pre>
+</div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: 行番号を残す keep ルールを足すとどうなるか（読むだけ）</summary>
+            <div class="disclosure__body">
+          <p>この確認は読むだけにしてください。release のスタックトレースに行番号を残すには、<code>rules.keep</code> に次の 2 行を足す方法がよく紹介されます。AGP の既定のルールは、元のソースの行番号（<code>LineNumberTable</code>）とファイル名（<code>SourceFile</code>）を残さないからです。生のスタックトレースの <code>:12</code> は、元のソースの行番号ではありません。</p>
+<!-- verify:temp -->
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/keepRules/rules.keep</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  #-keepclassmembers class fqcn.of.javascript.interface.for.webview {</span><span class="diff-line">  #   public *;</span><span class="diff-line">  #}</span><span class="diff-line diff-line--add">+ -keepattributes SourceFile,LineNumberTable</span><span class="diff-line diff-line--add">+ -renamesourcefileattribute SourceFile</span></pre>
+</div>
+          <p>筆者がこの 2 行を足して同じ手順で落とすと、生のスタックトレースのフレームは次のように変わりました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -b crash | grep -E &#x27;Caused by|handson&#x27; | cut -c34-220</span><span class="terminal__line">AndroidRuntime: Process: com.handson.android01, PID: 3802</span><span class="terminal__line">AndroidRuntime: java.lang.RuntimeException: Unable to create application com.handson.android01.TodoApplication: java.lang.IllegalStateException: retrace の練習: わざと落とす</span><span class="terminal__line">AndroidRuntime: Caused by: java.lang.IllegalStateException: retrace の練習: わざと落とす</span><span class="terminal__line">AndroidRuntime: 	at com.handson.android01.TodoApplication.onCreate(Unknown Source:11)</span></pre>
+</div>
+          <ul>
+            <li>ファイル名の位置が <code>r8-map-id-…</code> から <code>Unknown Source</code> に変わり、行は <code>:11</code> になりました。</li>
+            <li><code>retrace</code> の結果は、ルールが無いときと同じ 2 フレーム（<code>TodoBackupScheduler.kt:25</code> と <code>TodoApplication.kt:26</code>）でした。</li>
+            <li>APK のサイズは同じ 1,999,003 バイトでした。中の <code>classes.dex</code> は 3,173,104 バイトから 3,144,452 バイトになり、逆に少し小さくなりました（理由は調べていません）。</li>
+          </ul>
+          <p>R8 9.4 は、ルールを足さなくても <code>mapping.txt</code> の側に元のソースの行の情報を持っていて、<code>retrace</code> で元の行まで戻せます。足しても得るものが無かったので、<strong>この項目では <code>rules.keep</code> を変えません</strong>。</p>
+
+            </div>
+          </details>
+          <h4>コードを戻す</h4>
+          <p><code>error(...)</code> の行を消して、15 のままの <code>TodoBackupScheduler.kt</code> に戻します。消したら release をビルドし直します。この APK（<code>versionCode</code> 1）を、ステップ 4 で自分の鍵で署名します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 34s</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>生のスタックトレースでは、アプリのフレームが <code>TodoApplication.onCreate(r8-map-id-…)</code> の 1 つだけです。<code>retrace</code> の後に <code>TodoBackupScheduler.kt</code> と <code>TodoApplication.kt</code> の 2 つのフレームに戻れば OK です。<code>error(...)</code> を消したことと、<code>$W/out/mapping-crash.txt</code> があることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">自分の鍵を作り、APK に署名して入れる</h3>
+        </div>
+        <div class="step__body">
+          <p>アプリを配るときは、自分の鍵で署名します。Android は、同じパッケージ名で同じ鍵の署名があるときだけ、アプリの更新を受け付けます。debug 用の鍵（<code>~/.android/debug.keystore</code>）はパスワードが公開されている練習用の鍵なので、配るアプリには使いません。</p>
+          <h4>鍵を作る</h4>
+          <p><code>keytool</code> で、作業用ディレクトリに鍵ストア（鍵を入れるファイル）を作ります。<code>-alias upload</code> は鍵の名前、<code>-validity 10000</code> は有効期間（日）です。パスワードはコマンドに書かず、聞かれたときに入力します。確認のため 2 回聞かれます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> keytool -genkeypair -keystore &quot;$W/keys/upload.jks&quot; -alias upload -keyalg RSA -keysize 2048 -validity 10000 -dname &quot;CN=Handson Learner&quot;</span><span class="terminal__line">Enter keystore password:  （パスワードを入力します。画面には表示されません）</span><span class="terminal__line">Re-enter new password: （もう一度入力します）</span><span class="terminal__line">Generating 2048-bit RSA key pair and self-signed certificate (SHA384withRSA) with a validity of 10,000 days</span><span class="terminal__line">	for: CN=Handson Learner</span></pre>
+</div>
+          <ul>
+            <li>鍵ストアの形式は PKCS12 です。鍵のパスワードは、鍵ストアのパスワードと同じになります。</li>
+            <li><code>-dname</code> は証明書の名前です。ここでは <code>CN=Handson Learner</code> だけにしました。</li>
+            <li>パスワードは自分で決めて、忘れないように保管します。この教材には例を載せません。</li>
+          </ul>
+          <p>作った鍵を確かめます。ここでもパスワードを聞かれます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> keytool -list -v -keystore &quot;$W/keys/upload.jks&quot;</span><span class="terminal__line">Enter keystore password:  （パスワードを入力します）</span><span class="terminal__line">Keystore type: PKCS12</span><span class="terminal__line">Keystore provider: SUN</span><span class="terminal__line"></span><span class="terminal__line">Your keystore contains 1 entry</span><span class="terminal__line"></span><span class="terminal__line">Alias name: upload</span><span class="terminal__line">Creation date: Oct 4, 2026</span><span class="terminal__line">Entry type: PrivateKeyEntry</span><span class="terminal__line">Certificate chain length: 1</span><span class="terminal__line">Certificate[1]:</span><span class="terminal__line">Owner: CN=Handson Learner</span><span class="terminal__line">Issuer: CN=Handson Learner</span><span class="terminal__line">Serial number: （環境ごとに異なる値）</span><span class="terminal__line">Valid from: Sun Oct 04 16:31:25 JST 2026 until: Thu Feb 19 16:31:25 JST 2054</span><span class="terminal__line">Certificate fingerprints:</span><span class="terminal__line">	 SHA1: （環境ごとに異なる値）</span><span class="terminal__line">	 SHA256: （環境ごとに異なる値）</span><span class="terminal__line">Signature algorithm name: SHA384withRSA</span><span class="terminal__line">Subject Public Key Algorithm: 2048-bit RSA key</span><span class="terminal__line">Version: 3</span><span class="terminal__line">（中略）</span></pre>
+</div>
+          <p>所有者（<code>Owner</code>）と発行者（<code>Issuer</code>）が同じ、自己署名の証明書です。有効期間は 10,000 日で、2054 年までです。指紋（<code>fingerprints</code>）は鍵ごとに違う値で、鍵を見分けるのに使います。</p>
+
+          <div class="callout callout--danger">
+            <span class="callout__icon" aria-hidden="true">🚫</span>
+            <div class="callout__body">
+              <p class="callout__title">鍵とパスワードをリポジトリに入れない。鍵を失くさない</p>
+              <ul>
+                <li>鍵ストアとパスワードがあれば、誰でも「あなたのアプリ」として署名できます。リポジトリに入れると、リポジトリを読める人全員に渡ります。Git の履歴に一度入ると、ファイルを消しても履歴に残ります。</li>
+                <li>アプリの署名鍵を自分で管理する場合、鍵を失くすと、同じアプリとして更新を配れません。署名の違う APK は、更新として受け付けられないからです（ステップ 5 で確かめます）。</li>
+                <li>Google Play では Play App Signing が標準です。利用者に配る APK の署名の鍵（アプリの署名鍵）は Google が持ち、開発者はアップロード鍵で署名した AAB を Play に送ります。アップロード鍵は、失くしてもリセットできます。この項目では説明だけにして、Play Console の操作はしません。</li>
+              </ul>
+            </div>
+          </div>
+          <h4>APK に署名する</h4>
+          <p>ステップ 3 の最後にビルドした APK（<code>versionCode</code> 1）に署名します。<code>apksigner sign</code> で自分の鍵を指定します。パスワードを聞かれたら入力します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> aapt2 dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -o &quot;versionCode=&#x27;[0-9]*&#x27; versionName=&#x27;[^&#x27;]*&#x27;&quot;</span><span class="terminal__line">versionCode=&#x27;1&#x27; versionName=&#x27;1.0&#x27;</span></pre>
+</div>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> apksigner sign --ks &quot;$W/keys/upload.jks&quot; --ks-key-alias upload --out &quot;$W/out/v1.apk&quot; app/build/outputs/apk/release/app-release-unsigned.apk</span><span class="terminal__line">Keystore password for signer #1: （パスワードを入力します）</span></pre>
+</div>
+          <p>署名を確かめます。<code>--print-certs</code> は、署名した証明書の情報も表示します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> apksigner verify --print-certs --verbose &quot;$W/out/v1.apk&quot;</span><span class="terminal__line">Verifies</span><span class="terminal__line">Verified using v1 scheme (JAR signing): false</span><span class="terminal__line">Verified using v2 scheme (APK Signature Scheme v2): true</span><span class="terminal__line">Verified using v3 scheme (APK Signature Scheme v3): true</span><span class="terminal__line">Verified using v3.1 scheme (APK Signature Scheme v3.1): false</span><span class="terminal__line">Verified using v3.2 scheme (APK Signature Scheme v3.2): false</span><span class="terminal__line">Verified using v4 scheme (APK Signature Scheme v4): false</span><span class="terminal__line">Verified for SourceStamp: false</span><span class="terminal__line">Number of signers: 1</span><span class="terminal__line">V3.0 Signer: certificate DN: CN=Handson Learner</span><span class="terminal__line">V3.0 Signer: certificate SHA-256 digest: （環境ごとに異なる値）</span><span class="terminal__line">V3.0 Signer: certificate SHA-1 digest: （環境ごとに異なる値）</span><span class="terminal__line">V3.0 Signer: certificate MD5 digest: （環境ごとに異なる値）</span><span class="terminal__line">V3.0 Signer: key algorithm: RSA</span><span class="terminal__line">V3.0 Signer: key size (bits): 2048</span><span class="terminal__line">V3.0 Signer: public key SHA-256 digest: （環境ごとに異なる値）</span><span class="terminal__line">V3.0 Signer: public key SHA-1 digest: （環境ごとに異なる値）</span><span class="terminal__line">V3.0 Signer: public key MD5 digest: （環境ごとに異なる値）</span></pre>
+</div>
+          <ul>
+            <li>署名の方式は v2 と v3 が <code>true</code>、v1（JAR 署名）が <code>false</code> です。v2 の方式は Android 7.0（API 24）以上で使えます。このアプリの minSdk は 26 なので、古い v1 の署名は付きません。</li>
+            <li><code>certificate DN: CN=Handson Learner</code> が、さっき作った鍵です。</li>
+          </ul>
+          <p>ステップ 3 で debug 用の鍵で署名した <code>crash.apk</code> と見比べます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> apksigner verify --print-certs &quot;$W/out/crash.apk&quot; | grep -E &#x27;DN|SHA-256&#x27;</span><span class="terminal__line">V3.0 Signer: certificate DN: C=US, O=Android, CN=Android Debug</span><span class="terminal__line">V3.0 Signer: certificate SHA-256 digest: （環境ごとに異なる値）</span></pre>
+</div>
+          <p>debug 用の鍵の証明書は <code>C=US, O=Android, CN=Android Debug</code> で、指紋も違います。同じアプリでも、別の鍵の署名です。</p>
+          <h4>インストールして起動する</h4>
+          <p><code>crash.apk</code> をアンインストールしてから、自分の鍵で署名した <code>v1.apk</code> を入れて起動します。最初の起動では、API から 20 件の一覧を取得します。14 で作ったバックアップの Worker も、予約した直後に 1 回動きます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb install &quot;$W/out/v1.apk&quot;</span><span class="terminal__line">Serving...</span><span class="terminal__line">All files should be loaded. Notifying the device.</span><span class="terminal__line">Performing Incremental Install</span><span class="terminal__line">Success</span><span class="terminal__line">Install command complete in 772 ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>数秒待ってから、画面の文字を <code>uiautomator dump</code> で読み出します。エミュレータを画面なしで起動しているので、画面の内容をコマンドで確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb exec-out uiautomator dump /dev/tty 2&gt;/dev/null | grep -o &#x27;text=&quot;[^&quot;]\+&quot;&#x27; | grep -E &quot;件中|最終バックアップ&quot;</span><span class="terminal__line">text=&quot;20 件中 11 件完了&quot;</span><span class="terminal__line">text=&quot;最終バックアップ: 10/4 16:31&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell dumpsys package com.handson.android01 | grep -E &#x27;versionCode|versionName&#x27;</span><span class="terminal__line">    versionCode=1 minSdk=26 targetSdk=37</span><span class="terminal__line">    versionName=1.0</span></pre>
+</div>
+          <p>一覧が 20 件取得され、最終バックアップの時刻が出ました。時刻は実行した日時になります。この 2 つが、次のステップで「更新してもデータが残る」ことを確かめる目印です。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>apksigner verify</code> が <code>Verifies</code> で、証明書が <code>CN=Handson Learner</code> になっていることを確かめます。<code>v1.apk</code> を入れたアプリで「20 件中 11 件完了」と最終バックアップの時刻が出れば OK です。<code>dumpsys package</code> の <code>versionCode</code> が 1 であることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">versionCode を上げて更新する</h3>
+        </div>
+        <div class="step__body">
+          <p>アプリを更新して配るときは、<code>versionCode</code> を上げます。Android は <code>versionCode</code> を比べて、新しいかどうかを判断します。<code>versionName</code> は画面などに出す表示用の文字列で、更新の判断には使われません。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          applicationId = &quot;com.handson.android01&quot;</span><span class="diff-line">          minSdk = 26</span><span class="diff-line">          targetSdk = 37</span><span class="diff-line diff-line--remove">-         versionCode = 1</span><span class="diff-line diff-line--remove">-         versionName = &quot;1.0&quot;</span><span class="diff-line diff-line--add">+         // versionCode は更新の判定に使う整数。配るたびに上げる（下げた APK はインストールできない）</span><span class="diff-line diff-line--add">+         // versionName は画面に出す表示用の文字列で、判定には使われない</span><span class="diff-line diff-line--add">+         versionCode = 2</span><span class="diff-line diff-line--add">+         versionName = &quot;1.1&quot;</span><span class="diff-line">  </span><span class="diff-line">          testInstrumentationRunner = &quot;com.handson.android01.HiltTestRunner&quot;</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>鍵のファイルを誤ってコミットしないように、<code>.gitignore</code> の末尾に、鍵ストアの拡張子を足します。この項目では鍵をプロジェクトの外に作っていますが、念のための備えです。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">.gitignore</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  .externalNativeBuild</span><span class="diff-line">  .cxx</span><span class="diff-line">  local.properties</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ # 署名の鍵は、絶対にコミットしない</span><span class="diff-line diff-line--add">+ *.jks</span><span class="diff-line diff-line--add">+ *.keystore</span></pre>
+</div>
+          <p>プロジェクトを Git で管理している場合は、<code>git check-ignore -v</code> で、鍵のファイル名が無視されることを確かめられます。ファイルが無くても判定できます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> git check-ignore -v keys/upload.jks app/x.keystore</span><span class="terminal__line">.gitignore:18:*.jks	keys/upload.jks</span><span class="terminal__line">.gitignore:19:*.keystore	app/x.keystore</span></pre>
+</div>
+          <h4>更新する APK を作る</h4>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 23s</span><span class="terminal__line"><span class="terminal__prompt">$</span> aapt2 dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -o &quot;versionCode=&#x27;[0-9]*&#x27; versionName=&#x27;[^&#x27;]*&#x27;&quot;</span><span class="terminal__line">versionCode=&#x27;2&#x27; versionName=&#x27;1.1&#x27;</span></pre>
+</div>
+          <p>ステップ 4 と<strong>同じ鍵</strong>で署名します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> apksigner sign --ks &quot;$W/keys/upload.jks&quot; --ks-key-alias upload --out &quot;$W/out/v2.apk&quot; app/build/outputs/apk/release/app-release-unsigned.apk</span><span class="terminal__line">Keystore password for signer #1: （パスワードを入力します）</span><span class="terminal__line"><span class="terminal__prompt">$</span> apksigner verify --print-certs &quot;$W/out/v2.apk&quot; | grep -E &#x27;DN|SHA-256&#x27;</span><span class="terminal__line">V3.0 Signer: certificate DN: CN=Handson Learner</span><span class="terminal__line">V3.0 Signer: certificate SHA-256 digest: （環境ごとに異なる値）</span></pre>
+</div>
+          <p>指紋が <code>v1.apk</code> と同じであることを確かめます。</p>
+          <h4>アンインストールせずに更新する</h4>
+          <p><code>adb install -r</code> は、入っているアプリを置き換えます。アンインストールはしません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb install -r &quot;$W/out/v2.apk&quot;</span><span class="terminal__line">Serving...</span><span class="terminal__line">All files should be loaded. Notifying the device.</span><span class="terminal__line">Performing Incremental Install</span><span class="terminal__line">Success</span><span class="terminal__line">Install command complete in 186 ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell dumpsys package com.handson.android01 | grep -E &#x27;versionCode|versionName&#x27;</span><span class="terminal__line">    versionCode=2 minSdk=26 targetSdk=37</span><span class="terminal__line">    versionName=1.1</span></pre>
+</div>
+          <p>更新した後もデータが残っているかを確かめます。機内モードで API への接続を断ってから、アプリを止めて起動し直します。一覧が出れば、それは DB に残っていたものです。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> sleep 3</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> sleep 8</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb exec-out uiautomator dump /dev/tty 2&gt;/dev/null | grep -o &#x27;text=&quot;[^&quot;]\+&quot;&#x27; | grep -E &quot;件中|最終バックアップ&quot;</span><span class="terminal__line">text=&quot;20 件中 11 件完了&quot;</span><span class="terminal__line">text=&quot;最終バックアップ: 10/4 16:31&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span></pre>
+</div>
+          <p>一覧の 20 件（Room の DB）と、最終バックアップの時刻（DataStore）が、更新の前と同じまま残っていました。同じ鍵で署名し、<code>versionCode</code> を上げた APK は、データを残したまま更新されます。最後の行で機内モードを解除しています。忘れずに実行してください。</p>
+          <h4>古い版で上書きする（ダウングレード）</h4>
+          <p>入っているのは <code>versionCode</code> 2 です。<code>versionCode</code> 1 の <code>v1.apk</code> で上書きしてみます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb install -r &quot;$W/out/v1.apk&quot;</span><span class="terminal__line">Serving...</span><span class="terminal__line">All files should be loaded. Notifying the device.</span><span class="terminal__line">Performing Incremental Install</span><span class="terminal__line">Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected: Update version code 1 is older than current 2]</span><span class="terminal__line">Performing Streamed Install</span><span class="terminal__line">adb: failed to install &lt;作業用ディレクトリ&gt;/out/v1.apk: Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected: Update version code 1 is older than current 2]</span></pre>
+</div>
+          <ul>
+            <li><code>versionCode</code> が今より小さい APK は、<code>INSTALL_FAILED_VERSION_DOWNGRADE</code> で拒否されます。</li>
+            <li>同じ失敗が 2 回出ています。<code>v1.apk</code> の隣に <code>.idsig</code> のファイルがあると、<code>adb install</code> はまず Incremental Install（<code>Serving...</code>）を試し、失敗すると Streamed Install でもう一度試すためです。筆者が <code>.idsig</code> を別の場所に移してから実行すると、Streamed Install だけが出て、失敗は 1 回でした。</li>
+          </ul>
+          <h4>違う鍵で署名した APK で上書きする</h4>
+          <p>同じ <code>versionCode</code> 2 の APK を、今度は debug 用の鍵で署名して上書きしてみます。<code>dbgsign</code> は <code>.idsig</code> を消すので、今度は Streamed Install だけが出ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> dbgsign app/build/outputs/apk/release/app-release-unsigned.apk &quot;$W/out/v2-debugkey.apk&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb install -r &quot;$W/out/v2-debugkey.apk&quot;</span><span class="terminal__line">Performing Streamed Install</span><span class="terminal__line">adb: failed to install &lt;作業用ディレクトリ&gt;/out/v2-debugkey.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.handson.android01 signatures do not match newer version; ignoring!]</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell dumpsys package com.handson.android01 | grep -E &#x27;versionCode|versionName&#x27;</span><span class="terminal__line">    versionCode=2 minSdk=26 targetSdk=37</span><span class="terminal__line">    versionName=1.1</span></pre>
+</div>
+          <p>署名が入っているアプリと違うので、<code>INSTALL_FAILED_UPDATE_INCOMPATIBLE</code> で拒否されました。どちらの失敗でも、入っているアプリは <code>versionCode</code> 2 のままです。鍵を失くすと更新を配れない、というのはこのことです。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">参考: <code>signingConfigs</code> で Gradle に署名させる書き方</p>
+              <p>Gradle に署名させる場合は、<code>app/build.gradle.kts</code> に <code>signingConfigs</code> を書きます。<strong>このコードは <code>app/build.gradle.kts</code> に入れません。このトラックでは、毎回手で署名します</strong>。また、筆者はこのコードを動かして確かめていません。下の書き方も、動かして確かめていない参考です。</p>
+              <p>書く場合も、鍵の場所とパスワードはビルドのファイルに直接書きません。<code>~/.gradle/gradle.properties</code>（ホームディレクトリの、リポジトリの外のファイル）や、CI の環境変数に置き、リポジトリには入れません。値を外に置けば、ビルドのファイル自体はコミットできます。</p>
+              <p>値を読むときは <code>.get()</code> ではなく <code>.orNull</code> を使い、4 つの値がそろっているときだけ <code>signingConfigs</code> を作ります。<code>.get()</code> は、値が無いとビルドの設定の段階で失敗します。そうなると、値を置いていない環境（CI や他の人の環境）では、debug のビルドやテストまで止まります。</p>
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/build.gradle.kts（参考。入れない）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">// app/build.gradle.kts に書く場合の例（このトラックのプロジェクトには入れない）
+// 値は ~/.gradle/gradle.properties などリポジトリの外に置き、ここには書かない
+val releaseStoreFile = providers.gradleProperty(&quot;handson.storeFile&quot;).orNull
+val releaseStorePassword = providers.gradleProperty(&quot;handson.storePassword&quot;).orNull
+val releaseKeyAlias = providers.gradleProperty(&quot;handson.keyAlias&quot;).orNull
+val releaseKeyPassword = providers.gradleProperty(&quot;handson.keyPassword&quot;).orNull
+
+android {
+    signingConfigs {
+        // 4 つの値がそろっているときだけ作る
+        if (releaseStoreFile != null &amp;&amp; releaseStorePassword != null &amp;&amp;
+            releaseKeyAlias != null &amp;&amp; releaseKeyPassword != null
+        ) {
+            create(&quot;release&quot;) {
+                storeFile = file(releaseStoreFile)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        release {
+            // 作ったときだけ割り当てる
+            signingConfigs.findByName(&quot;release&quot;)?.let { signingConfig = it }
+        }
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>v2.apk</code> で更新した後、<code>versionCode=2</code> になっていることを確かめます。機内モードでも一覧と最終バックアップの時刻が残っていれば OK です。<code>v1.apk</code> の上書きは <code>INSTALL_FAILED_VERSION_DOWNGRADE</code> で拒否されます。<code>v2-debugkey.apk</code> の上書きは <code>INSTALL_FAILED_UPDATE_INCOMPATIBLE</code> で拒否されます。機内モードを解除したことも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">AAB を作って中身を見る</h3>
+        </div>
+        <div class="step__body">
+          <p>Google Play に送るのは、APK ではなく AAB（Android App Bundle）です。AAB は Play に送るための形式で、中に <code>mapping.txt</code> も入ります。<code>bundleRelease</code> で作り、中身を見ます。まず、入っているアプリをアンインストールしておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:bundleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:buildReleasePreBundle</span><span class="terminal__line">&gt; Task :app:packageReleaseBundle</span><span class="terminal__line">&gt; Task :app:signReleaseBundle</span><span class="terminal__line">&gt; Task :app:bundleRelease</span><span class="terminal__line">&gt; Task :app:produceReleaseBundleIdeListingFile</span><span class="terminal__line">&gt; Task :app:createReleaseBundleListingFileRedirect</span><span class="terminal__line">BUILD SUCCESSFUL in 2s</span></pre>
+</div>
+          <p>直前の <code>assembleRelease</code> とタスクの大半を共有するので、2 秒で終わりました。できた AAB の大きさと、中のファイルの数を見ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls -l app/build/outputs/bundle/release/app-release.aab | awk &#x27;{print $5, $9}&#x27;</span><span class="terminal__line">4908675 app/build/outputs/bundle/release/app-release.aab</span><span class="terminal__line"><span class="terminal__prompt">$</span> unzip -l app/build/outputs/bundle/release/app-release.aab | tail -1</span><span class="terminal__line"> 45183242                     145 files</span></pre>
+</div>
+          <p>AAB の中身は zip です。主なファイルを取り出します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> unzip -l app/build/outputs/bundle/release/app-release.aab | awk &#x27;{print $4}&#x27; | grep -E &#x27;^base/(manifest|dex|resources|native)&#x27;</span><span class="terminal__line">base/dex/classes.dex</span><span class="terminal__line">base/manifest/AndroidManifest.xml</span><span class="terminal__line">base/native.pb</span><span class="terminal__line">base/resources.pb</span><span class="terminal__line"><span class="terminal__prompt">$</span> unzip -l app/build/outputs/bundle/release/app-release.aab | grep -E &#x27;BUNDLE-METADATA&#x27; | awk &#x27;{print $1, $4}&#x27;</span><span class="terminal__line">8551 BUNDLE-METADATA/com.android.tools.build.profiles/baseline.prof</span><span class="terminal__line">1059 BUNDLE-METADATA/com.android.tools.build.profiles/baseline.profm</span><span class="terminal__line">18273 BUNDLE-METADATA/com.android.tools.build.libraries/dependencies.pb</span><span class="terminal__line">41556611 BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map</span><span class="terminal__line">56 BUNDLE-METADATA/com.android.tools.build.gradle/app-metadata.properties</span><span class="terminal__line">1502 BUNDLE-METADATA/com.android.tools/r8.json</span></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>場所</th><th>中身</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>base/dex/</code></td><td>R8 で縮小したコード（<code>classes.dex</code>、3,177,064 バイト）</td></tr>
+            <tr><td><code>base/manifest/</code>・<code>base/resources.pb</code></td><td>マニフェストとリソースの表</td></tr>
+            <tr><td><code>base/res/</code>・<code>base/lib/</code>・<code>base/root/</code></td><td>アイコンなどのリソース（17 ファイル）・ネイティブライブラリ（8 ファイル）・その他のファイル（109 ファイル）</td></tr>
+            <tr><td><code>BundleConfig.pb</code></td><td>AAB の設定</td></tr>
+            <tr><td><code>BUNDLE-METADATA/</code></td><td>アプリには入らない付属の情報。<code>mapping.txt</code>（<code>proguard.map</code>）・Baseline Profile・依存の一覧・AGP の版・R8 の設定の記録</td></tr>
+            </tbody>
+          </table>
+          <p><code>proguard.map</code> が、ステップ 3 で使った <code>mapping.txt</code> と同じものかを <code>cmp</code> で比べます。<code>unzip -p</code> は、zip の中のファイルを取り出して出力します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cmp &lt;(unzip -p app/build/outputs/bundle/release/app-release.aab BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map) app/build/outputs/mapping/release/mapping.txt &amp;&amp; echo &#x27;mapping: identical&#x27;</span><span class="terminal__line">mapping: identical</span><span class="terminal__line"><span class="terminal__prompt">$</span> unzip -p app/build/outputs/bundle/release/app-release.aab BUNDLE-METADATA/com.android.tools.build.gradle/app-metadata.properties</span><span class="terminal__line">appMetadataVersion=1.1</span><span class="terminal__line">androidGradlePluginVersion=9.4.1</span></pre>
+</div>
+          <p>名前は <code>proguard.map</code> ですが、中身はこのビルドの <code>mapping.txt</code> そのものです。AAB を Play Console にアップロードすると、Play の側でクラッシュのスタックトレースが <code>retrace</code> されます。AAB を残しておけば、そのビルドの mapping も残ります。</p>
+          <h4>AAB に署名する</h4>
+          <p>AAB は署名されていません（<code>META-INF/</code> に署名のファイルがありません）。AAB は、APK と違って <code>apksigner</code> ではなく <code>jarsigner</code> で署名します。作業用ディレクトリにコピーしてから、ステップ 4 の鍵で署名します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> unzip -l app/build/outputs/bundle/release/app-release.aab | grep -E &#x27;META-INF/(MANIFEST|.*\.(SF|RSA|DSA|EC))&#x27; | awk &#x27;{print $4}&#x27;</span></pre>
+</div>
+          <p>何も表示されなければ、署名のファイルはありません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp app/build/outputs/bundle/release/app-release.aab &quot;$W/out/app-release.aab&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> jarsigner -keystore &quot;$W/keys/upload.jks&quot; &quot;$W/out/app-release.aab&quot; upload</span><span class="terminal__line">Enter Passphrase for keystore: （パスワードを入力します）</span><span class="terminal__line">jar signed.</span><span class="terminal__line"></span><span class="terminal__line">Warning: </span><span class="terminal__line">The signer&#x27;s certificate is self-signed.</span><span class="terminal__line"><span class="terminal__prompt">$</span> jarsigner -verify &quot;$W/out/app-release.aab&quot;</span><span class="terminal__line"></span><span class="terminal__line">jar verified.</span><span class="terminal__line"></span><span class="terminal__line">Warning: </span><span class="terminal__line">This jar contains entries whose certificate chain is invalid. Reason: PKIX path building failed: sun.security.provider.certpath.SunCertPathBuilderException: unable to find valid certification path to requested target</span><span class="terminal__line">This jar contains entries whose signer certificate is self-signed.</span><span class="terminal__line">This jar contains signatures that do not include a timestamp. Without a timestamp, users may not be able to validate this jar after any of the signer certificates expire (as early as 2054-02-19).</span><span class="terminal__line"></span><span class="terminal__line">Re-run with the -verbose and -certs options for more details.</span></pre>
+</div>
+          <p>最後の引数の <code>upload</code> は、鍵の名前（<code>-alias</code>）です。<code>jar verified.</code> が出れば、署名は正しく検証できています。警告は署名で 1 つ、検証で 3 つ出ました。どれも自己署名の鍵を使えば出る警告です。この項目の鍵は練習用なので、この警告は気にしなくてかまいません。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: <code>jarsigner</code> の警告の意味を読む（読むだけでもよい）</summary>
+            <div class="disclosure__body">
+          <p>この確認は任意です。読むだけでもかまいません。4 つの警告の意味は次のとおりです。</p>
+
+          <table>
+            <thead>
+            <tr><th>警告</th><th>意味</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>The signer's certificate is self-signed.</code>（署名のとき）</td><td>証明書が自己署名である</td></tr>
+            <tr><td><code>certificate chain is invalid … PKIX path building failed</code></td><td>証明書を、信頼できる認証局までたどれない。自己署名なので、たどる先が無い</td></tr>
+            <tr><td><code>signer certificate is self-signed</code></td><td>署名の証明書が自己署名である</td></tr>
+            <tr><td><code>do not include a timestamp</code></td><td>署名に時刻の証明（タイムスタンプ）が無い。証明書の期限（2054-02-19）の後は、検証できなくなるおそれがある</td></tr>
+            </tbody>
+          </table>
+          
+
+            </div>
+          </details>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> unzip -l &quot;$W/out/app-release.aab&quot; | grep -E &#x27;META-INF/(MANIFEST|UPLOAD)&#x27; | awk &#x27;{print $4}&#x27;</span><span class="terminal__line">META-INF/MANIFEST.MF</span><span class="terminal__line">META-INF/UPLOAD.SF</span><span class="terminal__line">META-INF/UPLOAD.RSA</span></pre>
+</div>
+          <p>署名のファイルが 3 つ足されました。<code>UPLOAD</code> は、鍵の名前 <code>upload</code> を大文字にしたものです。AAB は 4,908,675 バイトから 4,925,926 バイトになりました。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: Baseline Profile が入っていることを見る（読むだけでもよい）</summary>
+            <div class="disclosure__body">
+          <p>この確認は任意です。読むだけでもかまいません。<code>BUNDLE-METADATA/</code> の <code>baseline.prof</code> は、Baseline Profile のファイルです。release の APK にも入っています。Baseline Profile の仕組みは、この項目では扱いません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> unzip -l app/build/outputs/apk/release/app-release-unsigned.apk | grep -E &#x27;dexopt|baseline|META-INF/.*(prof)&#x27; | awk &#x27;{print $1, $4}&#x27;</span><span class="terminal__line">8551 assets/dexopt/baseline.prof</span><span class="terminal__line">1059 assets/dexopt/baseline.profm</span><span class="terminal__line">6 META-INF/androidx.profileinstaller_profileinstaller.version</span></pre>
+</div>
+          <p>APK の <code>assets/dexopt/</code> のファイルは、AAB の <code>BUNDLE-METADATA/</code> のものと同じ大きさです。このプロファイルは、Compose などのライブラリが同梱しているものです（<code>profileinstaller</code> もライブラリが持ち込んでいます）。アプリ独自のプロファイルを作ることは、この項目では扱いません。</p>
+
+            </div>
+          </details>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">AAB を端末に入れるには <code>bundletool</code> が要る</p>
+              <p>AAB は、そのままでは端末にインストールできません。AAB から端末用の APK を作る道具は <code>bundletool</code> ですが、Android SDK と Android Studio には含まれていません（別にダウンロードします）。この項目では使わず、説明だけにします。</p>
+            </div>
+          </div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: AGP のタスクで AAB から APK を作る（読むだけ）</summary>
+            <div class="disclosure__body">
+          <p>この確認は読むだけにしてください。AGP には、AAB から APK を作るタスク <code>makeApkFromBundleForRelease</code> があります。筆者の環境では、release に署名の設定が無くても成功しました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:makeApkFromBundleForRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:makeApkFromBundleForRelease</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 2s</span></pre>
+</div>
+          <ul>
+            <li>できたのは <code>app/build/intermediates/apks_from_bundle/release/makeApkFromBundleForRelease/bundle.apks</code>（238 エントリ）です。中身は <code>splits/base-master.apk</code>・<code>splits/base-en.apk</code>・<code>splits/base-arm64_v8a.apk</code> のような、言語や CPU ごとに分かれた APK（splits）でした。</li>
+            <li>ただし、取り出した <code>base-master.apk</code> を <code>apksigner verify</code> すると <code>DOES NOT VERIFY</code> になり、署名されていませんでした。</li>
+            <li>端末向けに取り出すタスク <code>extractApksFromBundleForRelease</code> は、<code>Calling ExtractApk with no device config</code> で失敗しました。</li>
+          </ul>
+          <p>どちらも、そのままでは端末に入れられませんでした。この項目の手順には入れません。</p>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>AAB に <code>base/dex/classes.dex</code> と <code>proguard.map</code> があり、<code>proguard.map</code> と <code>mapping.txt</code> の一致を確かめます。署名した AAB で <code>jar verified.</code> が出れば OK です。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>完成状態（<code>versionCode</code> 2）で、ビルド・lint・単体テスト・UI テストを通します。15 と同じく、単体テストの前回の結果を消す <code>cleanTest</code> を前に付けました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew cleanTest assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 13s</span><span class="terminal__line">99 actionable tasks: 69 executed, 30 up-to-date</span><span class="terminal__line">Configuration cache entry stored.</span></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト（<code>test</code>）</td><td>79 件すべて成功（15 と同じ）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>84 件すべて成功（15 と同じ）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 9 件・ヒント 1 件（15 と同じ）</td></tr>
+            <tr><td><code>app/build.gradle.kts</code></td><td><code>signingConfigs</code> は無い</td></tr>
+            </tbody>
+          </table>
+          <h4>release で起動することを確かめる</h4>
+          <p>完成状態の release を、debug 用の鍵で一時的に署名して入れ、起動します。UI テストの後はアプリがアンインストールされているので、新しく入ります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 530ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> aapt2 dump badging app/build/outputs/apk/release/app-release-unsigned.apk | grep -o &quot;versionCode=&#x27;[0-9]*&#x27; versionName=&#x27;[^&#x27;]*&#x27;&quot;</span><span class="terminal__line">versionCode=&#x27;2&#x27; versionName=&#x27;1.1&#x27;</span><span class="terminal__line"><span class="terminal__prompt">$</span> dbgsign app/build/outputs/apk/release/app-release-unsigned.apk &quot;$W/out/final.apk&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb install &quot;$W/out/final.apk&quot;</span><span class="terminal__line">Performing Streamed Install</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -c</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>10 秒ほど待ってから、バックアップの Worker の結果・画面・クラッシュを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -s WM-WorkerWrapper:I | grep -E &#x27;Worker result&#x27;</span><span class="terminal__line">10-04 16:36:30.988  5352  5374 I WM-WorkerWrapper: Worker result SUCCESS for Work [ id=（UUID）, class=com.handson.android01.work.TodoBackupWorker, tags={ …（以下略）</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb exec-out uiautomator dump /dev/tty 2&gt;/dev/null | grep -o &#x27;text=&quot;[^&quot;]\+&quot;&#x27; | grep -E &quot;件中|最終バックアップ&quot;</span><span class="terminal__line">text=&quot;20 件中 11 件完了&quot;</span><span class="terminal__line">text=&quot;最終バックアップ: 10/4 16:36&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -b crash | wc -l</span><span class="terminal__line">       0</span></pre>
+</div>
+          <p>バックアップの Worker が成功し、一覧と最終バックアップの時刻が出て、クラッシュは記録されていません。</p>
+          <h4>後片付け</h4>
+          <p>アプリをアンインストールします。アンインストールすると、1 日 1 回のバックアップの予約も消えます。続けて、作業用ディレクトリの APK・AAB・鍵を削除します。この鍵は練習用なので、残しません。ステップ 3 で残した <code>$W/out/mapping-crash.txt</code> も一緒に消えます。これも練習用なので、残しません。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> rm -rf &quot;$W/keys&quot; &quot;$W/out&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> find &quot;$W&quot; -name &quot;*.jks&quot; -o -name &quot;*.keystore&quot; -o -name &quot;*.apk&quot; -o -name &quot;*.aab&quot;</span><span class="terminal__line"><span class="terminal__prompt">$</span> rmdir &quot;$W&quot;</span></pre>
+</div>
+          <p><code>find</code> が何も表示しなければ、鍵・APK・AAB は残っていません。プロジェクトを Git で管理している場合は、鍵のファイルが紛れ込んでいないことも確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> git status --porcelain . | grep -E &#x27;\.(jks|keystore)$&#x27; | wc -l</span><span class="terminal__line">       0</span></pre>
+</div>
+          <p>最後に、エミュレータと Gradle デーモンを止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>単体テスト 79 件と UI テスト 84 件が成功し、lint が 15 と同じ件数で、release の APK（<code>versionCode</code> 2）で一覧が出てクラッシュが無ければ OK です。作業用ディレクトリの鍵・APK・AAB を削除したことも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="not-covered">この項目で扱わなかったこと</h2>
+          <ul>
+            <li>Play Console・Play App Signing・内部テストの実際の操作。ログインと登録料が要るので、説明だけにしました。</li>
+            <li><code>bundletool</code> で AAB を端末に入れること。Android SDK に含まれないので、使いませんでした。</li>
+            <li>アプリ独自の Baseline Profile の生成。Macrobenchmark と <code>androidx.baselineprofile</code> のプラグイン、テスト用のモジュールが要ります。ライブラリが同梱したプロファイルが APK に入っていることを、任意の確認で見るだけにしました。</li>
+            <li><code>signingConfigs</code> で Gradle に署名させること。鍵とパスワードをビルドの設定に入れないため、参考のコードを示すだけにしました（動かして確かめていません）。</li>
+            <li>自分で書いたリフレクションのための keep ルール。このアプリには、自前のルールが要る所がありません。</li>
+            <li><code>configanalyzer.html</code>（R8 の設定のレポート）の読み方。ファイルがあることだけを確かめました。</li>
+            <li>実機での確認。エミュレータだけで確かめました。</li>
+          </ul>
+
+      <h2 id="track-summary">Android トラックのまとめ</h2>
+      <p>この項目で、Android トラックは終わりです。01 で作った空のプロジェクトは、API から取得した一覧を端末の DB に保存し、毎日バックアップを送る Todo アプリになりました。テストは単体 79 件・UI 84 件です。最後に、自分の鍵で署名した APK で更新できるところまで来ました。</p>
+
+      <h3 id="track-review">振り返り</h3>
+          <h4>画面（01〜06）</h4>
+          <ul>
+            <li><a href="../01-setup/index.html">01: 環境構築（Android Studio・Version Catalog）</a> — Android Studio と Version Catalog でプロジェクトを作り、Compose BOM で版をそろえる</li>
+            <li><a href="../02-kotlin-basics/index.html">02: Kotlin 基礎</a> — null 安全・データクラス・sealed interface・拡張関数・<code>suspend</code> 関数</li>
+            <li><a href="../03-compose-basics/index.html">03: Compose 入門</a> — Composable 関数と <code>@Preview</code>、<code>Modifier</code> の順序、Material3 の部品で画面を組み立てる</li>
+            <li><a href="../04-state/index.html">04: 状態と State hoisting</a> — <code>remember</code> と <code>mutableStateOf</code>、stateful と stateless への分け方、<code>rememberSaveable</code></li>
+            <li><a href="../05-material3-lazycolumn/index.html">05: Material3 と LazyColumn</a> — <code>LazyColumn</code> の一覧、<code>Scaffold</code> の FAB と Snackbar で削除の取り消し</li>
+            <li><a href="../06-material3-components/index.html">06: Material3 の画面部品</a> — スワイプ削除、セクション分けと絞り込み、<code>ModalBottomSheet</code> と <code>AlertDialog</code></li>
+          </ul>
+          <h4>状態と画面遷移（07〜08）</h4>
+          <ul>
+            <li><a href="../07-viewmodel-stateflow/index.html">07: ViewModel と StateFlow</a> — 一覧の状態を ViewModel と <code>StateFlow</code> に移し、<code>SavedStateHandle</code> でプロセスの終了から戻す</li>
+            <li><a href="../08-navigation3/index.html">08: Navigation 3</a> — キーとバックスタックと <code>NavDisplay</code> で一覧と詳細を行き来し、開いていた画面を復元する</li>
+          </ul>
+          <h4>データ（09〜12）</h4>
+          <ul>
+            <li><a href="../09-ktor-serialization/index.html">09: Ktor と serialization で API 取得</a> — Ktor Client と kotlinx.serialization で一覧を取得し、読み込み中・成功・失敗を出し分ける</li>
+            <li><a href="../10-mockengine-testing/index.html">10: MockEngine でネットワークのテスト</a> — <code>MockEngine</code> で、API と ViewModel の成功・失敗・再試行をネットワークに出ずにテストする</li>
+            <li><a href="../11-room/index.html">11: Room 3 でローカル保存</a> — Entity・DAO・Database と Repository で、一覧を端末の DB に保存する</li>
+            <li><a href="../12-datastore/index.html">12: DataStore で設定を保存</a> — 「取得済み」の印と絞り込みを Preferences DataStore に保存する</li>
+          </ul>
+          <h4>アプリの骨組みと出荷（13〜16）</h4>
+          <ul>
+            <li><a href="../13-hilt/index.html">13: Hilt で依存性注入</a> — 部品の組み立てを Hilt に任せ、UI テストの偽物を <code>@TestInstallIn</code> で差し込む</li>
+            <li><a href="../14-workmanager/index.html">14: WorkManager で定期バックアップ</a> — <code>@HiltWorker</code> の Worker で、条件とリトライ付きの 1 日 1 回のバックアップを予約する</li>
+            <li><a href="../15-testing/index.html">15: テストの仕上げ</a> — カバレッジで測れていない所を見つけ、本物の Room・DataStore のファイル・Hilt が組み立てた Worker をテストする</li>
+            <li>16: リリースビルドと署名（この項目） — R8 の出力と <code>retrace</code> で release を読み解き、自分の鍵で署名した APK で更新し、AAB を作る</li>
+          </ul>
+
+      <h3 id="track-architecture">完成したアプリの構成</h3>
+      <p>完成したアプリの部品のつながりです。矢印は「使う」向きを表します。部品の組み立ては、すべて Hilt（<code>di/DataModule.kt</code> と <code>@Inject constructor</code>）が行います。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">アプリの構成（16 の完成時点）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">画面（Compose・Material3）           ui/screens・ui/components
+  └ 画面遷移（Navigation 3）          ui/navigation
+        │ StateFlow で状態を受け取る
+        ▼
+TodoListViewModel（@HiltViewModel）
+        │
+        ├──▶ TodoRepository ──┬──▶ TodoDao・AppDatabase（Room 3）    一覧の保存
+        │                     ├──▶ TodoApi（Ktor Client）            最初の一覧の取得
+        │                     └──▶ SettingsRepository
+        └──▶ SettingsRepository（DataStore）                       取得済みの印・絞り込み
+
+TodoApplication（@HiltAndroidApp）
+  └ TodoBackupScheduler ──▶ TodoBackupWorker（WorkManager・@HiltWorker）──▶ TodoRepository
+                            1 日 1 回のバックアップ
+
+テスト: 単体（JVM）79 件 … 偽の DAO・MockEngine・偽の DataStore
+        UI（エミュレータ）84 件 … @TestInstallIn・@UninstallModules・本物の Room（メモリ上）</code></pre>
+</div>
+
+      <h3 id="track-next">この先に学ぶとよいこと</h3>
+      <p>このトラックで扱わなかった話題のうち、次に学ぶとよいものです。</p>
+          <ul>
+            <li>Room の移行（スキーマの version を上げる）と、<code>MigrationTestHelper</code> での移行のテスト</li>
+            <li>DataStore の読み込みの失敗（<code>IOException</code>）を、画面の文言として扱うこと</li>
+            <li>Paging 3（長い一覧の分割読み込み）と CameraX（このトラックの README の発展編）</li>
+            <li>通知と、実行時の権限の求め方</li>
+            <li>Baseline Profile の生成と、Macrobenchmark での起動時間の計測</li>
+            <li>モジュールの分割と、テストの偽物の共有（testFixtures）</li>
+            <li>CI（GitHub Actions など）でのビルドとテスト、Gradle Managed Devices</li>
+            <li>Play Console の内部テストと Play App Signing での配布</li>
+          </ul>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid16</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">debug と release の APK の違い（<code>application-debuggable</code>・サイズ・クラスの数）を確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>usage.txt</code>・<code>seeds.txt</code>・<code>configuration.txt</code> から、02 の練習のコードが消え、<code>TodoBackupWorker</code> の名前が残る理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">わざと落としたスタックトレースを <code>retrace</code> で戻し、インライン化された 1 フレームが 2 フレームに戻ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">配ったビルドの <code>mapping.txt</code> を残す理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>keytool</code> で鍵を作り、<code>apksigner sign</code> で APK に署名した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>versionCode</code> を上げた APK で、データを残したまま更新できた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label">ダウングレードと署名違いの上書きが拒否されることを確かめ、鍵を失くすと更新を配れない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label">AAB の中に <code>mapping.txt</code>（<code>proguard.map</code>）が入っていることを確かめ、<code>jarsigner</code> で署名した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-10" class="checklist__input">
+          <label for="check-10" class="checklist__label">鍵とパスワードをリポジトリに入れず、作業用ディレクトリの鍵を最後に削除した</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>command not found: aapt2</code>（または <code>apksigner</code>・<code>keytool</code> など）になる</p>
+              <p>準備の <code>export PATH=…</code> を、今のターミナルで実行したかを確かめます。ターミナルを開き直すと消えます。<code>build-tools</code> の版も、自分の環境の版に合わせます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">最初の <code>adb uninstall</code> が <code>Failure [DELETE_FAILED_INTERNAL_ERROR]</code> になる</p>
+              <p>アプリが入っていないときの失敗です。そのまま次の <code>adb install</code> に進んでかまいません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>-whyareyoukeeping</code> を足しても、理由が表示されない</p>
+              <p><code>./gradlew :app:minifyReleaseWithR8 --rerun</code> のように <code>--rerun</code> を付けて、R8 のタスクを流し直します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>retrace</code> で名前が戻らない</p>
+              <p>スタックトレースを出したビルドと、<code>mapping.txt</code> のビルドが同じかを確かめます。release をビルドし直すと <code>mapping.txt</code> は書き直されます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">署名した APK が <code>apksigner verify</code> で通らない</p>
+              <p>署名した後に、その APK を別のツールで書き換えていないかを確かめます。筆者が署名済みの APK に <code>zip</code> コマンドでファイルを 1 つ足すと、<code>apksigner verify</code> は <code>DOES NOT VERIFY</code> になりました。書き換える作業は署名の前に済ませ、署名は最後に行います。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>INSTALL_FAILED_VERSION_DOWNGRADE</code> になる</p>
+              <p>入っているアプリより <code>versionCode</code> が小さい APK です。<code>versionCode</code> を上げてビルドし直すか、アンインストールしてから入れます。ステップ 5 のダウングレードの確認は、<code>v1.apk</code> を先に作っておかないとできません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>INSTALL_FAILED_UPDATE_INCOMPATIBLE</code> になる</p>
+              <p>入っているアプリと違う鍵で署名した APK です。同じ鍵で署名し直します。練習なら、アンインストールしてから入れます（アプリのデータは消えます）。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>grep -c</code> の結果が 0 のとき、終了コードが 1 になる</p>
+              <p><code>grep -c</code> は、1 件も見つからないと終了コード 1 を返します。表示された件数が 0 なら、コマンドの失敗ではありません。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        release の APK を読み解き、自分の鍵で署名して配る形にしました。
+        debug と release を比べ、R8 が名前を置き換え、使われないコードとリソースを消していることを確かめました。
+        R8 の出力からは、消えたもの（<code>usage.txt</code>）・残したもの（<code>seeds.txt</code>）・ライブラリが持ち込んだ keep ルール（<code>configuration.txt</code>）を読み取りました。
+        わざと落としたスタックトレースは、<code>retrace</code> と <code>mapping.txt</code> で元のファイルと行に戻せました。行番号の keep ルールは足さずに済みました。
+        <code>versionCode</code> を上げ、<code>keytool</code> が作った鍵で APK に署名し、データを残したまま更新しました。ダウングレードと署名違いは拒否されます。
+        最後に AAB を作り、<code>mapping.txt</code> が同梱されていることを確かめて、<code>jarsigner</code> で署名しました。</p>
+      <p>これで Android トラックは終わりです。<a href="#track-summary">トラックのまとめ</a>の「この先に学ぶとよいこと」から、次の題材を選んでください。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">完成コード</p>
+              <p>このレッスンの完成コードは、ブランチ <code>android/16-release</code> の <code>android/16-release/</code> ディレクトリにあります。</p>
+            </div>
+          </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../15-testing/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">15: テストの仕上げ</span>
+        </a>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../../index.html">
+          <span class="lesson-nav__direction">カタログへ戻る →</span>
+          <span class="lesson-nav__title">ハンズオンの一覧</span>
+        </a>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
