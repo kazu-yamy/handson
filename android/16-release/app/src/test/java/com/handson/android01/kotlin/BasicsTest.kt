@@ -46,6 +46,6 @@ class BasicsTest {
         counter = 0
         assertEquals(1, incrementCounter())
         assertEquals(2, incrementCounter())
-        assertEquals("HandsonAndroid15", appName)
+        assertEquals("HandsonAndroid16", appName)
     }
 }

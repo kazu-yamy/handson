@@ -1657,7 +1657,7 @@ kotlin.UninitializedPropertyAccessException: lateinit property workerFactory has
         同じテストを本物の Room（メモリ上の DB）と偽の DAO に流す契約テストで、偽物が削除した id を使い回すずれを見つけて直しました。
         DataStore は本物のファイルでテストし、壊れたファイルを空の設定で置き換える <code>ReplaceFileCorruptionHandler</code> を足しました。
         最後に、<code>@UninstallModules</code>・<code>@BindValue</code>・<code>hiltRule.inject()</code> で、Hilt が組み立てた Worker をテストしました。<code>@HiltWorker</code> の付け忘れのように、自前の工場のテストでは見つからない失敗を見つけられます。</p>
-      <p>次の項目（16: リリースビルドと署名）では、release の APK を読み解きます。R8 の出力（<code>usage.txt</code>・<code>mapping.txt</code> など）を読み、わざと落としたスタックトレースを <code>retrace</code> で元に戻します。<code>versionCode</code> を上げて自分の鍵で署名した APK で更新し、AAB の中身も確かめる予定です。</p>
+      <p>次の項目（<a href="../16-release/index.html">16: リリースビルドと署名</a>）では、release の APK を読み解きます。R8 の出力（<code>usage.txt</code>・<code>mapping.txt</code> など）を読み、わざと落としたスタックトレースを <code>retrace</code> で元に戻します。<code>versionCode</code> を上げて自分の鍵で署名した APK で更新し、AAB の中身も確かめる予定です。</p>
 
           <div class="callout callout--note">
             <span class="callout__icon" aria-hidden="true">ℹ️</span>
@@ -1673,10 +1673,10 @@ kotlin.UninitializedPropertyAccessException: lateinit property workerFactory has
           <span class="lesson-nav__direction">← 前のレッスン</span>
           <span class="lesson-nav__title">14: WorkManager で定期バックアップ</span>
         </a>
-        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
-          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../16-release/index.html">
+          <span class="lesson-nav__direction">次のレッスン →</span>
           <span class="lesson-nav__title">16: リリースビルドと署名</span>
-        </span>
+        </a>
       </nav>
 
     </div>

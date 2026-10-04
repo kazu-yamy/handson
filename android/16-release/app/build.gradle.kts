@@ -18,8 +18,10 @@ android {
         applicationId = "com.handson.android01"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        // versionCode は更新の判定に使う整数。配るたびに上げる（下げた APK はインストールできない）
+        // versionName は画面に出す表示用の文字列で、判定には使われない
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "com.handson.android01.HiltTestRunner"
 

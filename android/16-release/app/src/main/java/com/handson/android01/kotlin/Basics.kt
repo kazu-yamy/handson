@@ -3,7 +3,7 @@ package com.handson.android01.kotlin
 // Step 1: 変数・関数・文字列テンプレート・when 式
 
 // 再代入できない（Java の final 相当）。型は右辺から推論される（String）
-val appName = "HandsonAndroid15"
+val appName = "HandsonAndroid16"
 
 // 再代入できる。型は推論されるが、ここでは Int のまま
 var counter = 0

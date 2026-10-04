@@ -45,4 +45,4 @@ Kotlin + Jetpack Compose を使った Android アプリ開発を学ぶトラッ�
 | 13 | [Hilt で依存性注入](./13-hilt/index.html) | `AppContainer` を Hilt の module・`@Inject` constructor・`@HiltViewModel` に置き換え、UI テストの偽物を `@TestInstallIn` で差し込める | 60分 |
 | 14 | [WorkManager で定期バックアップ](./14-workmanager/index.html) | `@HiltWorker` の Worker を `Configuration.Provider` で動かし、条件・リトライ付きの定期バックアップを `enqueueUniquePeriodicWork` で予約して、adb とテストで実行を確かめられる | 60分 |
 | 15 | [テストの仕上げ](./15-testing/index.html) | カバレッジで、偽物に置き換えて測れていない所を見つけ、本物の Room の DAO（偽物との契約テスト）と DataStore のファイルのテスト、`@UninstallModules`・`@BindValue`・`hiltRule.inject()` で Hilt が組み立てた Worker のテストを書ける | 60分 |
-| 16 | リリースビルドと署名 | R8 の出力と `retrace` で release の APK を読み解き、`versionCode` を上げて自分の鍵で署名した APK で更新でき、AAB の中身を確かめられる | 60分 |
+| 16 | [リリースビルドと署名](./16-release/index.html) | R8 の出力と `retrace` で release の APK を読み解き、`versionCode` を上げて自分の鍵で署名した APK で更新でき、AAB の中身を確かめられる | 60分 |

@@ -13,3 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# 署名の鍵は、絶対にコミットしない
+*.jks
+*.keystore

@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "HandsonAndroid15"
+rootProject.name = "HandsonAndroid16"
 include(":app")
