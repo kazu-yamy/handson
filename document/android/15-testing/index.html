@@ -1,0 +1,1688 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>15: テストの仕上げ | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">15</li>
+        </ol>
+        <h1 class="lesson-title">テストの仕上げ</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分（任意の実験を除く）</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 14 で WorkManager の定期バックアップまで作った人</li>
+          <li class="lesson-meta__item">📋 前提: 14 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること。エミュレータからインターネットに接続できること（アプリの起動の確認で、最初の一覧を API から取得します）</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../14-workmanager/index.html">14: WorkManager で定期バックアップ</a></li>
+          <li class="lesson-meta__item">🧩 版: 依存の追加はありません。JaCoCo 0.8.14（AGP 内蔵の既定の版）/ Room 3.0.3 / DataStore 1.2.1 / Hilt 2.60.1 / <code>androidx.work:work-testing</code> 2.12.0 / Kotlin 2.4.20 / AGP 9.4.1 / KSP 2.3.12 / Compose BOM 2026.09.00</li>
+          <li class="lesson-meta__item">🌿 完成コード: ブランチ <code>android/15-testing</code></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>ここまでのテストが、どこで動き、偽物をどう差し込んでいるかを説明できる</li>
+          <li>AGP 内蔵の JaCoCo でカバレッジを測り、偽物に置き換えたせいでどのテストも通っていないコードを見つけられる</li>
+          <li>同じテストを本物の Room（メモリ上の DB）と偽物の DAO の両方に流す契約テストで、偽物のずれを見つけて直せる</li>
+          <li>本物のファイルで DataStore をテストし、壊れたファイルを <code>ReplaceFileCorruptionHandler</code> で空の設定に置き換えられる</li>
+          <li><code>@UninstallModules</code>・<code>@BindValue</code>・<code>hiltRule.inject()</code> で、Hilt が組み立てた Worker をテストできる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>14 までで、単体テスト 79 件と UI テスト 72 件ができました。この項目では、新しい機能は作りません。ここまでのテストを見直し、確かめていない所を埋めます。</p>
+
+      <h3 id="test-map">ここまでのテストの全体像</h3>
+      <p>テストは、動く場所で 2 種類に分かれます。</p>
+
+          <table>
+            <thead>
+            <tr><th>種類</th><th>置き場所</th><th>件数（14 の完成時点）</th><th>主なテスト</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト（PC の JVM で動く）</td><td><code>app/src/test/</code></td><td>79</td><td><code>TodoApiTest</code>（<code>MockEngine</code>）・<code>TodoRepositoryTest</code>・<code>TodoListViewModelTest</code>・02 の文法のテスト</td></tr>
+            <tr><td>UI テスト（エミュレータで動く）</td><td><code>app/src/androidTest/</code></td><td>72</td><td>画面ごとのテスト（約 60 件）・アプリ全体を起動するテスト（3 クラス・4 件）・Worker と予約のテスト（5 件）</td></tr>
+            </tbody>
+          </table>
+      <p>どのテストも、DB・DataStore・API を偽物に置き換えています。偽物の差し込み方は 3 種類あります。</p>
+
+          <table>
+            <thead>
+            <tr><th>差し込み方</th><th>使っているテスト</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>コンストラクタに偽物を渡す</td><td><code>TodoRepositoryTest</code> など、単体テストのほとんど。14 の <code>TodoBackupWorkerTest</code> も、自前の <code>WorkerFactory</code> で、偽物をつないだ <code>TodoRepository</code> を Worker に渡す</td></tr>
+            <tr><td><code>testViewModel()</code></td><td>画面ごとの UI テスト。偽の DAO・偽のサーバー・偽の DataStore をつないだ ViewModel を作って、画面に渡す</td></tr>
+            <tr><td><code>@TestInstallIn</code></td><td>アプリ全体を起動する UI テスト（<code>MainActivityTest</code> など）。13 で書いた <code>FakeDataModule</code> が、アプリの <code>DataModule</code> を丸ごと置き換える</td></tr>
+            </tbody>
+          </table>
+      <p>偽物は速く、ネットワークにも出ないので、テストを安定させてくれます。そのかわり、<strong>偽物に置き換えた部分は、どのテストも通っていません</strong>。Room が生成した DAO の実装・アプリの <code>DataModule</code>・DataStore のファイルがそれです。偽物が本物と違う動きをしていても、偽物を使うテストは気づけません。</p>
+      <p>この項目では、まずカバレッジで「どこが通っていないか」を数字で確かめます。そのうえで、本物を使うテストを少しだけ足して、偽物と本物のずれを見つけます。</p>
+
+      <h3 id="what-we-build">この項目で作るもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>やること</th><th>主に変えるファイル</th><th>テストの件数（単体 / UI）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>カバレッジを測る</td><td><code>app/build.gradle.kts</code></td><td>79 / 72</td></tr>
+            <tr><td>2</td><td>本物の Room で DAO をテストする（契約テスト）</td><td><code>TodoDaoContract.kt</code>・<code>RoomTodoDaoTest.kt</code>・<code>FakeTodoDaoTest.kt</code>（新規）・<code>FakeTodoDao.kt</code>（2 か所）</td><td>79 / 80</td></tr>
+            <tr><td>3</td><td>本物のファイルで DataStore をテストし、壊れたファイルに備える</td><td><code>DataModule.kt</code>・<code>SettingsRepositoryFileTest.kt</code>（新規）</td><td>79 / 82</td></tr>
+            <tr><td>4</td><td>Hilt が組み立てた Worker をテストする</td><td><code>FakeDataModule.kt</code>・<code>FakeApiModule.kt</code>・<code>TodoBackupWorkerHiltTest.kt</code>（新規）</td><td>79 / 84</td></tr>
+            <tr><td>5</td><td>まとめて確認する（テスト・lint、カバレッジ、機内モードでの UI テスト、release）</td><td>なし</td><td>79 / 84</td></tr>
+            </tbody>
+          </table>
+      <p>14 の完成コードからの変更は、11 ファイル・追加と削除を合わせて 343 行です（準備の名前の変更を除く）。そのうち 9 ファイルはテストで、アプリ本体の変更は <code>app/build.gradle.kts</code> と <code>DataModule.kt</code> の 2 ファイルだけです。テストのファイルのうち長いものは、全文を折りたたみに載せたので、そのまま貼り付けてください。</p>
+
+      <h3 id="versions">使用バージョン</h3>
+      <p>依存の追加はありません。<code>gradle/libs.versions.toml</code> も変えません。この項目で新しく使うものは、14 までに入れたライブラリに含まれています。</p>
+
+          <table>
+            <thead>
+            <tr><th>使うもの</th><th>入っている場所</th><th>版</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>カバレッジ（JaCoCo）</td><td>AGP（Android Gradle Plugin）に内蔵</td><td>JaCoCo 0.8.14（AGP 9.4.1 の既定）</td></tr>
+            <tr><td><code>Room.inMemoryDatabaseBuilder</code></td><td><code>androidx.room3:room3-runtime</code>（11 で導入）</td><td>3.0.3</td></tr>
+            <tr><td><code>PreferenceDataStoreFactory</code>・<code>ReplaceFileCorruptionHandler</code></td><td><code>androidx.datastore:datastore-preferences</code>（12 で導入）</td><td>1.2.1</td></tr>
+            <tr><td><code>@UninstallModules</code>・<code>@BindValue</code>・<code>HiltAndroidRule</code></td><td><code>com.google.dagger:hilt-android-testing</code>（13 で導入）</td><td>2.60.1</td></tr>
+            <tr><td><code>TestListenableWorkerBuilder</code></td><td><code>androidx.work:work-testing</code>（14 で導入）</td><td>2.12.0</td></tr>
+            <tr><td><code>ApplicationProvider</code></td><td>既存の <code>androidx.test.ext:junit</code> が推移的に持ち込む <code>androidx.test:core</code></td><td>—</td></tr>
+            </tbody>
+          </table>
+      <p>Kotlin 2.4.20・AGP 9.4.1・KSP 2.3.12・Compose BOM 2026.09.00 は 14 のままです。Gradle デーモンの JDK 25 でも、カバレッジの計測はエラーなく動きました。</p>
+
+      <h2 id="prepare">準備</h2>
+      <p>14 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 15 用に変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid14&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid15&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid14&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid15&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span></pre>
+</div>
+          <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // Step 1: 変数・関数・文字列テンプレート・when 式</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid14&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid15&quot;</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できる。型は推論されるが、ここでは Int のまま</span><span class="diff-line">  var counter = 0</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          counter = 0</span><span class="diff-line">          assertEquals(1, incrementCounter())</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid14&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid15&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+          <p>パッケージ名と <code>applicationId</code>（<code>com.handson.android01</code>）は 14 と同じく変えません。エミュレータも 14 と同じ手順で起動しておきます。起動し終わるまで 20 秒ほどかかるので、2 行目の <code>adb wait-for-device</code> で待ちます（待たずに <code>adb devices</code> を実行すると <code>offline</code> と表示されます）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb wait-for-device shell 'while [ &quot;$(getprop sys.boot_completed)&quot; != 1 ]; do sleep 1; done'</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">emulator-5554	device</span></pre>
+</div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">カバレッジを測る</h3>
+        </div>
+        <div class="step__body">
+          <p>カバレッジは、テストを流したときに、アプリのコードのどの行が実行されたかの割合です。AGP には JaCoCo というカバレッジの道具が入っていて、debug のビルドタイプに 2 つの設定を足すだけで測れます。</p>
+          <p>測るには、アプリのクラスに計測用のコードを足します（計装）。計装したアプリとテストは少し遅くなります。そこで、<code>-Pcoverage</code> を付けて Gradle を実行したときだけ測るようにします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      buildTypes {</span><span class="diff-line diff-line--add">+         // テストが通ったコードの割合（カバレッジ）を測る。JaCoCo は AGP に入っているので、依存の追加は要らない。</span><span class="diff-line diff-line--add">+         // 測るとテストとアプリが少し遅くなるので、-Pcoverage を付けたときだけ有効にする</span><span class="diff-line diff-line--add">+         debug {</span><span class="diff-line diff-line--add">+             val coverage = providers.gradleProperty(&quot;coverage&quot;).isPresent</span><span class="diff-line diff-line--add">+             enableUnitTestCoverage = coverage</span><span class="diff-line diff-line--add">+             enableAndroidTestCoverage = coverage</span><span class="diff-line diff-line--add">+         }</span><span class="diff-line">          release {</span><span class="diff-line">              optimization {</span><span class="diff-line">                  enable = true</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>enableUnitTestCoverage</code> は単体テストの、<code>enableAndroidTestCoverage</code> は UI テスト（端末のテスト）の計測を有効にします。debug のビルドタイプに設定します。</li>
+            <li><code>providers.gradleProperty("coverage").isPresent</code> は、<code>-Pcoverage</code> のように値を付けずに渡しても <code>true</code> になります。値は見ないので、<code>-Pcoverage=false</code> と書いても有効になります。</li>
+            <li>release のビルドには何も足していません。</li>
+          </ul>
+          <p>まず、<code>-Pcoverage</code> を付けずに、いつものとおり実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 41s</span></pre>
+</div>
+          <p>筆者の環境では 2 分 40 秒ほどでした（初回はビルドのキャッシュが無いぶん長めです）。以降のステップのゲートは 2 分前後です。</p>
+          <h4>カバレッジを測る</h4>
+          <p>レポートを作るタスクは、<code>-Pcoverage</code> を付けたときだけ現れます。タスクの一覧から探します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew tasks --all -Pcoverage | grep -i coverage</span><span class="terminal__line">app:createDebugCoverageReport - Creates instrumentation test coverage reports for the debug variant.</span><span class="terminal__line">app:createDebugAndroidTestCoverageReport - Creates JaCoCo test coverage report from data gathered on the device.</span><span class="terminal__line">app:createDebugUnitTestCoverageReport - Generates a Jacoco code coverage report from unit tests.</span></pre>
+</div>
+          <p>単体テストのレポートは <code>createDebugUnitTestCoverageReport</code>、UI テストのレポートは <code>createDebugAndroidTestCoverageReport</code> です。後者は、UI テスト（<code>connectedDebugAndroidTest</code>）の実行も含みます。2 つを 1 回の実行で作ります。筆者は、単体テストの前回の結果を消す <code>cleanTest</code> を前に付けました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew cleanTest :app:createDebugUnitTestCoverageReport :app:createDebugAndroidTestCoverageReport -Pcoverage</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:testDebugUnitTest</span><span class="terminal__line">&gt; Task :app:createDebugUnitTestCoverageReport</span><span class="terminal__line">View coverage report at file:/（プロジェクトのパス）/app/build/reports/coverage/test/debug/index.html</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest</span><span class="terminal__line">Running tests on devices: Handson_Android36(AVD) - 16</span><span class="terminal__line">&gt; Task :app:createDebugAndroidTestCoverageReport</span><span class="terminal__line">View coverage report at file:/（プロジェクトのパス）/app/build/reports/coverage/androidTest/debug/connected/index.html</span><span class="terminal__line"></span><span class="terminal__line">BUILD SUCCESSFUL in 2m 6s</span></pre>
+</div>
+          <p>レポートは HTML と XML の 2 つの形式で出ます。HTML はブラウザで開くと、パッケージ・クラス・行の順にたどれます。</p>
+
+          <table>
+            <thead>
+            <tr><th>テスト</th><th>HTML</th><th>XML</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト</td><td><code>app/build/reports/coverage/test/debug/index.html</code></td><td><code>app/build/reports/coverage/test/debug/report.xml</code></td></tr>
+            <tr><td>UI テスト</td><td><code>app/build/reports/coverage/androidTest/debug/connected/index.html</code></td><td><code>app/build/reports/coverage/androidTest/debug/connected/report.xml</code></td></tr>
+            </tbody>
+          </table>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">レポートのタスクには <code>-Pcoverage</code> が要る</p>
+              <p><code>-Pcoverage</code> を付けないと、レポートのタスクはプロジェクトに存在しません。呼ぶと <code>not found</code> のエラーで止まります。付けてレポートのタスクを呼べば、前に <code>-Pcoverage</code> なしでテストを流していても、テストは計装付きで流れ直します。</p>
+            </div>
+          </div>
+          <h4>偽物に置き換えた所を見る</h4>
+          <p>XML から、クラスごとの行数を取り出します。<code>xmllint</code> は macOS に入っています。レポートの XML は、先頭で DTD（<code>report.dtd</code>）を宣言しています。筆者は、ネットワークから DTD を読まない <code>--nonet</code> を付けました（付けない場合は試していません）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> xmllint --nonet --xpath &#x27;string(//class[@name=&quot;com/handson/android01/data/TodoDao_Impl&quot;]/counter[@type=&quot;LINE&quot;]/@covered)&#x27; app/build/reports/coverage/test/debug/report.xml</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> xmllint --nonet --xpath &#x27;string(//class[@name=&quot;com/handson/android01/data/TodoDao_Impl&quot;]/counter[@type=&quot;LINE&quot;]/@missed)&#x27; app/build/reports/coverage/test/debug/report.xml</span><span class="terminal__line">20</span></pre>
+</div>
+          <p><code>covered</code> は実行された行数、<code>missed</code> は実行されなかった行数です。クラス名とファイル名を替えて、6 つのクラスを取り出した結果です（実行された行 / 実行されなかった行）。</p>
+
+          <table>
+            <thead>
+            <tr><th>クラス</th><th>単体テスト</th><th>UI テスト</th><th>何のクラスか</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>data/TodoDao_Impl</code></td><td>0 / 20</td><td>0 / 20</td><td>Room が DAO のインターフェースから生成した実装</td></tr>
+            <tr><td><code>data/AppDatabase_Impl</code></td><td>0 / 21</td><td>0 / 21</td><td>Room が生成した DB の実装</td></tr>
+            <tr><td><code>di/DataModule</code></td><td>0 / 7</td><td>0 / 7</td><td>13 で書いた、DB・API・DataStore の作り方</td></tr>
+            <tr><td><code>data/SettingsRepository</code></td><td>15 / 0</td><td>15 / 0</td><td>12 で書いた設定の読み書き</td></tr>
+            <tr><td><code>data/TodoRepository</code></td><td>25 / 0</td><td>23 / 2</td><td>DB と API をつなぐ</td></tr>
+            <tr><td><code>work/TodoBackupWorker</code></td><td>0 / 14</td><td>12 / 2</td><td>14 で書いた Worker</td></tr>
+            </tbody>
+          </table>
+          <ul>
+            <li>DAO と DB の実装（<code>TodoDao_Impl</code>・<code>AppDatabase_Impl</code>）と <code>DataModule</code> は、単体テストでも UI テストでも 1 行も実行されていません。どのテストも偽の DAO を使い、<code>DataModule</code> も <code>FakeDataModule</code> に置き換えているためです。</li>
+            <li><code>SettingsRepository</code> は全行が実行されています。ただし、通ったのは偽の DataStore の上だけで、ファイルへの読み書きは確かめていません。</li>
+            <li><code>TodoBackupWorker</code> は、14 で書いた UI テストだけが通っています（Worker のテストは端末で動くため）。</li>
+          </ul>
+          <p>ステップ 2〜4 で、この表の空いた所を埋めていきます。数字は筆者の環境での 1 回の測定で、テストやコードが変われば変わります。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: <code>-Pcoverage</code> を付けないビルドに計装が入らないこと</summary>
+            <div class="disclosure__body">
+          <p>この確認は任意です。読むだけでもかまいません。<code>-Pcoverage</code> を付けずにビルドした APK を <code>apkanalyzer</code> で調べ、JaCoCo のクラスが入っていないことを確かめます。<code>apkanalyzer</code> は Android SDK の Command-line Tools に入っています。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/cmdline-tools/latest/bin/apkanalyzer dex packages app/build/outputs/apk/debug/app-debug.apk | grep -c org.jacoco</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/cmdline-tools/latest/bin/apkanalyzer dex packages app/build/outputs/apk/debug/app-debug.apk | grep -i jacoco</span><span class="terminal__line">F d 0	0	13	androidx.compose.ui.tooling.data.SlotTreeKt java.lang.String jacocoDataField</span></pre>
+</div>
+          <ul>
+            <li><code>org.jacoco</code> のクラスは 0 件で、計装は入っていません。</li>
+            <li><code>grep -c jacoco</code> で数えると 1 件になります。この 1 件は、Compose の <code>ui-tooling</code>（debug だけに入る依存）が持っている <code>jacocoDataField</code> というフィールドで、自分のコードの計装ではありません。数えるときは <code>org.jacoco</code> で絞ります。</li>
+            <li>筆者の環境では、debug の APK は計装なしで約 19.0MB、<code>-Pcoverage</code> ありで約 24.3MB でした。</li>
+          </ul>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ゲートが <code>BUILD SUCCESSFUL</code> で終わり、単体テスト 79 件と UI テスト 72 件がすべて成功すれば OK です。カバレッジのレポートで、<code>TodoDao_Impl</code> の実行された行が単体テスト・UI テストとも 0 であることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">本物の Room で DAO をテストする（契約テスト）</h3>
+        </div>
+        <div class="step__body">
+          <p>本物の Room で DAO をテストします。同じテストを、偽の DAO（<code>FakeTodoDao</code>）にも流します。DAO が守るべき約束（契約）をテストに書き、本物と偽物の両方がその約束を守っているかを確かめるので、契約テストと呼びます。</p>
+          <p>偽物の DAO は、UI テストのほとんどで使っています。偽物が本物とずれていると、それらのテストは「本物では起きないこと」を確かめてしまいます。</p>
+          <h4>契約を書く</h4>
+          <p><code>app/src/androidTest/java/com/handson/android01/data/TodoDaoContract.kt</code> を作ります。全文は折りたたみに載せました。中心は次の 4 件のテストです。</p>
+
+          <table>
+            <thead>
+            <tr><th>テスト</th><th>約束</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>observeAll_isSortedById</code></td><td>一覧は id の順（入れた順ではない）</td></tr>
+            <tr><td><code>insert_withSameId_replacesRow</code></td><td>同じ id で入れると置き換わる（REPLACE）。行は増えない</td></tr>
+            <tr><td><code>insert_withIdZero_doesNotReuseDeletedId</code></td><td>id = 0 で入れると新しい id が振られる。削除した id は使い回さない</td></tr>
+            <tr><td><code>deleteDone_removesOnlyDoneRows</code></td><td>完了にした行だけが、まとめて消える</td></tr>
+            </tbody>
+          </table>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/data/TodoDaoContract.kt（抜粋）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">// id = 0 で入れると新しい id が振られる。削除した id は使い回さない（autoGenerate = SQLite の AUTOINCREMENT）
+@Test
+fun insert_withIdZero_doesNotReuseDeletedId(): Unit = runBlocking {
+    dao.insertAll(listOf(entity(1, &quot;a&quot;), entity(2, &quot;b&quot;)))
+    dao.deleteById(2)
+    dao.insert(entity(0, &quot;new&quot;))
+    assertEquals(listOf(1, 3), ids())
+}</code></pre>
+</div>
+          <ul>
+            <li>11 の <code>TodoEntity</code> の id は <code>autoGenerate</code> です。スキーマでは SQLite の <code>AUTOINCREMENT</code> になっていて、削除した id は使い回しません。</li>
+            <li><code>TodoDaoContract</code> は抽象クラスで、<code>dao</code> だけを抽象のプロパティにしています。本物と偽物は、これを継承して <code>dao</code> を渡すだけです。</li>
+            <li>抽象クラスなので、これ自体はテストとして実行されません。名前も <code>…Test</code> にしていません。</li>
+            <li>テストの関数は <code>fun …(): Unit = runBlocking { … }</code> と戻り値の型を書きます。書かないと、<code>runBlocking</code> の最後の式の型が戻り値になります。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoDaoContract.kt</code> の全文を見る（新規作成）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/data/TodoDaoContract.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+// TodoDao が守るべき約束（契約）。同じテストを、本物の Room（RoomTodoDaoTest）と偽物（FakeTodoDaoTest）の両方で動かす。
+// 偽物が本物とずれていると、偽物を使うテスト（UI テストのほとんど）は「本物では起きないこと」を確かめてしまう。
+// 抽象クラスなので、これ自体はテストとして実行されない（名前も …Test にしない）
+abstract class TodoDaoContract {
+
+    protected abstract val dao: TodoDao
+
+    private fun entity(id: Int, title: String, done: Boolean = false) = TodoEntity(id = id, title = title, done = done)
+
+    private suspend fun ids(): List&lt;Int&gt; = dao.observeAll().first().map { it.id }
+
+    // 一覧は id の順（入れた順ではない）
+    @Test
+    fun observeAll_isSortedById(): Unit = runBlocking {
+        dao.insertAll(listOf(entity(3, &quot;c&quot;), entity(1, &quot;a&quot;), entity(2, &quot;b&quot;)))
+        assertEquals(listOf(1, 2, 3), ids())
+    }
+
+    // 同じ id で入れると置き換わる（REPLACE）。行は増えない
+    @Test
+    fun insert_withSameId_replacesRow(): Unit = runBlocking {
+        dao.insert(entity(1, &quot;before&quot;))
+        dao.insert(entity(1, &quot;after&quot;, done = true))
+        assertEquals(listOf(entity(1, &quot;after&quot;, done = true)), dao.observeAll().first())
+        assertEquals(1, dao.count())
+    }
+
+    // id = 0 で入れると新しい id が振られる。削除した id は使い回さない（autoGenerate = SQLite の AUTOINCREMENT）
+    @Test
+    fun insert_withIdZero_doesNotReuseDeletedId(): Unit = runBlocking {
+        dao.insertAll(listOf(entity(1, &quot;a&quot;), entity(2, &quot;b&quot;)))
+        dao.deleteById(2)
+        dao.insert(entity(0, &quot;new&quot;))
+        assertEquals(listOf(1, 3), ids())
+    }
+
+    // 完了にした行だけが、まとめて消える
+    @Test
+    fun deleteDone_removesOnlyDoneRows(): Unit = runBlocking {
+        dao.insertAll(listOf(entity(1, &quot;a&quot;), entity(2, &quot;b&quot;), entity(3, &quot;c&quot;)))
+        dao.setDone(1, true)
+        dao.setDone(3, true)
+        dao.deleteDone()
+        assertEquals(listOf(2), ids())
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <h4>本物と偽物に流す</h4>
+          <p>本物の Room で動かすクラスです。<code>app/src/androidTest/java/com/handson/android01/data/RoomTodoDaoTest.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/data/RoomTodoDaoTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import android.content.Context
+import androidx.room3.Room
+import androidx.sqlite.driver.AndroidSQLiteDriver
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.After
+import org.junit.runner.RunWith
+
+// 本物の Room。ファイルを作らないメモリ上の DB（テストが終われば消える）なので、アプリの DB（todos.db）には触れない。
+// アプリと同じドライバーを使う
+@RunWith(AndroidJUnit4::class)
+class RoomTodoDaoTest : TodoDaoContract() {
+
+    private val database = Room.inMemoryDatabaseBuilder&lt;AppDatabase&gt;(ApplicationProvider.getApplicationContext&lt;Context&gt;())
+        .setDriver(AndroidSQLiteDriver())
+        .build()
+
+    override val dao: TodoDao = database.todoDao()
+
+    @After
+    fun closeDatabase() = database.close()
+}</code></pre>
+</div>
+          <ul>
+            <li><code>Room.inMemoryDatabaseBuilder</code> は、ファイルを作らないメモリ上の DB を作ります。テストが終われば消えるので、アプリの DB（<code>todos.db</code>）には触れません。</li>
+            <li>ドライバーは、アプリの <code>DataModule</code> と同じ <code>AndroidSQLiteDriver</code> を指定します。</li>
+            <li>DB はプロパティの初期化で作ります。JUnit はテストごとにクラスのインスタンスを作るので、DB もテストごとに新しくなります。<code>@After</code> で閉じます。</li>
+          </ul>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>getApplicationContext()</code> の型引数を省くとコンパイルできない</p>
+              <p>筆者は最初、<code>ApplicationProvider.getApplicationContext()</code> と型引数を省いて書きました。すると、<code>inMemoryDatabaseBuilder</code> の型引数を決められず、次のエラーになりました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">compileDebugAndroidTestKotlin の出力</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">&gt; Task :app:compileDebugAndroidTestKotlin FAILED
+e: file://（プロジェクトのパス）/app/src/androidTest/java/com/handson/android01/data/RoomTodoDaoTest.kt:15:90 Cannot infer type for type parameter &#x27;T&#x27;. Specify it explicitly.
+e: file://（プロジェクトのパス）/app/src/androidTest/java/com/handson/android01/data/RoomTodoDaoTest.kt:16:10 Unresolved reference &#x27;setDriver&#x27;.</code></pre>
+</div>
+
+              <p><code>getApplicationContext&lt;Context&gt;()</code> と型引数を書き、<code>import android.content.Context</code> を足すと通ります。<code>inMemoryDatabaseBuilder&lt;AppDatabase&gt;(context)</code> の形は、そのまま使えます。</p>
+            </div>
+          </div>
+          <p>偽物で動かすクラスです。<code>app/src/androidTest/java/com/handson/android01/data/FakeTodoDaoTest.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/data/FakeTodoDaoTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.ui.screens.FakeTodoDao
+import org.junit.runner.RunWith
+
+// 偽物も、本物と同じ約束を守っているかを確かめる
+@RunWith(AndroidJUnit4::class)
+class FakeTodoDaoTest : TodoDaoContract() {
+
+    override val dao: TodoDao = FakeTodoDao()
+}</code></pre>
+</div>
+          <h4>偽物のずれを見つける</h4>
+          <p><code>data</code> パッケージのテストだけを流します。<code>-Pandroid.testInstrumentationRunnerArguments.package=</code> で、UI テストを絞り込めます（08 でも使いました）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.package=com.handson.android01.data</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest FAILED</span><span class="terminal__line">（中略）</span><span class="terminal__line">There were failing tests. See the report at: file://（プロジェクトのパス）/app/build/reports/androidTests/connected/debug/index.html</span><span class="terminal__line">BUILD FAILED in 8s</span></pre>
+</div>
+          <p>8 件（4 件 × 2 クラス）のうち、1 件だけが失敗しました。レポートは <code>app/build/reports/androidTests/connected/debug/index.html</code> です。開くと、失敗したのは <code>FakeTodoDaoTest</code> の <code>insert_withIdZero_doesNotReuseDeletedId</code> でした。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">FakeTodoDaoTest &gt; insert_withIdZero_doesNotReuseDeletedId の失敗</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">java.lang.AssertionError: expected:&lt;[1, 3]&gt; but was:&lt;[1, 2]&gt;
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.failNotEquals(Assert.java:835)
+	at org.junit.Assert.assertEquals(Assert.java:120)
+	at org.junit.Assert.assertEquals(Assert.java:146)
+	at com.handson.android01.data.TodoDaoContract$insert_withIdZero_doesNotReuseDeletedId$1.invokeSuspend(TodoDaoContract.kt:41)
+	at kotlin.coroutines.jvm.internal.BaseContinuationImpl.resumeWith(ContinuationImpl.kt:34)
+	at kotlinx.coroutines.DispatchedTask.run(DispatchedTask.kt:100)
+（中略）</code></pre>
+</div>
+          <p>本物の Room（<code>RoomTodoDaoTest</code>）は 4 件とも通りました。id 1 と 2 を入れて 2 を消し、id = 0 で追加すると、本物は 3 を振ります。偽物は 2 を振りました。偽物は「今ある行の最大の id + 1」を振るので、最大の id の行を消した後に追加すると、消した id を使い回します。</p>
+          <h4>偽物を直す</h4>
+          <p>偽物に「これまでに使った最大の id」を覚えさせます。行を消しても、この値は戻しません。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/FakeTodoDao.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      private val rows = MutableStateFlow(initial.map { it.toEntity() })</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // これまでに使った最大の id。行を消しても戻さない（本物の AUTOINCREMENT と同じく、削除した id を使い回さない）</span><span class="diff-line diff-line--add">+     private var lastId = initial.maxOfOrNull { it.id } ?: 0</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      override fun observeAll(): Flow&lt;List&lt;TodoEntity&gt;&gt; = rows.map { list -&gt; list.sortedBy { it.id } }</span><span class="diff-line">  </span><span class="diff-line">      override suspend fun count(): Int = rows.value.size</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // id が 0 なら、今の最大値 + 1 を振る。同じ id があれば置き換える（REPLACE）</span><span class="diff-line diff-line--add">+     // id が 0 なら、lastId + 1 を振る。同じ id があれば置き換える（REPLACE）</span><span class="diff-line">      override suspend fun insert(todo: TodoEntity) {</span><span class="diff-line diff-line--remove">-         rows.update { list -&gt;</span><span class="diff-line diff-line--remove">-             val saved = if (todo.id == 0) todo.copy(id = (list.maxOfOrNull { it.id } ?: 0) + 1) else todo</span><span class="diff-line diff-line--remove">-             list.filterNot { it.id == saved.id } + saved</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--add">+         val saved = if (todo.id == 0) todo.copy(id = lastId + 1) else todo</span><span class="diff-line diff-line--add">+         lastId = maxOf(lastId, saved.id)</span><span class="diff-line diff-line--add">+         rows.update { list -&gt; list.filterNot { it.id == saved.id } + saved }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      override suspend fun insertAll(todos: List&lt;TodoEntity&gt;) = todos.forEach { insert(it) }</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>単体テストにも同じ内容の <code>FakeTodoDao</code> があります（<code>app/src/test/</code> と <code>app/src/androidTest/</code> は別々にコンパイルされるため、偽物は 2 か所にあります）。同じように直し、2 つのファイルの内容をそろえます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/FakeTodoDao.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      private val rows = MutableStateFlow(initial.map { it.toEntity() })</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // これまでに使った最大の id。行を消しても戻さない（本物の AUTOINCREMENT と同じく、削除した id を使い回さない）</span><span class="diff-line diff-line--add">+     private var lastId = initial.maxOfOrNull { it.id } ?: 0</span><span class="diff-line diff-line--add">+ </span><span class="diff-line">      override fun observeAll(): Flow&lt;List&lt;TodoEntity&gt;&gt; = rows.map { list -&gt; list.sortedBy { it.id } }</span><span class="diff-line">  </span><span class="diff-line">      override suspend fun count(): Int = rows.value.size</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // id が 0 なら、今の最大値 + 1 を振る。同じ id があれば置き換える（REPLACE）</span><span class="diff-line diff-line--add">+     // id が 0 なら、lastId + 1 を振る。同じ id があれば置き換える（REPLACE）</span><span class="diff-line">      override suspend fun insert(todo: TodoEntity) {</span><span class="diff-line diff-line--remove">-         rows.update { list -&gt;</span><span class="diff-line diff-line--remove">-             val saved = if (todo.id == 0) todo.copy(id = (list.maxOfOrNull { it.id } ?: 0) + 1) else todo</span><span class="diff-line diff-line--remove">-             list.filterNot { it.id == saved.id } + saved</span><span class="diff-line diff-line--remove">-         }</span><span class="diff-line diff-line--add">+         val saved = if (todo.id == 0) todo.copy(id = lastId + 1) else todo</span><span class="diff-line diff-line--add">+         lastId = maxOf(lastId, saved.id)</span><span class="diff-line diff-line--add">+         rows.update { list -&gt; list.filterNot { it.id == saved.id } + saved }</span><span class="diff-line">      }</span><span class="diff-line">  </span><span class="diff-line">      override suspend fun insertAll(todos: List&lt;TodoEntity&gt;) = todos.forEach { insert(it) }</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>2 つのファイルが同じになったことを確かめてから、もう一度絞り込んで流します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> diff app/src/test/java/com/handson/android01/ui/screens/FakeTodoDao.kt app/src/androidTest/java/com/handson/android01/ui/screens/FakeTodoDao.kt &amp;&amp; echo same</span><span class="terminal__line">same</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.package=com.handson.android01.data</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 4s</span></pre>
+</div>
+          <p>8 件とも通りました。全体も流します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 1s</span></pre>
+</div>
+          <p>UI テストは 80 件になりました。既存の UI テスト 72 件は、偽物を直しても 1 件も壊れませんでした。どのテストも、削除した id の使い回しには頼っていなかったということです。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: カバレッジがどう変わったか</summary>
+            <div class="disclosure__body">
+          <p>この確認は任意です。読むだけでもかまいません。ステップ 1 と同じコマンド（<code>-Pcoverage</code> 付き）でレポートを作り直すと、UI テストの数字が次のように変わりました。</p>
+
+          <table>
+            <thead>
+            <tr><th>クラス</th><th>UI テスト（ステップ 1）</th><th>UI テスト（ステップ 2 の後）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>data/TodoDao_Impl</code></td><td>0 / 20</td><td>19 / 1</td></tr>
+            <tr><td><code>data/AppDatabase_Impl</code></td><td>0 / 21</td><td>19 / 2</td></tr>
+            <tr><td><code>di/DataModule</code></td><td>0 / 7</td><td>0 / 7</td></tr>
+            </tbody>
+          </table>
+          <ul>
+            <li><code>TodoDao_Impl</code> の実行されなかった 1 行は、<code>insertAll</code> の 1 行でした（XML の <code>method</code> ごとの数字で分かります）。</li>
+            <li><code>DataModule</code> は 0 のままです。<code>RoomTodoDaoTest</code> は DB を自分で作り、アプリ全体を起動する UI テストでは <code>FakeDataModule</code> が置き換えるためです。</li>
+          </ul>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>絞り込みの 8 件と、ゲート（単体テスト 79 件・UI テスト 80 件）がすべて成功すれば OK です。<code>FakeTodoDao.kt</code> の 2 つのファイルの内容が同じであることも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">本物のファイルで DataStore をテストし、壊れたファイルに備える</h3>
+        </div>
+        <div class="step__body">
+          <p>DataStore も、これまでは偽物（<code>FakeDataStore</code>）でしかテストしていません。本物のファイルで、次の 2 つを確かめます。</p>
+          <ul>
+            <li>ファイルに書いた設定が、DataStore を作り直しても読める（アプリを終了しても残る）こと。</li>
+            <li>ファイルが壊れていても、アプリが落ちずに動くこと。</li>
+          </ul>
+          <p>壊れたファイルは、偽物では作れない失敗です。本物のファイルなら、壊れたバイト列を書き込んで再現できます。</p>
+          <h4>壊れたファイルの扱いを決める</h4>
+          <p>DataStore は、ファイルの中身を解釈できない（壊れている）と <code>CorruptionException</code> を投げます。<code>ReplaceFileCorruptionHandler</code> を渡すと、その場合に、ファイルを渡した値（ここでは空の設定）で置き換えて動き続けます。<code>CorruptionException</code> は <code>IOException</code> のサブクラスで、ハンドラーが扱うのはこれだけです。権限や I/O の失敗による <code>IOException</code> は、そのまま投げられます（「この項目で扱わなかったこと」を参照）。アプリの DataStore に足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/di/DataModule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import android.content.Context</span><span class="diff-line">  import androidx.datastore.core.DataStore</span><span class="diff-line diff-line--add">+ import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler</span><span class="diff-line">  import androidx.datastore.preferences.core.Preferences</span><span class="diff-line diff-line--add">+ import androidx.datastore.preferences.core.emptyPreferences</span><span class="diff-line">  import androidx.datastore.preferences.preferencesDataStore</span><span class="diff-line">  import androidx.room3.Room</span><span class="diff-line">  import androidx.sqlite.driver.AndroidSQLiteDriver</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  // DataStore は、ファイル（datastore/settings.preferences_pb）ごとに、アプリで 1 つだけ作る。</span><span class="diff-line">  // preferencesDataStore のプロパティ委譲は、トップレベルに 1 回だけ書く（クラスの中に書くと、インスタンスのたびに別の DataStore が作られる）。</span><span class="diff-line diff-line--remove">- private val Context.settingsDataStore: DataStore&lt;Preferences&gt; by preferencesDataStore(name = &quot;settings&quot;)</span><span class="diff-line diff-line--add">+ // 設定のファイルが壊れていて読めない（CorruptionException）ときは、空の設定で置き換えて、そのまま動かす。</span><span class="diff-line diff-line--add">+ // 「取得済み」の印も消えるが、DB に Todo があれば取り直さない（TodoRepository.fetchInitialTodosIfNeeded）ので、一覧は上書きされない。</span><span class="diff-line diff-line--add">+ // テストでも同じものを使うので internal にする</span><span class="diff-line diff-line--add">+ internal val settingsCorruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() }</span><span class="diff-line diff-line--add">+ </span><span class="diff-line diff-line--add">+ private val Context.settingsDataStore: DataStore&lt;Preferences&gt; by preferencesDataStore(</span><span class="diff-line diff-line--add">+     name = &quot;settings&quot;,</span><span class="diff-line diff-line--add">+     corruptionHandler = settingsCorruptionHandler,</span><span class="diff-line diff-line--add">+ )</span><span class="diff-line">  </span><span class="diff-line">  // 自分で `@Inject constructor` を書けない、または組み立てが要る型（Room・Ktor・DataStore は他人の型。TodoApi は HttpClient を組み立てて渡す）の作り方を Hilt に教える module。</span><span class="diff-line">  // SingletonComponent に入れるので、ここで作る部品はアプリ全体で使える</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>ReplaceFileCorruptionHandler { emptyPreferences() }</code> は、壊れたファイルを空の設定で置き換えます。型引数（<code>Preferences</code>）は推論されるので、書かなくてかまいません。</li>
+            <li>テストでも同じハンドラーを使うので、<code>private</code> ではなく <code>internal</code> にしてトップレベルに置きます。</li>
+            <li>空の設定になると、絞り込みは「すべて」に戻り、12 で入れた「最初の一覧を取得済み」の印も消えます。それでも、12 で決めたとおり DB に Todo があれば API から取り直さない（<code>TodoRepository.fetchInitialTodosIfNeeded</code>）ので、一覧は上書きされません。</li>
+          </ul>
+          <h4>本物のファイルでテストする</h4>
+          <p><code>app/src/androidTest/java/com/handson/android01/data/SettingsRepositoryFileTest.kt</code> を作ります。全文は折りたたみに載せました。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>SettingsRepositoryFileTest.kt</code> の全文を見る（新規作成）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/data/SettingsRepositoryFileTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.Preferences
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.handson.android01.di.settingsCorruptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.io.File
+import java.util.UUID
+
+// 本物の DataStore（ファイル）で SettingsRepository を動かす。偽物（FakeDataStore）では確かめられない、
+// 「ファイルに書かれて、作り直しても読める」ことと「壊れたファイル」を確かめる
+@RunWith(AndroidJUnit4::class)
+class SettingsRepositoryFileTest {
+
+    private val context = ApplicationProvider.getApplicationContext&lt;Context&gt;()
+
+    // テストごとに別のファイル（アプリの設定 settings.preferences_pb には触れない）。
+    // Preferences DataStore のファイルは、拡張子が preferences_pb でなければならない
+    private val file = File(context.filesDir, &quot;datastore/test-${UUID.randomUUID()}.preferences_pb&quot;)
+    private val scopes = mutableListOf&lt;CoroutineScope&gt;()
+
+    // アプリの preferencesDataStore と同じ設定（壊れたときの扱い）で作る。
+    // scope は DataStore が動く場所で、止めるとファイルを手放す
+    private fun createDataStore(): DataStore&lt;Preferences&gt; {
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob()).also { scopes += it }
+        return PreferenceDataStoreFactory.create(
+            corruptionHandler = settingsCorruptionHandler,
+            scope = scope,
+            produceFile = { file },
+        )
+    }
+
+    @After
+    fun tearDown() {
+        scopes.forEach { it.cancel() }
+        file.delete()
+    }
+
+    @Test
+    fun savedSettings_surviveNewDataStore(): Unit = runBlocking {
+        val first = SettingsRepository(createDataStore())
+        first.setFilter(TodoFilter.Done)
+        first.markInitialFetchDone()
+        first.setLastBackupAt(1_000L)
+        assertTrue(file.exists())
+
+        // 1 つ目を止める（アプリの終了に当たる）。止めずに 2 つ目を作ると、同じファイルに 2 つの DataStore があることになって例外が出る
+        scopes.last().coroutineContext.job.cancelAndJoin()
+
+        val second = SettingsRepository(createDataStore())
+        assertEquals(TodoFilter.Done, second.filter.first())
+        assertTrue(second.isInitialFetchDone())
+        assertEquals(1_000L, second.lastBackupAt.first())
+    }
+
+    @Test
+    fun corruptedFile_isReplacedWithEmptySettings(): Unit = runBlocking {
+        // protobuf として途中で切れたデータ
+        file.parentFile?.mkdirs()
+        file.writeBytes(byteArrayOf(0x0A, 0x7F))
+
+        val settings = SettingsRepository(createDataStore())
+        assertEquals(TodoFilter.All, settings.filter.first())
+        assertFalse(settings.isInitialFetchDone())
+        assertNull(settings.lastBackupAt.first())
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <p>DataStore の作り方と、壊れたファイルのテストを抜き出して見ます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/data/SettingsRepositoryFileTest.kt（抜粋）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">// テストごとに別のファイル（アプリの設定 settings.preferences_pb には触れない）。
+// Preferences DataStore のファイルは、拡張子が preferences_pb でなければならない
+private val file = File(context.filesDir, &quot;datastore/test-${UUID.randomUUID()}.preferences_pb&quot;)
+private val scopes = mutableListOf&lt;CoroutineScope&gt;()
+
+// アプリの preferencesDataStore と同じ設定（壊れたときの扱い）で作る。
+// scope は DataStore が動く場所で、止めるとファイルを手放す
+private fun createDataStore(): DataStore&lt;Preferences&gt; {
+    val scope = CoroutineScope(Dispatchers.IO + SupervisorJob()).also { scopes += it }
+    return PreferenceDataStoreFactory.create(
+        corruptionHandler = settingsCorruptionHandler,
+        scope = scope,
+        produceFile = { file },
+    )
+}</code></pre>
+</div>
+          <ul>
+            <li>ファイルは、テストごとに名前を変えて（<code>test-&lt;UUID&gt;.preferences_pb</code>）、アプリの <code>filesDir/datastore/</code> に作ります。アプリの設定ファイル <code>settings.preferences_pb</code> には触れません。</li>
+            <li>Preferences DataStore のファイルは、拡張子が <code>preferences_pb</code> でなければなりません（折りたたみの実験 3-2）。</li>
+            <li><code>PreferenceDataStoreFactory.create</code> に、アプリと同じ <code>settingsCorruptionHandler</code> を渡します。</li>
+            <li>DataStore は、渡した <code>scope</code>（コルーチンの動く場所）の中で動きます。<code>@After</code> で scope を止めてから、ファイルを消します。</li>
+          </ul>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/data/SettingsRepositoryFileTest.kt（抜粋）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">@Test
+fun corruptedFile_isReplacedWithEmptySettings(): Unit = runBlocking {
+    // protobuf として途中で切れたデータ
+    file.parentFile?.mkdirs()
+    file.writeBytes(byteArrayOf(0x0A, 0x7F))
+
+    val settings = SettingsRepository(createDataStore())
+    assertEquals(TodoFilter.All, settings.filter.first())
+    assertFalse(settings.isInitialFetchDone())
+    assertNull(settings.lastBackupAt.first())
+}</code></pre>
+</div>
+          <ul>
+            <li><code>0x0A, 0x7F</code> は、protobuf（DataStore のファイルの形式）として途中で切れたデータです。</li>
+            <li>壊れたファイルから、空の設定（絞り込みは <code>All</code>、取得済みの印なし、最後のバックアップの時刻なし）が読めることを確かめます。</li>
+          </ul>
+          <p>もう 1 件の <code>savedSettings_surviveNewDataStore</code> は、1 つ目の DataStore で書きます。その scope を <code>cancelAndJoin()</code> で止めてから（アプリの終了に当たる）、2 つ目の DataStore で読みます。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">1 つ目の DataStore を止めずに 2 つ目を作ると例外になる</p>
+              <p>同じファイルに、動いている DataStore を 2 つ作ることはできません。12 の教材でも見た <code>There are multiple DataStores active for the same file</code> の例外になります（折りたたみの実験 3-3）。<code>cancel()</code> だけでは止まるのを待たないので、<code>cancelAndJoin()</code> で止まるのを待ってから 2 つ目を作ります。</p>
+            </div>
+          </div>
+          <p>このクラスだけを流します。クラスで絞り込むときは <code>class=</code> を使います。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.handson.android01.data.SettingsRepositoryFileTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 10s</span></pre>
+</div>
+          <h4>ハンドラーが無いとどうなるか（実験 3-1）</h4>
+          <p>テストの <code>createDataStore()</code> から <code>corruptionHandler = settingsCorruptionHandler,</code> の行を一時的に消して、同じコマンドで流します。<code>savedSettings_surviveNewDataStore</code> は通り、<code>corruptedFile_isReplacedWithEmptySettings</code> だけが失敗しました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">corruptedFile_isReplacedWithEmptySettings の失敗</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">androidx.datastore.core.CorruptionException: Value not set.
+	at androidx.datastore.preferences.core.PreferencesFileSerializer.addProtoEntryToPreferences(PreferencesFileSerializer.jvmAndroid.kt:109)
+	at androidx.datastore.preferences.core.PreferencesFileSerializer.readFrom(PreferencesFileSerializer.jvmAndroid.kt:51)
+	at androidx.datastore.core.FileReadScope$readData$2.invokeSuspend(FileStorage.kt:162)
+	at androidx.datastore.core.FileReadScope$readData$2.invoke(Unknown Source:8)
+（中略）</code></pre>
+</div>
+          <p>ハンドラーが無いと、壊れたファイルを読んだところで <code>CorruptionException</code> になります。DataStore は途中で切れたデータを値の無いエントリとして読み、<code>Value not set</code> で報告します。アプリなら、設定を読む所で落ちます。消した行は元に戻してください。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: 拡張子を変える・1 つ目の DataStore を止めない</summary>
+            <div class="disclosure__body">
+          <p>この 2 つの実験は任意です。読むだけでもかまいません。試した場合は、必ず元に戻してください。</p>
+          <p><strong>実験 3-2: 拡張子を変える</strong></p>
+          <p><code>file</code> の名前の <code>.preferences_pb</code> を <code>.txt</code> にして流すと、2 件とも失敗しました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">実験 3-2 の失敗</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">java.lang.IllegalStateException: File extension for file: /data/user/0/com.handson.android01/files/datastore/test-c65b1456-0f3c-42ba-b815-5e29ad68e213.txt does not match required extension for Preferences file: preferences_pb
+	at androidx.datastore.preferences.core.PreferenceDataStoreFactory.create$lambda$0(PreferenceDataStoreFactory.jvmAndroid.kt:64)
+	at androidx.datastore.preferences.core.PreferenceDataStoreFactory$$ExternalSyntheticLambda0.invoke(D8$$SyntheticClass:0)
+	at androidx.datastore.core.FileStorage.createConnection(FileStorage.kt:48)
+	at androidx.datastore.core.DataStoreImpl.storageConnectionDelegate$lambda$0(DataStoreImpl.kt:196)
+（中略）</code></pre>
+</div>
+          <p><strong>実験 3-3: 1 つ目の DataStore を止めない</strong></p>
+          <p><code>savedSettings_surviveNewDataStore</code> から、<code>scopes.last().coroutineContext.job.cancelAndJoin()</code> の行を消します。流すと、このテストが失敗しました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">実験 3-3 の失敗</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">java.lang.IllegalStateException: There are multiple DataStores active for the same file: /data/data/com.handson.android01/files/datastore/test-6654e9f3-bf29-4710-85a9-a8fcc091fc03.preferences_pb. You should either maintain your DataStore as a singleton or confirm that there is no two DataStore&#x27;s active on the same file (by confirming that the scope is cancelled).
+	at androidx.datastore.core.FileStorage.createConnection(FileStorage.kt:52)
+	at androidx.datastore.core.DataStoreImpl.storageConnectionDelegate$lambda$0(DataStoreImpl.kt:196)
+（中略）</code></pre>
+</div>
+          <p>ファイル名の UUID は実行のたびに変わります。</p>
+
+            </div>
+          </details>
+          <p>全体を流します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 6s</span></pre>
+</div>
+          <h4>アプリが起動することを確かめる</h4>
+          <p>アプリの DataStore の作り方を変えたので、アプリを入れて、データを消してから起動します。UI テストの後はアプリがアンインストールされているので、<code>installDebug</code> で入れ直します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm clear com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -c &quot;FATAL EXCEPTION&quot;</span><span class="terminal__line">0</span></pre>
+</div>
+          <p>画面には「20 件中 11 件完了」と一覧が出て、クラッシュは記録されていません（<code>pm clear</code> の後なので、最初の一覧を API から取得します）。</p>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>SettingsRepositoryFileTest</code> の 2 件と、ゲート（単体テスト 79 件・UI テスト 82 件）がすべて成功すれば OK です。ハンドラーの行を消す実験をした場合は、元に戻したことも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">Hilt が組み立てた Worker をテストする</h3>
+        </div>
+        <div class="step__body">
+          <p>14 の Worker のテスト（<code>TodoBackupWorkerTest</code>）は、自前の <code>WorkerFactory</code> で Worker を作りました。そのため、アプリが実際に使う <code>HiltWorkerFactory</code> の組み立て（<code>@HiltWorker</code>・<code>@AssistedInject</code> と、Worker が受け取る部品）は確かめていません。</p>
+          <p>このステップでは、Hilt が組み立てた <code>HiltWorkerFactory</code> で Worker を作ってテストします。13 で予告した Hilt のテストの道具を 3 つ使います。</p>
+
+          <table>
+            <thead>
+            <tr><th>道具</th><th>役割</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>@UninstallModules</code></td><td>このテストクラスだけ、指定した module を外す</td></tr>
+            <tr><td><code>@BindValue</code></td><td>テストクラスのフィールドの値を、このテストの間だけ Hilt の部品として使う</td></tr>
+            <tr><td><code>hiltRule.inject()</code></td><td>テストクラスの <code>@Inject lateinit var</code> のフィールドに、Hilt が部品を入れる</td></tr>
+            </tbody>
+          </table>
+          <p>この Worker のテストでは、送信先の API を、テストの中で状態を変えられる偽物（<code>FakeTodoServer</code>）に差し替えます。サーバーのエラーを起こすためです。</p>
+          <h4>偽の API を別の module に分ける</h4>
+          <p>偽の API は、13 から <code>FakeDataModule</code>（<code>@TestInstallIn</code>）が提供しています。ところが、<code>@UninstallModules</code> で外せるのは <code>@InstallIn</code> の module だけで、<code>@TestInstallIn</code> の module は外せません（折りたたみの実験 4-2）。そこで、偽の API だけを <code>@InstallIn</code> の新しい module に移します。</p>
+          <p><code>app/src/androidTest/java/com/handson/android01/di/FakeApiModule.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/di/FakeApiModule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.di
+
+import com.handson.android01.data.TodoApi
+import com.handson.android01.ui.screens.FakeTodoServer
+import com.handson.android01.ui.screens.demoTodos
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
+
+// 偽の API。FakeDataModule（@TestInstallIn）とは分けて、@InstallIn にする。
+// @UninstallModules で外せるのは @InstallIn の module だけ（@TestInstallIn の module は外せない）。
+// こうしておくと、ほとんどのテストはこの偽物を使い、API を差し替えたいテストクラスだけが、これを外して自分の偽物を入れられる
+@Module
+@InstallIn(SingletonComponent::class)
+object FakeApiModule {
+
+    @Provides
+    @Singleton
+    fun provideTodoApi(): TodoApi = FakeTodoServer(demoTodos(20)).api
+}</code></pre>
+</div>
+          <p><code>FakeDataModule</code> からは、偽の API の提供をなくします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/di/FakeDataModule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import androidx.datastore.core.DataStore</span><span class="diff-line">  import androidx.datastore.preferences.core.Preferences</span><span class="diff-line diff-line--remove">- import com.handson.android01.data.TodoApi</span><span class="diff-line">  import com.handson.android01.data.TodoDao</span><span class="diff-line">  import com.handson.android01.ui.screens.FakeDataStore</span><span class="diff-line">  import com.handson.android01.ui.screens.FakeTodoDao</span><span class="diff-line diff-line--remove">- import com.handson.android01.ui.screens.FakeTodoServer</span><span class="diff-line diff-line--remove">- import com.handson.android01.ui.screens.demoTodos</span><span class="diff-line">  import dagger.Module</span><span class="diff-line">  import dagger.Provides</span><span class="diff-line">  import dagger.hilt.components.SingletonComponent</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  // androidTest のすべての @HiltAndroidTest で、DataModule の代わりにこの module が使われる。</span><span class="diff-line diff-line--remove">- // 本物の DB にも DataStore のファイルにもネットワークにも出ない。AppDatabase は提供しない（TodoDao を直接、偽物にするので作られない）。</span><span class="diff-line diff-line--add">+ // 本物の DB にも DataStore のファイルにも出ない。AppDatabase は提供しない（TodoDao を直接、偽物にするので作られない）。</span><span class="diff-line diff-line--add">+ // API の偽物は FakeApiModule（こちらは @InstallIn なので、テストクラスが @UninstallModules で外せる）が提供する。</span><span class="diff-line">  // HiltTestApplication はテストごとにコンポーネントを作り直すので、@Singleton の偽物もテストごとに新しくなる</span><span class="diff-line">  @Module</span><span class="diff-line">  @TestInstallIn(components = [SingletonComponent::class], replaces = [DataModule::class])</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      @Provides</span><span class="diff-line">      @Singleton</span><span class="diff-line diff-line--remove">-     fun provideTodoApi(): TodoApi = FakeTodoServer(demoTodos(20)).api</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-     @Provides</span><span class="diff-line diff-line--remove">-     @Singleton</span><span class="diff-line">      fun provideSettingsDataStore(): DataStore&lt;Preferences&gt; = FakeDataStore()</span><span class="diff-line">  }</span></pre>
+</div>
+          <ul>
+            <li><code>FakeApiModule</code> は <code>@InstallIn(SingletonComponent::class)</code> なので、androidTest のすべての <code>@HiltAndroidTest</code> に入ります。これまでのテストは、変えずにこの偽物を使います。</li>
+            <li>API を差し替えたいテストクラスだけが、<code>@UninstallModules(FakeApiModule::class)</code> で外して、自分の偽物を入れます。</li>
+          </ul>
+          <h4>Hilt が組み立てた Worker をテストする</h4>
+          <p><code>app/src/androidTest/java/com/handson/android01/work/TodoBackupWorkerHiltTest.kt</code> を作ります。全文は折りたたみに載せました。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoBackupWorkerHiltTest.kt</code> の全文を見る（新規作成）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/work/TodoBackupWorkerHiltTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.work
+
+import android.content.Context
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.work.ListenableWorker
+import androidx.work.testing.TestListenableWorkerBuilder
+import com.handson.android01.data.SettingsRepository
+import com.handson.android01.data.TodoApi
+import com.handson.android01.data.TodoDao
+import com.handson.android01.data.toEntity
+import com.handson.android01.di.FakeApiModule
+import com.handson.android01.ui.screens.FakeTodoServer
+import com.handson.android01.ui.screens.demoTodos
+import dagger.hilt.android.testing.BindValue
+import dagger.hilt.android.testing.HiltAndroidRule
+import dagger.hilt.android.testing.HiltAndroidTest
+import dagger.hilt.android.testing.UninstallModules
+import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import javax.inject.Inject
+
+// Worker を、アプリと同じ HiltWorkerFactory で作ってテストする。
+// 14 の TodoBackupWorkerTest は自前の工場で Worker を作ったので、Hilt の組み立て（@HiltWorker・@AssistedInject と、
+// Worker が受け取る部品）は確かめていなかった。こちらは、その組み立てごと確かめる
+@HiltAndroidTest
+// このクラスだけ、androidTest 共通の偽の API を外す（下の @BindValue の偽物と、同じ型の部品が 2 つになるのを防ぐ）
+@UninstallModules(FakeApiModule::class)
+@RunWith(AndroidJUnit4::class)
+class TodoBackupWorkerHiltTest {
+
+    @get:Rule
+    val hiltRule = HiltAndroidRule(this)
+
+    private val server = FakeTodoServer(demoTodos(3))
+
+    // @BindValue: このフィールドの値を、このテストの間だけ Hilt の部品（TodoApi）として使う。
+    // TodoRepository → TodoBackupWorker と、Hilt が組み立てる部品に、この偽物が渡る
+    @BindValue
+    @JvmField
+    val api: TodoApi = server.api
+
+    // hiltRule.inject() を呼ぶと、Hilt がここに部品を入れる。dao・settings は @Singleton なので、Worker（TodoRepository）が使うのと同じインスタンス
+    @Inject
+    lateinit var workerFactory: HiltWorkerFactory
+
+    @Inject
+    lateinit var dao: TodoDao
+
+    @Inject
+    lateinit var settings: SettingsRepository
+
+    private val context = ApplicationProvider.getApplicationContext&lt;Context&gt;()
+
+    @Before
+    fun setUp() {
+        hiltRule.inject()
+    }
+
+    private fun worker(): TodoBackupWorker =
+        TestListenableWorkerBuilder&lt;TodoBackupWorker&gt;(context)
+            .setWorkerFactory(workerFactory)
+            .build()
+
+    @Test
+    fun hiltWorker_backsUpTodosFromInjectedDao() {
+        // 注入された DAO（FakeDataModule の偽物）に入れた Todo を、Worker が送る
+        runBlocking { dao.insertAll(demoTodos(2).map { it.toEntity() }) }
+
+        val result = runBlocking { worker().doWork() }
+
+        assertEquals(ListenableWorker.Result.success(), result)
+        assertEquals(1, server.requestCount)
+        // Worker が書いた時刻を、注入された SettingsRepository から読める（同じインスタンス）
+        assertNotNull(runBlocking { settings.lastBackupAt.first() })
+    }
+
+    @Test
+    fun hiltWorker_retriesOnServerError() {
+        server.status = HttpStatusCode.InternalServerError
+
+        val result = runBlocking { worker().doWork() }
+
+        assertEquals(ListenableWorker.Result.retry(), result)
+        assertNull(runBlocking { settings.lastBackupAt.first() })
+    }
+}</code></pre>
+</div>
+
+            </div>
+          </details>
+          <p>クラスの前半を抜き出して見ます。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/work/TodoBackupWorkerHiltTest.kt（抜粋）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">@HiltAndroidTest
+// このクラスだけ、androidTest 共通の偽の API を外す（下の @BindValue の偽物と、同じ型の部品が 2 つになるのを防ぐ）
+@UninstallModules(FakeApiModule::class)
+@RunWith(AndroidJUnit4::class)
+class TodoBackupWorkerHiltTest {
+
+    @get:Rule
+    val hiltRule = HiltAndroidRule(this)
+
+    private val server = FakeTodoServer(demoTodos(3))
+
+    // @BindValue: このフィールドの値を、このテストの間だけ Hilt の部品（TodoApi）として使う。
+    // TodoRepository → TodoBackupWorker と、Hilt が組み立てる部品に、この偽物が渡る
+    @BindValue
+    @JvmField
+    val api: TodoApi = server.api
+
+    // hiltRule.inject() を呼ぶと、Hilt がここに部品を入れる。dao・settings は @Singleton なので、Worker（TodoRepository）が使うのと同じインスタンス
+    @Inject
+    lateinit var workerFactory: HiltWorkerFactory
+
+    @Inject
+    lateinit var dao: TodoDao
+
+    @Inject
+    lateinit var settings: SettingsRepository
+
+    private val context = ApplicationProvider.getApplicationContext&lt;Context&gt;()
+
+    @Before
+    fun setUp() {
+        hiltRule.inject()
+    }
+
+    private fun worker(): TodoBackupWorker =
+        TestListenableWorkerBuilder&lt;TodoBackupWorker&gt;(context)
+            .setWorkerFactory(workerFactory)
+            .build()</code></pre>
+</div>
+          <ul>
+            <li><code>@UninstallModules(FakeApiModule::class)</code> で共通の偽の API を外し、<code>@BindValue</code> の <code>api</code> を入れます。外さないと、<code>TodoApi</code> の提供元が 2 つになります（下の実験 4-1）。</li>
+            <li><code>@BindValue</code> の値は、Hilt が組み立てる部品に渡ります。<code>TodoRepository</code> の <code>api</code> を経て、Worker に届きます。Kotlin では <code>@JvmField</code> も付けます。</li>
+            <li><code>server</code> は <code>api</code> より前に宣言します。プロパティは上から順に初期化されるので、後に書くと <code>server.api</code> を読めません。</li>
+            <li><code>@Before</code> で <code>hiltRule.inject()</code> を呼ぶと、<code>@Inject lateinit var</code> の 3 つのフィールドに部品が入ります。<code>dao</code> と <code>settings</code> は <code>@Singleton</code> の部品なので、Worker（<code>TodoRepository</code>）が使うのと同じインスタンスです。</li>
+            <li><code>TestListenableWorkerBuilder</code> は 14 と同じです。<code>setWorkerFactory</code> に、自前の工場ではなく注入された <code>HiltWorkerFactory</code> を渡します。</li>
+          </ul>
+          <p>テストは 2 件です。<code>hiltWorker_backsUpTodosFromInjectedDao</code> は、注入された DAO（<code>FakeDataModule</code> の偽物）の Todo を Worker が送ることを確かめます。Worker が書いた時刻を、注入された <code>SettingsRepository</code> から読めることも確かめます。<code>hiltWorker_retriesOnServerError</code> は、サーバーが 500 を返すと <code>Result.retry()</code> になり、時刻が残らないことを確かめます。</p>
+          <p>全体を流します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 5s</span></pre>
+</div>
+          <p>UI テストは 84 件になりました。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: このクラス専用のコンポーネント</summary>
+            <div class="disclosure__body">
+          <p>この確認は任意です。読むだけでもかまいません。Hilt は、<code>@UninstallModules</code> や <code>@BindValue</code> を使うテストクラスのために、専用のコンポーネントを生成します。生成されたファイルを探します（パスは <code>debugAndroidTest</code> で、A が大文字なので <code>*ndroidTest*</code> で探します）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> find app/build/generated -path &#x27;*ndroidTest*&#x27; -name &#x27;*TodoBackupWorkerHiltTest*&#x27; | sort</span><span class="terminal__line">app/build/generated/hilt/component_sources/debugAndroidTest/com/handson/android01/work/TodoBackupWorkerHiltTest_TestComponentDataSupplier.java</span><span class="terminal__line">app/build/generated/hilt/component_sources/debugAndroidTest/dagger/hilt/android/internal/testing/root/DaggerTodoBackupWorkerHiltTest_HiltComponents_SingletonC.java</span><span class="terminal__line">app/build/generated/hilt/component_sources/debugAndroidTest/dagger/hilt/android/internal/testing/root/TodoBackupWorkerHiltTest_HiltComponents.java</span><span class="terminal__line">app/build/generated/hilt/component_trees/debugAndroidTest/dagger/hilt/android/internal/testing/root/TodoBackupWorkerHiltTest_ComponentTreeDeps.java</span><span class="terminal__line">app/build/generated/hilt/component_trees/debugAndroidTest/dagger/hilt/internal/processedrootsentinel/codegen/_com_handson_android01_work_TodoBackupWorkerHiltTest.java</span><span class="terminal__line">app/build/generated/ksp/debugAndroidTest/java/com/handson/android01/work/TodoBackupWorkerHiltTest_BindValueModule_ProvidesApiFactory.java</span><span class="terminal__line">app/build/generated/ksp/debugAndroidTest/java/com/handson/android01/work/TodoBackupWorkerHiltTest_BindValueModule_ProvidesTodoBackupWorkerHiltTestFactory.java</span><span class="terminal__line">app/build/generated/ksp/debugAndroidTest/java/com/handson/android01/work/TodoBackupWorkerHiltTest_BindValueModule.java</span><span class="terminal__line">app/build/generated/ksp/debugAndroidTest/java/com/handson/android01/work/TodoBackupWorkerHiltTest_GeneratedInjector.java</span><span class="terminal__line">app/build/generated/ksp/debugAndroidTest/java/com/handson/android01/work/TodoBackupWorkerHiltTest_MembersInjector.java</span><span class="terminal__line">app/build/generated/ksp/debugAndroidTest/java/dagger/hilt/android/internal/uninstallmodules/codegen/_com_handson_android01_work_TodoBackupWorkerHiltTest.java</span><span class="terminal__line">app/build/generated/ksp/debugAndroidTest/java/dagger/hilt/internal/aggregatedroot/codegen/_com_handson_android01_work_TodoBackupWorkerHiltTest.java</span><span class="terminal__line">app/build/generated/ksp/debugAndroidTest/java/hilt_aggregated_deps/_com_handson_android01_work_TodoBackupWorkerHiltTest_BindValueModule.java</span><span class="terminal__line">app/build/generated/ksp/debugAndroidTest/java/hilt_aggregated_deps/_com_handson_android01_work_TodoBackupWorkerHiltTest_GeneratedInjector.java</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls app/build/generated/hilt/component_sources/debugAndroidTest/dagger/hilt/android/internal/testing/root/</span><span class="terminal__line">DaggerDefault_HiltComponents_SingletonC.java</span><span class="terminal__line">DaggerTodoBackupWorkerHiltTest_HiltComponents_SingletonC.java</span><span class="terminal__line">Default_HiltComponents.java</span><span class="terminal__line">TodoBackupWorkerHiltTest_HiltComponents.java</span></pre>
+</div>
+          <ul>
+            <li>ほかの <code>@HiltAndroidTest</code> は、共通の <code>Default_HiltComponents</code> を使います。</li>
+            <li>このクラスだけ、専用の <code>TodoBackupWorkerHiltTest_HiltComponents</code> が生成されました。<code>@BindValue</code> の分の <code>TodoBackupWorkerHiltTest_BindValueModule</code> もあります。</li>
+            <li>こうしたテストクラスが増えると、生成するコードが増え、ビルドが遅くなります。偽物を差し替える必要があるクラスだけで使います。</li>
+          </ul>
+
+            </div>
+          </details>
+
+          <h4><code>@UninstallModules</code> を書き忘れると（実験 4-1）</h4>
+          <p><code>@UninstallModules(FakeApiModule::class)</code> の行を一時的に消して、ビルドします。Kotlin のコンパイル（<code>compileDebugAndroidTestKotlin</code>）までは成功してしまいます。Dagger の検査は、その後の <code>hiltJavaCompileDebugAndroidTest</code> で走るためです。テストの APK を作る <code>assembleDebugAndroidTest</code> で、初めてエラーになります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:assembleDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:hiltAggregateDepsDebugAndroidTest</span><span class="terminal__line"></span><span class="terminal__line">&gt; Task :app:hiltJavaCompileDebugAndroidTest FAILED</span><span class="terminal__line">（プロジェクトのパス）/app/build/generated/hilt/component_sources/debugAndroidTest/dagger/hilt/android/internal/testing/root/TodoBackupWorkerHiltTest_HiltComponents.java:150: error: [Dagger/DuplicateBindings] com.handson.android01.data.TodoApi is bound multiple times:</span><span class="terminal__line">  public abstract static class SingletonC implements TodoApplication_GeneratedInjector,</span><span class="terminal__line">                         ^</span><span class="terminal__line">          @Provides @Singleton com.handson.android01.data.TodoApi com.handson.android01.di.FakeApiModule.provideTodoApi()</span><span class="terminal__line">          @Provides com.handson.android01.data.TodoApi com.handson.android01.work.TodoBackupWorkerHiltTest_BindValueModule.providesApi(com.handson.android01.work.TodoBackupWorkerHiltTest)</span><span class="terminal__line">      com.handson.android01.data.TodoApi is injected at</span><span class="terminal__line">          [dagger.hilt.android.internal.testing.root.TodoBackupWorkerHiltTest_HiltComponents.SingletonC] com.handson.android01.data.TodoRepository(…, api, …)</span><span class="terminal__line">      com.handson.android01.data.TodoRepository is injected at</span><span class="terminal__line">          [dagger.hilt.android.internal.testing.root.TodoBackupWorkerHiltTest_HiltComponents.SingletonC] com.handson.android01.work.TodoBackupWorker(…, repository)</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD FAILED in 2s</span></pre>
+</div>
+          <ul>
+            <li><code>TodoApi</code> の提供元が、<code>FakeApiModule.provideTodoApi()</code> と <code>@BindValue</code> の <code>api</code>（<code>…_BindValueModule.providesApi</code>）の 2 つになっています。</li>
+            <li>その下には、<code>TodoApi</code> が <code>TodoRepository</code> を経て <code>TodoBackupWorker</code> に注入される経路が続きます。</li>
+            <li><code>compileDebugAndroidTestKotlin</code> が通っても、Hilt の組み立てが正しいとは限りません。テストのビルドは <code>assembleDebugAndroidTest</code> か <code>connectedDebugAndroidTest</code> で確かめます。</li>
+          </ul>
+          <p>消した行は元に戻してください。</p>
+          <h4><code>@HiltWorker</code> を付け忘れると（実験 4-3）</h4>
+          <p>Hilt を通すテストでしか見つからない失敗を試します。<code>app/src/main/java/com/handson/android01/work/TodoBackupWorker.kt</code> の <code>@HiltWorker</code> の行を一時的に消します。<code>work</code> パッケージの UI テストだけを流します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.package=com.handson.android01.work</span><span class="terminal__line">（中略）</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest FAILED</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD FAILED in 9s</span></pre>
+</div>
+          <p>コンパイルは通ります。<code>@HiltWorker</code> が無いと、Hilt はこの Worker 用の工場を作らないだけで、エラーにはなりません。7 件のうち、14 の自前の工場のテスト（<code>TodoBackupWorkerTest</code> 4 件・<code>TodoBackupSchedulerTest</code> 1 件）は全部通りました。失敗したのは <code>TodoBackupWorkerHiltTest</code> の 2 件です。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">TodoBackupWorkerHiltTest の失敗（2 件とも同じ）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">java.lang.NoSuchMethodException: com.handson.android01.work.TodoBackupWorker.&lt;init&gt; [class android.content.Context, class androidx.work.WorkerParameters]
+	at java.lang.Class.getConstructor0(Class.java:3385)
+	at java.lang.Class.getDeclaredConstructor(Class.java:3067)
+	at androidx.work.WorkerFactory.createWorkerWithDefaultFallback$fallbackToReflection(WorkerFactory.kt:87)
+	at androidx.work.WorkerFactory.createWorkerWithDefaultFallback(WorkerFactory.kt:96)
+	at androidx.work.testing.TestListenableWorkerBuilder.build(TestListenableWorkerBuilder.java:335)
+	at androidx.work.testing.TestListenableWorkerBuilder.build(TestListenableWorkerBuilder.java:300)
+	at com.handson.android01.work.TodoBackupWorkerHiltTest.worker(TodoBackupWorkerHiltTest.kt:72)
+（中略）</code></pre>
+</div>
+          <p><code>@HiltWorker</code> が無いと、<code>HiltWorkerFactory</code> はこの Worker を知りません。そのため、既定の作り方（リフレクションで <code>(Context, WorkerParameters)</code> のコンストラクタを探す）に落ちて、<code>NoSuchMethodException</code> になります。14 の自前の工場のテストは、Hilt を通らないので、この付け忘れに気づけません。消した行は元に戻してください。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: <code>@TestInstallIn</code> の module を外そうとする・<code>hiltRule.inject()</code> を呼び忘れる</summary>
+            <div class="disclosure__body">
+          <p>この 2 つの実験は任意です。読むだけでもかまいません。試した場合は、必ず元に戻してください。</p>
+          <p><strong>実験 4-2: <code>@TestInstallIn</code> の module を外そうとする</strong></p>
+          <p><code>@UninstallModules(FakeApiModule::class)</code> を <code>@UninstallModules(FakeDataModule::class)</code> に変えます。<code>./gradlew :app:compileDebugAndroidTestKotlin</code> を実行すると、KSP の段階で失敗しました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">compileDebugAndroidTestKotlin の出力</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">e: [ksp] （プロジェクトのパス）/app/src/androidTest/java/com/handson/android01/work/TodoBackupWorkerHiltTest.kt:39: [Hilt] @UninstallModules should only include modules annotated with both @Module and @InstallIn, but found: [FakeDataModule].
+[Hilt] Processing did not complete. See error above for details.
+BUILD FAILED in 818ms</code></pre>
+</div>
+          <p><code>@UninstallModules</code> に書けるのは <code>@Module</code> と <code>@InstallIn</code> の両方が付いた module だけです。偽の API を <code>FakeApiModule</code> に分けたのは、このためです。</p>
+          <p><strong>実験 4-4: <code>hiltRule.inject()</code> を呼び忘れる</strong></p>
+          <p><code>setUp()</code> の中身を消して流すと、2 件とも失敗しました。最初に触るフィールドが違うので、名前が違います。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">実験 4-4 の失敗</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">kotlin.UninitializedPropertyAccessException: lateinit property dao has not been initialized
+	at com.handson.android01.work.TodoBackupWorkerHiltTest.getDao(TodoBackupWorkerHiltTest.kt:57)
+kotlin.UninitializedPropertyAccessException: lateinit property workerFactory has not been initialized
+	at com.handson.android01.work.TodoBackupWorkerHiltTest.getWorkerFactory(TodoBackupWorkerHiltTest.kt:54)
+（中略）</code></pre>
+</div>
+          <p>1 つ目は <code>hiltWorker_backsUpTodosFromInjectedDao</code> の失敗で、最初に触るのが <code>dao</code> です。2 つ目は <code>hiltWorker_retriesOnServerError</code> の失敗で、最初に触るのが <code>workerFactory</code> です。<code>@Inject</code> を付けたフィールドは、<code>hiltRule.inject()</code> を呼ぶまで空のままです。</p>
+
+            </div>
+          </details>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">テストクラスの中に module を書く方法もある</p>
+              <p><code>@BindValue</code> の代わりに、テストクラスの中に module を書いて偽物を提供する方法もあります（<code>@Module @InstallIn(SingletonComponent::class)</code>）。値を 1 つ差し替えるだけなら、<code>@BindValue</code> の 1 行で済みます。差し替える部品を組み立てる必要があるときの選択肢として覚えておきます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">画面ごとの UI テストは <code>testViewModel()</code> のままにした</p>
+              <p>13 では、画面ごとの UI テスト（約 60 件）を、Hilt の ViewModel ごと動かす形（<code>HiltTestActivity</code>）に移すことを「15 で検討」としました。検討した結果、移さないことにしました。</p>
+              <ul>
+                <li>20 ファイル近くの書き換えになります。</li>
+                <li><code>@HiltAndroidTest</code> のクラスごとにコンポーネントの生成とアプリの作り直しが入り、遅くなります。</li>
+                <li>画面単体のテストは、ViewModel を直接作るほうが速く、何を渡したかも読みやすいです。</li>
+                <li>Hilt の組み立ては、Activity を起動する 3 クラスと、このステップの Worker のテストで確かめられています。</li>
+              </ul>
+              <p>移す場合は、debug のソースセットに、<code>@AndroidEntryPoint</code> を付けた空の Activity（<code>HiltTestActivity</code>）を置きます。そのうえで <code>createAndroidComposeRule&lt;HiltTestActivity&gt;()</code> で画面を出す形になります。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>ゲート（単体テスト 79 件・UI テスト 84 件）がすべて成功すれば OK です。実験をした場合は、<code>@UninstallModules</code> と <code>@HiltWorker</code> の行を元に戻したことも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>完成状態のゲート（ビルド・lint・単体テスト・UI テスト）は、ステップ 4 で Worker のテストを足した後に通しています。コードはそれから変わっていないので、結果を表にまとめます。続けて、カバレッジを測り直し、UI テストがネットワークに出ないことと、release ビルドでも起動することを確かめます。</p>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト（<code>test</code>）</td><td>79 件すべて成功（14 と同じ）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>84 件すべて成功（14 から 12 件増えた）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 9 件・ヒント 1 件（14 と同じ）。警告の内訳は <code>UnusedResources</code> 7 件・<code>RedundantLabel</code> 1 件・<code>AndroidGradlePluginVersion</code> 1 件。ヒントは <code>AutoboxingStateCreation</code> 1 件</td></tr>
+            <tr><td>debug APK</td><td>約 19.0MB（18,999,395 バイト）</td></tr>
+            </tbody>
+          </table>
+          <h4>カバレッジを測り直す</h4>
+          <p>ステップ 1 と同じコマンドで、カバレッジを測り直します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew cleanTest :app:createDebugUnitTestCoverageReport :app:createDebugAndroidTestCoverageReport -Pcoverage</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 21s</span></pre>
+</div>
+          <p>ステップ 1 の表と比べます（実行された行 / 実行されなかった行）。単体テストの数字は、6 つのクラスとも変わりませんでした。</p>
+
+          <table>
+            <thead>
+            <tr><th>クラス</th><th>UI テスト（ステップ 1）</th><th>UI テスト（完成）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>data/TodoDao_Impl</code></td><td>0 / 20</td><td>19 / 1</td></tr>
+            <tr><td><code>data/AppDatabase_Impl</code></td><td>0 / 21</td><td>19 / 2</td></tr>
+            <tr><td><code>di/DataModule</code></td><td>0 / 7</td><td>0 / 7</td></tr>
+            <tr><td><code>data/SettingsRepository</code></td><td>15 / 0</td><td>15 / 0</td></tr>
+            <tr><td><code>data/TodoRepository</code></td><td>23 / 2</td><td>23 / 2</td></tr>
+            <tr><td><code>work/TodoBackupWorker</code></td><td>12 / 2</td><td>12 / 2</td></tr>
+            </tbody>
+          </table>
+          <ul>
+            <li>DAO と DB の実装は、ステップ 2 の本物の Room のテストで実行されるようになりました。</li>
+            <li><code>DataModule</code> は 0 のままです。テストでは <code>FakeDataModule</code>（<code>@TestInstallIn(replaces = [DataModule::class])</code>）が丸ごと置き換えるので、本物の <code>DataModule</code> の関数は一度も呼ばれません。ステップ 3 で足した <code>settingsCorruptionHandler</code> はクラスの外（トップレベル）にあり、別のクラス（<code>DataModuleKt</code>）に入ります。</li>
+            <li><code>SettingsRepository</code> と <code>TodoBackupWorker</code> は、数字が変わりません。ステップ 3・4 のテストは、すでに実行されていた行を、本物のファイルや Hilt の組み立てを通して実行し直したためです。</li>
+          </ul>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">カバレッジは目標にしない</p>
+              <p>カバレッジの数字は「どこを確かめていないか」を探す道具です。<code>SettingsRepository</code> は最初から 15 / 0 でしたが、ファイルの読み書きと壊れたファイルは確かめていませんでした。<code>TodoBackupWorker</code> の数字は変わりませんが、ステップ 4 で Hilt の組み立てが正しいことを確かめました（<code>@HiltWorker</code> の付け忘れの実験）。数字を上げることを目標にせず、0 の所や、偽物の上でしか通っていない所を見つけるのに使います。</p>
+            </div>
+          </div>
+          <h4>機内モードでも UI テストが通ることを確かめる</h4>
+          <p>この項目で足した UI テストも、偽物の API かメモリ上の DB・テスト用のファイルを使うので、ネットワークに出ません。機内モードにして UI テストを実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings get global airplane_mode_on</span><span class="terminal__line">1</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 1s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell settings get global airplane_mode_on</span><span class="terminal__line">0</span></pre>
+</div>
+          <p>筆者の環境では、機内モードのまま UI テスト 84 件がすべて成功しました。<code>airplane_mode_on</code> の <code>1</code> が機内モード、<code>0</code> が解除です。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">機内モードの解除を忘れない</p>
+              <p>解除しないまま次の release の確認に進むと、最初の一覧を API から取得できません。</p>
+            </div>
+          </div>
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の確認: テストがアプリのデータを残さないこと</summary>
+            <div class="disclosure__body">
+          <p>この確認は任意です。読むだけでもかまいません。この項目で足した端末のテストは、アプリ本体の DB と設定ファイルに触れません。</p>
+          <ul>
+            <li><code>RoomTodoDaoTest</code> の DB はメモリ上にあり、ファイルを作りません。アプリの <code>todos.db</code> とは別物です。</li>
+            <li><code>SettingsRepositoryFileTest</code> は、テストごとに <code>test-&lt;UUID&gt;.preferences_pb</code> を作り、<code>@After</code> で scope を止めてから消します。アプリの <code>settings.preferences_pb</code> には触れません。</li>
+            <li><code>connectedDebugAndroidTest</code> は、テストの後にアプリをアンインストールします。</li>
+          </ul>
+          <p>確かめます。<code>connectedDebugAndroidTest</code> はテストの後にアプリを消すので、ここではアプリとテスト用の APK を <code>installDebug</code> と <code>installDebugAndroidTest</code> で入れ、<code>adb shell am instrument</code> で <code>data</code> パッケージのテストだけを流します。アプリを一度起動してデータを作り、テストの前後で <code>run-as</code> でアプリの DB と設定ファイルの一覧を比べます（<code>run-as</code> は debug のアプリで使えます）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug installDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 3s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm clear com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell run-as com.handson.android01 ls files/datastore databases</span><span class="terminal__line">databases:</span><span class="terminal__line">todos.db</span><span class="terminal__line">todos.db-shm</span><span class="terminal__line">todos.db-wal</span><span class="terminal__line">todos.db.lck</span><span class="terminal__line"></span><span class="terminal__line">files/datastore:</span><span class="terminal__line">settings.preferences_pb</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am instrument -w -e package com.handson.android01.data com.handson.android01.test/com.handson.android01.HiltTestRunner</span><span class="terminal__line">com.handson.android01.data.FakeTodoDaoTest:....</span><span class="terminal__line">com.handson.android01.data.RoomTodoDaoTest:....</span><span class="terminal__line">com.handson.android01.data.SettingsRepositoryFileTest:..</span><span class="terminal__line"></span><span class="terminal__line">Time: 0.221</span><span class="terminal__line"></span><span class="terminal__line">OK (10 tests)</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell run-as com.handson.android01 ls files/datastore databases</span><span class="terminal__line">databases:</span><span class="terminal__line">todos.db</span><span class="terminal__line">todos.db-shm</span><span class="terminal__line">todos.db-wal</span><span class="terminal__line">todos.db.lck</span><span class="terminal__line"></span><span class="terminal__line">files/datastore:</span><span class="terminal__line">settings.preferences_pb</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01.test</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span></pre>
+</div>
+          <p>テストの前後で一覧は同じでした。テスト用のファイル（<code>test-&lt;UUID&gt;.preferences_pb</code>）は、テストが終わった時点で消えています。最後に、入れたアプリとテスト用の APK をアンインストールして、次の release の確認に備えます。</p>
+
+            </div>
+          </details>
+
+          <h4>release ビルドでも起動することを確かめる</h4>
+          <p>ステップ 3 で DataStore の作り方を変えたので、R8 がコードを縮小する release ビルドでも起動することを確かめます。手順は 14 と同じです。release のビルドの中身と署名は、次の 16 で詳しく扱います。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 44s</span></pre>
+</div>
+          <p>できた <code>app-release-unsigned.apk</code> は約 2.0MB（1,999,003 バイト）でした。14 と同じ手順で、作業用ディレクトリにコピーし、debug 用の鍵で <code>apksigner sign</code> します。次のコマンドの <code>build-tools/37.0.0</code> は、筆者の環境の版です。<code>~/Library/Android/sdk/build-tools/</code> にインストール済みの版に読み替えてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp app/build/outputs/apk/release/app-release-unsigned.apk &lt;作業用ディレクトリ&gt;/rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd &lt;作業用ディレクトリ&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out rel-signed.apk rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner verify --verbose rel-signed.apk</span><span class="terminal__line">Verifies</span><span class="terminal__line">Verified using v1 scheme (JAR signing): false</span><span class="terminal__line">Verified using v2 scheme (APK Signature Scheme v2): true</span><span class="terminal__line">Verified using v3 scheme (APK Signature Scheme v3): true</span><span class="terminal__line">Verified using v3.1 scheme (APK Signature Scheme v3.1): false</span><span class="terminal__line">Verified using v3.2 scheme (APK Signature Scheme v3.2): false</span><span class="terminal__line">Verified using v4 scheme (APK Signature Scheme v4): false</span><span class="terminal__line">Verified for SourceStamp: false</span><span class="terminal__line">Number of signers: 1</span></pre>
+</div>
+          <p><code>apksigner sign</code> は、成功すると何も表示しません。UI テストの後はアプリがアンインストールされているので、そのまま release 版を入れて起動します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb install rel-signed.apk</span><span class="terminal__line">Serving...</span><span class="terminal__line">All files should be loaded. Notifying the device.</span><span class="terminal__line">Performing Incremental Install</span><span class="terminal__line">Success</span><span class="terminal__line">Install command complete in 82 ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -c</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>数秒待ってから、クラッシュの有無を見ます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -c &quot;FATAL EXCEPTION&quot;</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -b crash | wc -l</span><span class="terminal__line">       0</span></pre>
+</div>
+          <p>画面には「20 件中 11 件完了」と一覧が出て、クラッシュは記録されていません。<code>settingsCorruptionHandler</code> を足した状態でも、release で起動できました。</p>
+          <p>release の確認はここまでです。プロジェクトのディレクトリに戻ります。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd -</span><span class="terminal__line">&lt;プロジェクトのディレクトリ&gt;</span></pre>
+</div>
+          <p>作業用ディレクトリの APK を削除し、アプリをアンインストールします。14 のバックアップの予約があるので、アンインストールして 1 日 1 回の送信を止めます。エミュレータと Gradle デーモンも止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm &lt;作業用ディレクトリ&gt;/rel.apk &lt;作業用ディレクトリ&gt;/rel-signed.apk &lt;作業用ディレクトリ&gt;/rel-signed.apk.idsig</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>単体テスト 79 件と UI テスト 84 件が成功し、カバレッジで <code>TodoDao_Impl</code> が実行されるようになっていれば OK です。機内モードのままでも UI テストが通ること、機内モードを解除したこと、release の APK でも一覧が出てクラッシュが無いことも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="not-covered">この項目で扱わなかったこと</h2>
+          <ul>
+            <li>画面ごとの UI テストを <code>HiltTestActivity</code> に移すこと。書き換えが大きく、遅くなるわりに得るものが少ないため、移しませんでした（ステップ 4 の補足）。</li>
+            <li>Room の移行テスト（<code>room3-testing</code> の <code>MigrationTestHelper</code>）。スキーマが version 1 しか無く、テストする移行がありません。</li>
+            <li>Test Orchestrator（テストごとにプロセスを分ける仕組み）。84 件では実行時間が数倍になり、今のテストは偽物をテストごとに作るので、共有の状態にも困っていません。</li>
+            <li>Gradle Managed Devices と、テストの並列化（シャーディング）。システムイメージのダウンロード（数 GB）と時間がかかる、CI 向けの話題です。</li>
+            <li><code>test/</code> と <code>androidTest/</code> の偽物の重複の解消（testFixtures など）。ソースセットの構成を変える話で、テストの書き方とは別の話題です。</li>
+            <li>DataStore の読み込みの <code>IOException</code> の扱い（<code>catch { emit(emptyPreferences()) }</code>）。画面の文言の分け方（09 の <code>toUserMessage()</code>）まで直すことになり、テストの項目の範囲を越えます。</li>
+            <li>release のビルドの中身（R8 の出力・<code>retrace</code>）と、自分の鍵での署名。次の 16 で扱います。</li>
+          </ul>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid15</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">単体テストと UI テストの違いと、偽物の差し込み方 3 種類（コンストラクタ・<code>testViewModel()</code>・<code>@TestInstallIn</code>）を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>-Pcoverage</code> を付けてカバレッジを測り、XML から <code>TodoDao_Impl</code> の行数を取り出した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>DataModule</code> のカバレッジが 0 のままである理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">契約テストで <code>FakeTodoDao</code> の id の使い回しを見つけ、2 つのファイルを直した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>inMemoryDatabaseBuilder</code> の DB がアプリの DB に触れない理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>ReplaceFileCorruptionHandler</code> を足し、壊れたファイルから空の設定が読めることをテストした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>@UninstallModules</code> で外せる module と外せない module の違いを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>@BindValue</code> と <code>hiltRule.inject()</code> で、Hilt が組み立てた Worker をテストした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-10" class="checklist__input">
+          <label for="check-10" class="checklist__label">単体テスト 79 件・UI テスト 84 件を通し、機内モードでも UI テストが通ること、release の APK でも起動することを確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Cannot locate tasks that match ':app:createDebugUnitTestCoverageReport'</code> になる</p>
+              <p>メッセージは <code>as task 'createDebugUnitTestCoverageReport' not found in project ':app'</code> と続きます。<code>-Pcoverage</code> を付け忘れています。レポートのタスクは、<code>-Pcoverage</code> を付けたときだけ現れます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>Cannot infer type for type parameter 'T'</code> でコンパイルできない</p>
+              <p><code>ApplicationProvider.getApplicationContext&lt;Context&gt;()</code> と型引数を書きます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>FakeTodoDaoTest</code> だけが <code>expected:&lt;[1, 3]&gt; but was:&lt;[1, 2]&gt;</code> で失敗する</p>
+              <p><code>FakeTodoDao</code> が、消した id を使い回しています。<code>lastId</code> を足す修正を、<code>test/</code> と <code>androidTest/</code> の両方に入れたかを確かめます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>There are multiple DataStores active for the same file</code> で失敗する</p>
+              <p>1 つ目の DataStore の scope を <code>cancelAndJoin()</code> で止めてから、2 つ目を作ります。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>does not match required extension for Preferences file: preferences_pb</code> で失敗する</p>
+              <p>テストのファイル名の拡張子を <code>.preferences_pb</code> にします。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>[Dagger/DuplicateBindings] com.handson.android01.data.TodoApi is bound multiple times</code> でビルドできない</p>
+              <p><code>@BindValue</code> を使うテストクラスに、<code>@UninstallModules(FakeApiModule::class)</code> を付けます。<code>compileDebugAndroidTestKotlin</code> では見つからず、<code>assembleDebugAndroidTest</code> で見つかります。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@UninstallModules should only include modules annotated with both @Module and @InstallIn</code> になる</p>
+              <p><code>@TestInstallIn</code> の module は外せません。外したい偽物は <code>@InstallIn</code> の module に分けます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>NoSuchMethodException: …TodoBackupWorker.&lt;init&gt;</code> になる</p>
+              <p><code>TodoBackupWorker</code> に <code>@HiltWorker</code> が付いているかを確かめます。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>lateinit property … has not been initialized</code> になる</p>
+              <p><code>@Before</code> で <code>hiltRule.inject()</code> を呼んでいるかを確かめます。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        ここまでのテストを見直し、偽物に置き換えたせいで確かめていなかった所を埋めました。
+        カバレッジ（AGP 内蔵の JaCoCo）は、<code>-Pcoverage</code> を付けたときだけ測るようにしました。DAO と DB の実装と <code>DataModule</code> が、どのテストも通っていないことを数字で確かめました。
+        同じテストを本物の Room（メモリ上の DB）と偽の DAO に流す契約テストで、偽物が削除した id を使い回すずれを見つけて直しました。
+        DataStore は本物のファイルでテストし、壊れたファイルを空の設定で置き換える <code>ReplaceFileCorruptionHandler</code> を足しました。
+        最後に、<code>@UninstallModules</code>・<code>@BindValue</code>・<code>hiltRule.inject()</code> で、Hilt が組み立てた Worker をテストしました。<code>@HiltWorker</code> の付け忘れのように、自前の工場のテストでは見つからない失敗を見つけられます。</p>
+      <p>次の項目（16: リリースビルドと署名）では、release の APK を読み解きます。R8 の出力（<code>usage.txt</code>・<code>mapping.txt</code> など）を読み、わざと落としたスタックトレースを <code>retrace</code> で元に戻します。<code>versionCode</code> を上げて自分の鍵で署名した APK で更新し、AAB の中身も確かめる予定です。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">完成コード</p>
+              <p>このレッスンの完成コードは、ブランチ <code>android/15-testing</code> の <code>android/15-testing/</code> ディレクトリにあります。</p>
+            </div>
+          </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../14-workmanager/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">14: WorkManager で定期バックアップ</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">16: リリースビルドと署名</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
