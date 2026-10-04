@@ -2039,7 +2039,7 @@ class TodoListScreenTest {
         予約には「ネットワークにつながっている」「電池が少なくない」の条件と、30 秒から倍になるバックオフを付けました。4xx はあきらめ、通信の失敗と 5xx は 3 回までやり直します。
         <code>enqueueUniquePeriodicWork</code> と <code>KEEP</code> で、起動のたびに呼んでも予約は 1 つのままです。アプリのプロセスを終了していても、条件がそろうと OS がアプリを起動して Worker を実行しました。
         送った時刻は DataStore に残し、ViewModel の <code>combine</code> を通して一覧の上部に出しています。</p>
-      <p>次の項目（15: テストとリリースビルド）では、テストとリリースビルドを仕上げる予定です。13 から持ち越した Hilt のテストの書き方（<code>@UninstallModules</code>・<code>@BindValue</code>・<code>hiltRule.inject()</code> など）を扱います。この項目の Worker も、<code>hiltRule.inject()</code> で注入した <code>HiltWorkerFactory</code> を使い、Hilt の組み立てごとテストする候補です。</p>
+      <p>次の項目（15: テストの仕上げ）では、13 から持ち越した Hilt のテストの書き方（<code>@UninstallModules</code>・<code>@BindValue</code>・<code>hiltRule.inject()</code>）を使います。この項目の Worker も、<code>hiltRule.inject()</code> で注入した <code>HiltWorkerFactory</code> で、Hilt の組み立てごとテストします。あわせて、本物の Room と DataStore のファイルを使うテストと、カバレッジの測り方を扱います。リリースビルドと署名は 16 で扱います。</p>
 
           <div class="callout callout--note">
             <span class="callout__icon" aria-hidden="true">ℹ️</span>
@@ -2055,10 +2055,10 @@ class TodoListScreenTest {
           <span class="lesson-nav__direction">← 前のレッスン</span>
           <span class="lesson-nav__title">13: Hilt で依存性注入</span>
         </a>
-        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
-          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
-          <span class="lesson-nav__title">15: テストとリリースビルド</span>
-        </span>
+        <a class="lesson-nav__link lesson-nav__link--next" href="../15-testing/index.html">
+          <span class="lesson-nav__direction">次のレッスン →</span>
+          <span class="lesson-nav__title">15: テストの仕上げ</span>
+        </a>
       </nav>
 
     </div>
