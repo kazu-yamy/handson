@@ -1,0 +1,1567 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07: プロジェクト構成と設定の外部化 | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">07</li>
+        </ol>
+        <h1 class="lesson-title">プロジェクト構成と設定の外部化</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: 06 で users の API を作り終え、1 つのファイルにまとまったコードを整理して、ポートや API キーをコードの外から渡せるようにしたい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法（モジュールと <code>pub</code>・トレイトの実装・<code>Result</code> と <code>?</code> 演算子）、<code>cargo</code> と <code>curl</code> の基本操作</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../06-error-handling/index.html">06: エラーハンドリングとバリデーション</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>Cargo.toml</code> の <code>[lib]</code> と <code>[[bin]]</code> で、ライブラリ名 <code>app</code> と実行ファイル名 <code>server</code> を決める</li>
+          <li><code>main.rs</code> 1 つにまとまったコードを、<code>lib.rs</code> と役割ごとのモジュールに分割する</li>
+          <li>エラーの JSON を <code>{"error":{"code","message","fields"}}</code> の形にそろえる</li>
+          <li>ポート・DB の URL・API キーを、環境変数と <code>.env</code> ファイルから読み込む</li>
+          <li>必須の設定が無いときや値が不正なときに、起動の時点でエラー終了させる</li>
+          <li><code>.env</code> をコミットせず、見本の <code>.env.example</code> だけをコミットする</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        07 からは、06 までに作った users の API を、実務で使う API サーバー「Handson Blog API」に少しずつ育てていきます。
+        最初のこの項目では機能を増やしません。コードの置き場所と設定の読み方を整え、この先の項目でコードを足しやすい土台を作ります。
+      </p>
+      <p>
+        06 の完成コードは、234 行が <code>src/main.rs</code> 1 つに入っています。
+        また、待ち受けるポート <code>3000</code> と API キー <code>secret</code> がコードに直接書かれています。
+        このレッスンでは、コードを役割ごとのファイルに分け、設定を環境変数から読むように変えます。
+        あわせて、02 で作った練習用のルートを片付け、エラーの JSON をより細かい形にそろえます。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>項目</th><th>06</th><th>07</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>コードの置き場所</td><td><code>src/main.rs</code> だけ</td><td><code>src/lib.rs</code> と <code>config</code>・<code>state</code>・<code>error</code>・<code>middleware</code>・<code>routes</code> の各モジュール</td></tr>
+          <tr><td>待ち受けるアドレス</td><td><code>127.0.0.1:3000</code>（直書き）</td><td><code>APP_HOST</code>・<code>APP_PORT</code>（既定は <code>127.0.0.1:8080</code>）</td></tr>
+          <tr><td>DB の URL</td><td><code>sqlite://app.db?mode=rwc</code>（直書き）</td><td><code>DATABASE_URL</code>（既定は同じ値）</td></tr>
+          <tr><td>API キー</td><td><code>secret</code>（直書き）</td><td><code>API_KEY</code>（必須。既定値なし）</td></tr>
+          <tr><td>エラーの本文</td><td><code>{"error":"user not found"}</code></td><td><code>{"error":{"code":"not_found","message":"user not found"}}</code></td></tr>
+          <tr><td>401 の本文</td><td><code>text/plain</code> のメッセージ</td><td>ほかのエラーと同じ形の JSON</td></tr>
+          <tr><td>練習用のルート（<code>GET /</code>・<code>/users/{user_id}/posts/{post_id}</code>・<code>/search</code>）</td><td>あり</td><td>削除</td></tr>
+        </tbody>
+      </table>
+
+      <p>既定のポートを 3000 から 8080 に変えるのは、Next.js の開発サーバー（3000）と同時に起動しても衝突しないようにするためです。</p>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>Rust（rustc）1.99.0 / cargo 1.99.0（Rust edition 2024）で動作を確認しています。01〜06 は Rust 1.98.1 で書いているので、このレッスンを始める前に <code>rustup update stable</code> で更新してください（ステップ 1 で実行します）。</p>
+          <p>クレートは axum 0.8.9 / tokio 1.53.1 / serde 1.0.229 / serde_json 1.0.151 / sqlx 0.9.0 で、06 と同じです。新しく dotenvy 0.15.7 を追加します。バージョンは執筆時点（2026年10月）のものです。dotenvy の最終リリースは 2023年3月です。機能が安定しているので、このまま使います。</p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">06 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>まず、Rust を 1.99.0 に更新します。出力の途中は省略しています。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rustup update stable</span><span class="terminal__line">…</span><span class="terminal__line">  stable-aarch64-apple-darwin updated - rustc 1.99.0 (b940084d7 2026-09-28) (from rustc 1.98.1 (48a229cea 2026-09-01))</span><span class="terminal__line"><span class="terminal__prompt">$</span> rustc --version</span><span class="terminal__line">rustc 1.99.0 (b940084d7 2026-09-28)</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo --version</span><span class="terminal__line">cargo 1.99.0 (5f94df478 2026-08-27)</span></pre>
+          </div>
+          <p><code>stable-aarch64-apple-darwin</code> の部分は、使っている OS と CPU によって変わります。</p>
+          <p>次に、06 の完成コードを出発点としてコピーします。<code>06-error-handling</code> ディレクトリがある場所で、次のコマンドを実行してください。ビルド結果の <code>target/</code> と DB ファイルの <code>app.db*</code> はコピーしません。コマンドは何も表示せずに終わります。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir 07-project-structure</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R 06-error-handling/Cargo.toml 06-error-handling/Cargo.lock 06-error-handling/.gitignore 06-error-handling/migrations 06-error-handling/src 07-project-structure/</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 07-project-structure</span></pre>
+          </div>
+          <p><code>Cargo.toml</code> の <code>name</code> を <code>project-structure</code> に変え、<code>[lib]</code> と <code>[[bin]]</code> の 2 つのセクションを追加します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "error-handling"</span><span class="diff-line diff-line--add">+ name = "project-structure"</span><span class="diff-line">  version = "0.1.0"</span><span class="diff-line">  edition = "2024"</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ [lib]</span><span class="diff-line diff-line--add">+ name = "app"</span><span class="diff-line diff-line--add">+ path = "src/lib.rs"</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ [[bin]]</span><span class="diff-line diff-line--add">+ name = "server"</span><span class="diff-line diff-line--add">+ path = "src/main.rs"</span><span class="diff-line"> </span><span class="diff-line">  [dependencies]</span></pre>
+          </div>
+          <ul>
+            <li><code>[lib]</code>: このパッケージにライブラリを 1 つ作り、名前を <code>app</code>、入口のファイルを <code>src/lib.rs</code> にします。ほかのコードからは <code>use app::...</code> で参照します。</li>
+            <li><code>[[bin]]</code>: 実行ファイルを 1 つ作り、名前を <code>server</code>、入口のファイルを <code>src/main.rs</code> にします。ビルドすると <code>target/debug/server</code> ができます。</li>
+            <li>パッケージ名（<code>project-structure</code>）は項目ごとに変わります。一方、ライブラリ名と実行ファイル名をここで固定しておけば、08 以降の項目でも <code>use app::...</code> と <code>server</code> のまま使えます。</li>
+          </ul>
+          <p><code>[lib]</code> を宣言したので、<code>src/lib.rs</code> が必要になります。中身はステップ 2 で書くので、ここでは空のファイルを作っておきます。続けて、<code>.env</code> ファイルを読み込むクレート dotenvy を追加します。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> touch src/lib.rs</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add dotenvy@0.15.7</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding dotenvy v0.15.7 to dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             - clap</span><span class="terminal__line">             - cli</span></pre>
+          </div>
+          <p><code>cargo add</code> が <code>[dependencies]</code> に <code>dotenvy = "0.15.7"</code> を追加します。ここまでで <code>Cargo.toml</code> は次のようになります。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">TOML</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-toml">[package]
+name = "project-structure"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8.9"
+dotenvy = "0.15.7"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread"] }</code></pre>
+          </div>
+          <p>ビルドして、できたファイルを確かめます。初回は依存クレートのコンパイルから始まります（出力の先頭は省略しています）。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   …</span><span class="terminal__line">   Compiling project-structure v0.1.0 (/path/to/07-project-structure)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.28s</span><span class="terminal__line"><span class="terminal__prompt">$</span> ls target/debug</span><span class="terminal__line">build  deps  examples  incremental  libapp.d  libapp.rlib  server  server.d</span></pre>
+          </div>
+          <p><code>Finished</code> の行に出るビルド時間は、環境によって変わります。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>target/debug</code> に、実行ファイル <code>server</code> とライブラリ <code>libapp.rlib</code> ができていれば OK です。<code>src/main.rs</code> はまだ 06 のままです。以降のコマンドは全て <code>07-project-structure</code> ディレクトリで実行します。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">main.rs をモジュールに分割する</h3>
+        </div>
+        <div class="step__body">
+          <p>06 の <code>src/main.rs</code> にあるコードを、役割ごとのファイルに移します。このステップでは挙動を変えません。ポート 3000 と API キー <code>secret</code> は直書きのまま、エラーの JSON も 06 の形のままにします。移動先は次のとおりです。</p>
+          <table>
+            <thead>
+              <tr><th>06 の <code>src/main.rs</code> にあったもの</th><th>移動先</th></tr>
+            </thead>
+            <tbody>
+          <tr><td><code>AppError</code> と、その <code>IntoResponse</code>・<code>From</code> の実装</td><td><code>src/error.rs</code></td></tr>
+          <tr><td><code>AppState</code></td><td><code>src/state.rs</code></td></tr>
+          <tr><td>ミドルウェア <code>log_request</code>・<code>require_api_key</code></td><td><code>src/middleware.rs</code></td></tr>
+          <tr><td><code>health</code></td><td><code>src/routes/health.rs</code></td></tr>
+          <tr><td><code>User</code>・<code>CreateUser</code> と users の 5 つのハンドラ</td><td><code>src/routes/users.rs</code></td></tr>
+          <tr><td>練習用の <code>root</code>・<code>get_user_post</code>・<code>search</code> と、fallback の <code>not_found</code></td><td><code>src/routes/misc.rs</code>（ステップ 3 で削除）</td></tr>
+          <tr><td><code>AppConfig</code> と <code>Router</code> の組み立て</td><td><code>src/routes/mod.rs</code> の <code>router</code> 関数</td></tr>
+          <tr><td>上をまとめてアプリを作る関数</td><td><code>src/lib.rs</code> の <code>build_app</code> 関数</td></tr>
+          <tr><td>DB 接続・マイグレーション・待ち受けの開始</td><td><code>src/main.rs</code></td></tr>
+            </tbody>
+          </table>
+          <p><code>src/routes</code> ディレクトリを作ります。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir src/routes</span></pre>
+          </div>
+          <p><code>src/lib.rs</code> がライブラリ <code>app</code> の入口です。<code>mod error;</code> のようにモジュールを宣言すると同じ名前のファイル（<code>src/error.rs</code> など）が読み込まれ、<code>pub</code> を付けるとクレートの外（<code>main.rs</code>）からも使えます。<code>routes</code> のようにディレクトリにしたモジュールは、<code>src/routes/mod.rs</code> が入口になります。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/lib.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">pub mod error;
+pub mod middleware;
+pub mod routes;
+pub mod state;
+
+use axum::Router;
+
+use crate::state::AppState;
+
+pub fn build_app(state: AppState) -&gt; Router {
+    routes::router(state)
+}</code></pre>
+          </div>
+          <p><code>src/main.rs</code> の中身は全て置き換えます。ライブラリ <code>app</code> の <code>build_app</code> を呼んでサーバーを起動するだけになります。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use app::{build_app, state::AppState};
+use sqlx::SqlitePool;
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let pool = SqlitePool::connect("sqlite://app.db?mode=rwc").await?;
+
+    sqlx::migrate!().run(&amp;pool).await?;
+
+    let app = build_app(AppState { pool });
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
+    println!("listening on {}", listener.local_addr()?);
+    axum::serve(listener, app).await?;
+    Ok(())
+}</code></pre>
+          </div>
+          <ul>
+            <li><code>main.rs</code> は実行ファイル <code>server</code> の入口で、<code>lib.rs</code> とは別のクレートとしてコンパイルされます。そのため、<code>use app::...</code> でライブラリを参照します。</li>
+            <li><code>main.rs</code> には <code>mod error;</code> などを書きません。書くと、同じモジュールがライブラリと実行ファイルの両方に入ってしまいます。</li>
+            <li><code>main</code> の戻り値を <code>Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt;</code> にし、06 の <code>.unwrap()</code> を <code>?</code> に置き換えました。失敗したときの表示はステップ 7 で確かめます。</li>
+          </ul>
+          <p>残りのファイルを作ります。中身は 06 のコードとほぼ同じです。ほかのモジュールから使う型と関数には <code>pub</code> を付け、ほかのモジュールの型は <code>use crate::...</code> で読み込みます。<code>crate</code> は、いま書いているクレート（ここではライブラリ <code>app</code>）の最上位を指します。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/state.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use sqlx::SqlitePool;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: SqlitePool,
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/error.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Json,
+    extract::rejection::JsonRejection,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use serde_json::json;
+
+pub enum AppError {
+    NotFound,
+    Validation(String),
+    Database(sqlx::Error),
+    JsonRejection(JsonRejection),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -&gt; Response {
+        let (status, message) = match self {
+            AppError::NotFound =&gt; (StatusCode::NOT_FOUND, "user not found".to_string()),
+            AppError::Validation(message) =&gt; (StatusCode::UNPROCESSABLE_ENTITY, message),
+            AppError::Database(error) =&gt; {
+                eprintln!("database error: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".to_string(),
+                )
+            }
+            AppError::JsonRejection(rejection) =&gt; (rejection.status(), rejection.body_text()),
+        };
+        (status, Json(json!({ "error": message }))).into_response()
+    }
+}
+
+impl From&lt;sqlx::Error&gt; for AppError {
+    fn from(error: sqlx::Error) -&gt; Self {
+        AppError::Database(error)
+    }
+}
+
+impl From&lt;JsonRejection&gt; for AppError {
+    fn from(rejection: JsonRejection) -&gt; Self {
+        AppError::JsonRejection(rejection)
+    }
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/middleware.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    extract::Request,
+    http::StatusCode,
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use std::time::Instant;
+
+pub async fn log_request(req: Request, next: Next) -&gt; Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = Instant::now();
+
+    let response = next.run(req).await;
+
+    let elapsed = start.elapsed();
+    println!("{method} {uri} -&gt; {} ({elapsed:?})", response.status());
+    response
+}
+
+pub async fn require_api_key(req: Request, next: Next) -&gt; Response {
+    let is_valid = req
+        .headers()
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        == Some("secret");
+
+    if !is_valid {
+        return (StatusCode::UNAUTHORIZED, "invalid or missing x-api-key").into_response();
+    }
+
+    next.run(req).await
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/routes/mod.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">mod health;
+mod misc;
+pub mod users;
+
+use axum::{
+    Extension, Router,
+    middleware::{self},
+    routing::{get, post, put},
+};
+
+use crate::middleware::{log_request, require_api_key};
+use crate::state::AppState;
+
+#[derive(Clone)]
+pub struct AppConfig {
+    pub app_name: String,
+}
+
+pub fn router(state: AppState) -&gt; Router {
+    let protected_users = Router::new()
+        .route("/users", post(users::create_user))
+        .route(
+            "/users/{id}",
+            put(users::update_user).delete(users::delete_user),
+        )
+        .route_layer(middleware::from_fn(require_api_key));
+
+    Router::new()
+        .route("/", get(misc::root))
+        .route("/health", get(health::health))
+        .route("/users", get(users::list_users))
+        .route("/users/{id}", get(users::get_user))
+        .merge(protected_users)
+        .route("/users/{user_id}/posts/{post_id}", get(misc::get_user_post))
+        .route("/search", get(misc::search))
+        .fallback(misc::not_found)
+        .layer(Extension(AppConfig {
+            app_name: "Handson Axum".to_string(),
+        }))
+        .layer(middleware::from_fn(log_request))
+        .with_state(state)
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/routes/health.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::Json;
+use serde_json::json;
+
+pub async fn health() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(json!({ "status": "ok" }))
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/routes/users.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Json,
+    extract::{Path, State, rejection::JsonRejection},
+    http::StatusCode,
+};
+use serde::{Deserialize, Serialize};
+
+use crate::error::AppError;
+use crate::state::AppState;
+
+#[derive(Clone, Serialize, sqlx::FromRow)]
+pub struct User {
+    id: i64,
+    name: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateUser {
+    name: String,
+}
+
+impl CreateUser {
+    fn validate(&amp;self) -&gt; Result&lt;(), AppError&gt; {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err(AppError::Validation("name must not be empty".to_string()));
+        }
+        if name.chars().count() &gt; 50 {
+            return Err(AppError::Validation(
+                "name must be 50 characters or less".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub async fn list_users(State(state): State&lt;AppState&gt;) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, AppError&gt; {
+    let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users ORDER BY id")
+        .fetch_all(&amp;state.pool)
+        .await?;
+    Ok(Json(users))
+}
+
+pub async fn create_user(
+    State(state): State&lt;AppState&gt;,
+    payload: Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;,
+) -&gt; Result&lt;(StatusCode, Json&lt;User&gt;), AppError&gt; {
+    let Json(payload) = payload?;
+    payload.validate()?;
+    let user = sqlx::query_as::&lt;_, User&gt;("INSERT INTO users (name) VALUES (?) RETURNING id, name")
+        .bind(&amp;payload.name)
+        .fetch_one(&amp;state.pool)
+        .await?;
+    Ok((StatusCode::CREATED, Json(user)))
+}
+
+pub async fn get_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    let user = sqlx::query_as::&lt;_, User&gt;("SELECT id, name FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&amp;state.pool)
+        .await?;
+    user.map(Json).ok_or(AppError::NotFound)
+}
+
+pub async fn update_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+    payload: Result&lt;Json&lt;CreateUser&gt;, JsonRejection&gt;,
+) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    let Json(payload) = payload?;
+    payload.validate()?;
+    let user =
+        sqlx::query_as::&lt;_, User&gt;("UPDATE users SET name = ? WHERE id = ? RETURNING id, name")
+            .bind(&amp;payload.name)
+            .bind(id)
+            .fetch_optional(&amp;state.pool)
+            .await?;
+    user.map(Json).ok_or(AppError::NotFound)
+}
+
+pub async fn delete_user(
+    State(state): State&lt;AppState&gt;,
+    Path(id): Path&lt;i64&gt;,
+) -&gt; Result&lt;StatusCode, AppError&gt; {
+    let result = sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(id)
+        .execute(&amp;state.pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        Err(AppError::NotFound)
+    } else {
+        Ok(StatusCode::NO_CONTENT)
+    }
+}</code></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/routes/misc.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Extension, Json,
+    extract::{Path, Query},
+    http::StatusCode,
+    response::IntoResponse,
+};
+use serde_json::json;
+use std::collections::HashMap;
+
+use super::AppConfig;
+
+pub async fn root(Extension(config): Extension&lt;AppConfig&gt;) -&gt; String {
+    format!("Hello from {}", config.app_name)
+}
+
+pub async fn get_user_post(Path((user_id, post_id)): Path&lt;(u32, u32)&gt;) -&gt; String {
+    format!("user {user_id} post {post_id}")
+}
+
+pub async fn search(Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; String {
+    format!("search params: {params:?}")
+}
+
+pub async fn not_found() -&gt; impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "route not found" })),
+    )
+}</code></pre>
+          </div>
+          <ul>
+            <li><code>routes/mod.rs</code> の <code>router</code> は、06 の <code>main</code> にあったルーターの組み立てをそのまま移したものです。ハンドラは <code>users::create_user</code> のように、モジュール名を付けて参照します。</li>
+            <li><code>User</code> と <code>CreateUser</code> の型には <code>pub</code> を付けますが、フィールドは <code>pub</code> にしていません。フィールドを読み書きするのは <code>users.rs</code> の中だけなので、これで動きます。</li>
+            <li><code>misc.rs</code> の <code>root</code> は、親モジュールの <code>AppConfig</code> を <code>use super::AppConfig</code> で参照します。<code>super</code> は 1 つ上のモジュール（ここでは <code>routes</code>）を指します。</li>
+          </ul>
+          <p><code>cargo fmt</code> で整形してから <code>cargo build</code> を実行し、エラーや警告を出さずに <code>Finished</code> の行が表示されることを確かめます。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling project-structure v0.1.0 (/path/to/07-project-structure)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.91s</span></pre>
+          </div>
+          <p>続けて、ビルドした <code>server</code> を起動します。06 までは <code>cargo run</code> で起動していましたが、この項目ではビルドした実行ファイル <code>./target/debug/server</code> を直接起動します。<code>[[bin]]</code> で付けた名前のファイルができることを確かめるためです（<code>cargo run</code> でも同じように起動できます）。コードを変えたら、必ず <code>cargo build</code> してから起動してください。ビルドし忘れると、変更前の実行ファイルが動きます。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+          <p>別のターミナルを開き、06 と同じ応答が返ることを確かめます。以降の <code>curl</code> の出力では、<code>date</code> ヘッダーを省略しています。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:3000/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 15</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST localhost:3000/users -H 'x-api-key: secret' -H 'content-type: application/json' -d '{"name":"alice"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:3000/users/999</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 26</span><span class="terminal__line"></span><span class="terminal__line">{"error":"user not found"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST localhost:3000/users -H 'content-type: application/json' -d '{"name":"b"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 28</span><span class="terminal__line"></span><span class="terminal__line">invalid or missing x-api-key</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:3000/</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: text/plain; charset=utf-8</span><span class="terminal__line">content-length: 23</span><span class="terminal__line"></span><span class="terminal__line">Hello from Handson Axum</span></pre>
+          </div>
+          <p>ファイルを分けただけなので、ステータスと本文は 06 と同じです。API キーが無いときの 401 だけは、まだ <code>text/plain</code> の本文です。これはステップ 4 で JSON にそろえます。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo build</code> が警告なしで終わり、上の 5 つの <code>curl</code> が 06 と同じ応答を返せば OK です。確認できたら、サーバーを <kbd>Ctrl</kbd> + <kbd>C</kbd> で止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">練習用のルートを片付ける</h3>
+        </div>
+        <div class="step__body">
+          <p>02 で作った練習用のルート <code>GET /</code>・<code>/users/{user_id}/posts/{post_id}</code>・<code>/search</code> を削除します。特に <code>/users/{user_id}/posts/{post_id}</code> は、後の項目で作る記事（posts）の API と紛らわしいので、ここで消しておきます。練習用のハンドラを入れていた <code>src/routes/misc.rs</code> はファイルごと削除します。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm src/routes/misc.rs</span></pre>
+          </div>
+          <p><code>src/routes/mod.rs</code> から、<code>mod misc;</code>・練習用のルート・<code>AppConfig</code> とその <code>Extension</code> を削除します。<code>misc.rs</code> から残すのは fallback の <code>not_found</code> だけで、<code>mod.rs</code> の末尾に移します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/routes/mod.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  mod health;</span><span class="diff-line diff-line--remove">- mod misc;</span><span class="diff-line">  pub mod users;</span><span class="diff-line"> </span><span class="diff-line">  use axum::{</span><span class="diff-line diff-line--remove">-     Extension, Router,</span><span class="diff-line diff-line--remove">-     middleware::{self},</span><span class="diff-line diff-line--add">+     Json, Router,</span><span class="diff-line diff-line--add">+     http::StatusCode,</span><span class="diff-line diff-line--add">+     middleware,</span><span class="diff-line diff-line--add">+     response::IntoResponse,</span><span class="diff-line">      routing::{get, post, put},</span><span class="diff-line">  };</span><span class="diff-line diff-line--add">+ use serde_json::json;</span><span class="diff-line"> </span><span class="diff-line">  use crate::middleware::{log_request, require_api_key};</span><span class="diff-line">  use crate::state::AppState;</span><span class="diff-line diff-line--remove">-</span><span class="diff-line diff-line--remove">- #[derive(Clone)]</span><span class="diff-line diff-line--remove">- pub struct AppConfig {</span><span class="diff-line diff-line--remove">-     pub app_name: String,</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line"> </span><span class="diff-line">  pub fn router(state: AppState) -&gt; Router {</span><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">      Router::new()</span><span class="diff-line diff-line--remove">-         .route("/", get(misc::root))</span><span class="diff-line">          .route("/health", get(health::health))</span><span class="diff-line">          .route("/users", get(users::list_users))</span><span class="diff-line">          .route("/users/{id}", get(users::get_user))</span><span class="diff-line">          .merge(protected_users)</span><span class="diff-line diff-line--remove">-         .route("/users/{user_id}/posts/{post_id}", get(misc::get_user_post))</span><span class="diff-line diff-line--remove">-         .route("/search", get(misc::search))</span><span class="diff-line diff-line--remove">-         .fallback(misc::not_found)</span><span class="diff-line diff-line--remove">-         .layer(Extension(AppConfig {</span><span class="diff-line diff-line--remove">-             app_name: "Handson Axum".to_string(),</span><span class="diff-line diff-line--remove">-         }))</span><span class="diff-line diff-line--add">+         .fallback(not_found)</span><span class="diff-line">          .layer(middleware::from_fn(log_request))</span><span class="diff-line">          .with_state(state)</span><span class="diff-line">  }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ async fn not_found() -&gt; impl IntoResponse {</span><span class="diff-line diff-line--add">+     (</span><span class="diff-line diff-line--add">+         StatusCode::NOT_FOUND,</span><span class="diff-line diff-line--add">+         Json(json!({ "error": "route not found" })),</span><span class="diff-line diff-line--add">+     )</span><span class="diff-line diff-line--add">+ }</span></pre>
+          </div>
+          <p><code>mod misc;</code> を消し忘れると、存在しないファイルを読み込もうとしてビルドが失敗します。整形してビルドします。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling project-structure v0.1.0 (/path/to/07-project-structure)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.01s</span></pre>
+          </div>
+          <p><code>./target/debug/server</code> で起動し直し、2 つ目のターミナルで削除したルートを呼びます。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:3000/nothing</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 27</span><span class="terminal__line"></span><span class="terminal__line">{"error":"route not found"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:3000/users/1/posts/2</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 27</span><span class="terminal__line"></span><span class="terminal__line">{"error":"route not found"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:3000/</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 27</span><span class="terminal__line"></span><span class="terminal__line">{"error":"route not found"}</span></pre>
+          </div>
+          <p>削除したルートは、どのルートにもマッチしないパス（<code>/nothing</code>）と同じく fallback の 404 になります。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>/users/1/posts/2</code> と <code>/</code> の応答が、どちらも 404 の <code>{"error":"route not found"}</code> になれば OK です。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">エラーの JSON の形をそろえる</h3>
+        </div>
+        <div class="step__body">
+          <p>06 のエラーの本文は <code>{"error":"user not found"}</code> のように、メッセージの文字列だけでした。これを次の形にそろえます。この形は、後の項目で API を呼び出す Next.js 側と合わせたものです。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">JSON</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-json">{"error":{"code":"validation_failed","message":"invalid request","fields":{"name":["name must not be empty"]}}}</code></pre>
+          </div>
+          <ul>
+            <li><code>code</code>: エラーの種類を表す固定の文字列です。クライアントはメッセージではなく、この値で分岐します。</li>
+            <li><code>message</code>: 人が読むための説明です。</li>
+            <li><code>fields</code>: 入力の検証エラー（422）のときだけ付けます。「フィールド名 → 文言の配列」の形です。</li>
+          </ul>
+          <p>このレッスンで使う <code>code</code> とステータスの対応は次のとおりです。</p>
+          <table>
+            <thead>
+              <tr><th><code>code</code></th><th>ステータス</th><th>返す場面</th></tr>
+            </thead>
+            <tbody>
+          <tr><td><code>bad_request</code></td><td>400</td><td>JSON の構文エラー</td></tr>
+          <tr><td><code>unauthorized</code></td><td>401</td><td>API キーが無い・違う</td></tr>
+          <tr><td><code>not_found</code></td><td>404</td><td>ユーザーがいない、どのルートにもマッチしない</td></tr>
+          <tr><td><code>payload_too_large</code></td><td>413</td><td>本文が大きすぎる（<code>Json</code> extractor の拒否）</td></tr>
+          <tr><td><code>unsupported_media_type</code></td><td>415</td><td><code>content-type</code> が JSON でない</td></tr>
+          <tr><td><code>validation_failed</code></td><td>422</td><td>入力の検証エラー、JSON の型の不一致</td></tr>
+          <tr><td><code>internal</code></td><td>500</td><td>DB の操作に失敗した</td></tr>
+            </tbody>
+          </table>
+          <p><code>src/error.rs</code> を次の内容に置き換えます。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/error.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use axum::{
+    Json,
+    extract::rejection::JsonRejection,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use serde::Serialize;
+use std::collections::BTreeMap;
+
+#[derive(Serialize)]
+pub struct ErrorBody {
+    pub error: ErrorDetail,
+}
+
+#[derive(Serialize)]
+pub struct ErrorDetail {
+    pub code: &amp;'static str,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option&lt;BTreeMap&lt;String, Vec&lt;String&gt;&gt;&gt;,
+}
+
+pub fn error_response(
+    status: StatusCode,
+    code: &amp;'static str,
+    message: impl Into&lt;String&gt;,
+) -&gt; Response {
+    let body = ErrorBody {
+        error: ErrorDetail {
+            code,
+            message: message.into(),
+            fields: None,
+        },
+    };
+    (status, Json(body)).into_response()
+}
+
+pub enum AppError {
+    NotFound,
+    Validation(BTreeMap&lt;String, Vec&lt;String&gt;&gt;),
+    Database(sqlx::Error),
+    JsonRejection(JsonRejection),
+}
+
+impl AppError {
+    pub fn field(name: &amp;str, message: &amp;str) -&gt; Self {
+        AppError::Validation(BTreeMap::from([(
+            name.to_string(),
+            vec![message.to_string()],
+        )]))
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -&gt; Response {
+        match self {
+            AppError::NotFound =&gt; {
+                error_response(StatusCode::NOT_FOUND, "not_found", "user not found")
+            }
+            AppError::Validation(fields) =&gt; {
+                let body = ErrorBody {
+                    error: ErrorDetail {
+                        code: "validation_failed",
+                        message: "invalid request".to_string(),
+                        fields: Some(fields),
+                    },
+                };
+                (StatusCode::UNPROCESSABLE_ENTITY, Json(body)).into_response()
+            }
+            AppError::Database(error) =&gt; {
+                eprintln!("database error: {error}");
+                error_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal",
+                    "internal server error",
+                )
+            }
+            AppError::JsonRejection(rejection) =&gt; {
+                let status = rejection.status();
+                let code = match status {
+                    StatusCode::UNPROCESSABLE_ENTITY =&gt; "validation_failed",
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE =&gt; "unsupported_media_type",
+                    StatusCode::PAYLOAD_TOO_LARGE =&gt; "payload_too_large",
+                    _ =&gt; "bad_request",
+                };
+                error_response(status, code, rejection.body_text())
+            }
+        }
+    }
+}
+
+impl From&lt;sqlx::Error&gt; for AppError {
+    fn from(error: sqlx::Error) -&gt; Self {
+        AppError::Database(error)
+    }
+}
+
+impl From&lt;JsonRejection&gt; for AppError {
+    fn from(rejection: JsonRejection) -&gt; Self {
+        AppError::JsonRejection(rejection)
+    }
+}</code></pre>
+          </div>
+          <ul>
+            <li><code>ErrorBody</code>・<code>ErrorDetail</code>: 本文の形を <code>#[derive(Serialize)]</code> の構造体で定義します。<code>json!</code> で組み立てる場所があちこちにあると、形を変えるときに直し漏れが出ます。構造体にしておけば、形は 1 か所で決まります。</li>
+            <li><code>#[serde(skip_serializing_if = "Option::is_none")]</code>: <code>fields</code> が <code>None</code> のときは、キーごと出力しません。</li>
+            <li><code>error_response</code>: ステータス・<code>code</code>・<code>message</code> から応答を作る共通の関数です。<code>AppError</code> を通らない 401 と fallback の 404 でも、この関数を使います。</li>
+            <li><code>Validation</code> は文字列ではなく <code>BTreeMap&lt;String, Vec&lt;String&gt;&gt;</code>（フィールド名 → 文言の配列）を持ちます。<code>HashMap</code> ではなく <code>BTreeMap</code> にしたのは、出力するキーの順序を安定させるためです。</li>
+            <li><code>AppError::field</code>: 1 つのフィールドに 1 つの文言を持つ <code>Validation</code> を作る補助関数です。</li>
+            <li><code>JsonRejection</code> は、拒否のステータスから <code>code</code> を決めます。<code>message</code> は axum が返す文言（<code>body_text()</code>）のままです。</li>
+          </ul>
+          <p><code>src/routes/users.rs</code> の <code>validate</code> を、<code>AppError::field</code> を使う形に変えます。変更はこの 2 か所だけです。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/routes/users.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">          let name = self.name.trim();</span><span class="diff-line">          if name.is_empty() {</span><span class="diff-line diff-line--remove">-             return Err(AppError::Validation("name must not be empty".to_string()));</span><span class="diff-line diff-line--add">+             return Err(AppError::field("name", "name must not be empty"));</span><span class="diff-line">          }</span><span class="diff-line">          if name.chars().count() &gt; 50 {</span><span class="diff-line diff-line--remove">-             return Err(AppError::Validation(</span><span class="diff-line diff-line--remove">-                 "name must be 50 characters or less".to_string(),</span><span class="diff-line diff-line--add">+             return Err(AppError::field(</span><span class="diff-line diff-line--add">+                 "name",</span><span class="diff-line diff-line--add">+                 "name must be 50 characters or less",</span><span class="diff-line">              ));</span><span class="diff-line">          }</span></pre>
+          </div>
+          <p><code>src/middleware.rs</code> の 401 を、<code>error_response</code> で返すように変えます。<code>IntoResponse</code> を使わなくなるので、<code>use</code> も整理します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/middleware.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- use axum::{</span><span class="diff-line diff-line--remove">-     extract::Request,</span><span class="diff-line diff-line--remove">-     http::StatusCode,</span><span class="diff-line diff-line--remove">-     middleware::Next,</span><span class="diff-line diff-line--remove">-     response::{IntoResponse, Response},</span><span class="diff-line diff-line--remove">- };</span><span class="diff-line diff-line--add">+ use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};</span><span class="diff-line">  use std::time::Instant;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ use crate::error::error_response;</span><span class="diff-line"> </span><span class="diff-line">  pub async fn log_request(req: Request, next: Next) -&gt; Response {</span><span class="diff-line">  ...</span><span class="diff-line"> </span><span class="diff-line">      if !is_valid {</span><span class="diff-line diff-line--remove">-         return (StatusCode::UNAUTHORIZED, "invalid or missing x-api-key").into_response();</span><span class="diff-line diff-line--add">+         return error_response(</span><span class="diff-line diff-line--add">+             StatusCode::UNAUTHORIZED,</span><span class="diff-line diff-line--add">+             "unauthorized",</span><span class="diff-line diff-line--add">+             "invalid or missing x-api-key",</span><span class="diff-line diff-line--add">+         );</span><span class="diff-line">      }</span><span class="diff-line"> </span></pre>
+          </div>
+          <p><code>src/routes/mod.rs</code> の <code>not_found</code> も <code>error_response</code> で返します。<code>Json</code>・<code>IntoResponse</code>・<code>json!</code> は使わなくなるので、<code>use</code> から外します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/routes/mod.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line"> </span><span class="diff-line">  use axum::{</span><span class="diff-line diff-line--remove">-     Json, Router,</span><span class="diff-line diff-line--add">+     Router,</span><span class="diff-line">      http::StatusCode,</span><span class="diff-line">      middleware,</span><span class="diff-line diff-line--remove">-     response::IntoResponse,</span><span class="diff-line diff-line--add">+     response::Response,</span><span class="diff-line">      routing::{get, post, put},</span><span class="diff-line">  };</span><span class="diff-line diff-line--remove">- use serde_json::json;</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ use crate::error::error_response;</span><span class="diff-line">  use crate::middleware::{log_request, require_api_key};</span><span class="diff-line">  use crate::state::AppState;</span><span class="diff-line">  ...</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- async fn not_found() -&gt; impl IntoResponse {</span><span class="diff-line diff-line--remove">-     (</span><span class="diff-line diff-line--remove">-         StatusCode::NOT_FOUND,</span><span class="diff-line diff-line--remove">-         Json(json!({ "error": "route not found" })),</span><span class="diff-line diff-line--remove">-     )</span><span class="diff-line diff-line--add">+ async fn not_found() -&gt; Response {</span><span class="diff-line diff-line--add">+     error_response(StatusCode::NOT_FOUND, "not_found", "route not found")</span><span class="diff-line">  }</span></pre>
+          </div>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling project-structure v0.1.0 (/path/to/07-project-structure)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.94s</span></pre>
+          </div>
+          <p>ステップ 2 で作ったユーザーが残らないよう、DB ファイルを消してから起動します。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -f app.db*</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">listening on 127.0.0.1:3000</span></pre>
+          </div>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:3000/users/999</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 57</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"user not found"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST localhost:3000/users -H 'x-api-key: secret' -H 'content-type: application/json' -d '{"name":""}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 111</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"validation_failed","message":"invalid request","fields":{"name":["name must not be empty"]}}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST localhost:3000/users -H 'x-api-key: secret' -H 'content-type: application/json' -d '{"name":'</span><span class="terminal__line">HTTP/1.1 400 Bad Request</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 137</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"bad_request","message":"Failed to parse the request body as JSON: name: EOF while parsing a value at line 1 column 8"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST localhost:3000/users -H 'x-api-key: secret' -H 'content-type: application/json' -d '{"name":1}'</span><span class="terminal__line">HTTP/1.1 422 Unprocessable Entity</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 178</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"validation_failed","message":"Failed to deserialize the JSON body into the target type: name: invalid type: integer `1`, expected a string at line 1 column 9"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST localhost:3000/users -H 'x-api-key: secret' -d '{"name":"a"}'</span><span class="terminal__line">HTTP/1.1 415 Unsupported Media Type</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 110</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unsupported_media_type","message":"Expected request with `Content-Type: application/json`"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST localhost:3000/users -H 'content-type: application/json' -d '{"name":"b"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 74</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"invalid or missing x-api-key"}}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:3000/nothing</span><span class="terminal__line">HTTP/1.1 404 Not Found</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 58</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"not_found","message":"route not found"}}</span></pre>
+          </div>
+          <p>ステータスは 06 と同じで、本文の形だけが変わりました。401 も <code>content-type: application/json</code> になっています。</p>
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">JSON の型の不一致による 422 には <code>fields</code> が付かない</p>
+              <p><code>{"name":""}</code> の 422 は <code>validate</code> の検証エラーなので、<code>fields</code> が付きます。一方、<code>{"name":1}</code> の 422 は <code>Json</code> extractor の拒否で、どのフィールドが原因かを安定して取り出せません。そのため <code>fields</code> を付けず、axum の文言を <code>message</code> に入れています。</p>
+              <p><code>Failed to parse the request body as JSON: ...</code> などの文言は axum が作るもので、axum のバージョンによって変わることがあります。</p>
+            </div>
+          </div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>7 つのリクエストのエラーが、全て <code>{"error":{"code":...,"message":...}}</code> の形で返れば OK です。<code>fields</code> は空の名前の 422 にだけ付きます。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">設定を Config にまとめて環境変数から読む</h3>
+        </div>
+        <div class="step__body">
+          <p>ポート・DB の URL・API キーを、環境変数から読むようにします。設定は <code>Config</code> という構造体にまとめ、起動時に 1 回だけ読み込みます。読み込む環境変数は次の 4 つです。</p>
+          <table>
+            <thead>
+              <tr><th>環境変数</th><th>既定値</th><th>内容</th></tr>
+            </thead>
+            <tbody>
+          <tr><td><code>APP_HOST</code></td><td><code>127.0.0.1</code></td><td>待ち受けるアドレス</td></tr>
+          <tr><td><code>APP_PORT</code></td><td><code>8080</code></td><td>待ち受けるポート。数値でなければエラー</td></tr>
+          <tr><td><code>DATABASE_URL</code></td><td><code>sqlite://app.db?mode=rwc</code></td><td>DB の接続先</td></tr>
+          <tr><td><code>API_KEY</code></td><td>なし（必須）</td><td>書き込み系の API で照合するキー。未設定または空ならエラー</td></tr>
+            </tbody>
+          </table>
+          <p><code>src/config.rs</code> を新しく作ります。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/config.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use std::env;
+use std::fmt;
+
+pub struct Config {
+    pub host: String,
+    pub port: u16,
+    pub database_url: String,
+    pub api_key: String,
+}
+
+#[derive(Debug)]
+pub enum ConfigError {
+    Missing(&amp;'static str),
+    Invalid(&amp;'static str, String),
+}
+
+impl fmt::Display for ConfigError {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        match self {
+            ConfigError::Missing(name) =&gt; write!(f, "{name} must be set"),
+            ConfigError::Invalid(name, value) =&gt; write!(f, "{name} is invalid: {value:?}"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+impl Config {
+    pub fn from_env() -&gt; Result&lt;Config, ConfigError&gt; {
+        let host = env::var("APP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = match env::var("APP_PORT") {
+            Ok(value) =&gt; value
+                .parse()
+                .map_err(|_| ConfigError::Invalid("APP_PORT", value))?,
+            Err(_) =&gt; 8080,
+        };
+        let database_url =
+            env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://app.db?mode=rwc".to_string());
+        let api_key = env::var("API_KEY")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .ok_or(ConfigError::Missing("API_KEY"))?;
+
+        Ok(Config {
+            host,
+            port,
+            database_url,
+            api_key,
+        })
+    }
+}
+
+impl fmt::Debug for Config {
+    fn fmt(&amp;self, f: &amp;mut fmt::Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        f.debug_struct("Config")
+            .field("host", &amp;self.host)
+            .field("port", &amp;self.port)
+            .field("database_url", &amp;self.database_url)
+            .field("api_key", &amp;"***")
+            .finish()
+    }
+}</code></pre>
+          </div>
+          <ul>
+            <li><code>env::var</code> は環境変数を読み、無ければ <code>Err</code> を返します。<code>APP_HOST</code> と <code>DATABASE_URL</code> は、無ければ <code>unwrap_or_else</code> で既定値を使います。</li>
+            <li><code>APP_PORT</code> は <code>parse()</code> で <code>u16</code> に変換し、失敗したら <code>ConfigError::Invalid</code> を返します。</li>
+            <li><code>API_KEY</code> には既定値を持たせません。無いときと空文字のときは <code>ConfigError::Missing</code> を返し、サーバーを起動させません。</li>
+            <li><code>Config</code> の <code>Debug</code> は <code>derive</code> せず、手で実装します。<code>api_key</code> は値の代わりに <code>"***"</code> を出力するので、<code>{config:?}</code> でログに出しても秘密が漏れません。</li>
+          </ul>
+          <p><code>src/lib.rs</code> に <code>config</code> モジュールを追加します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/lib.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--add">+ pub mod config;</span><span class="diff-line">  pub mod error;</span><span class="diff-line">  pub mod middleware;</span></pre>
+          </div>
+          <p><code>AppState</code> に設定を持たせます。<code>AppState</code> は <code>Clone</code> で複製して使われるので、<code>Config</code> は <code>Arc</code> で包み、中身を複製せずに共有します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/state.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use sqlx::SqlitePool;</span><span class="diff-line diff-line--add">+ use std::sync::Arc;</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ use crate::config::Config;</span><span class="diff-line"> </span><span class="diff-line">  #[derive(Clone)]</span><span class="diff-line">  pub struct AppState {</span><span class="diff-line">      pub pool: SqlitePool,</span><span class="diff-line diff-line--add">+     pub config: Arc&lt;Config&gt;,</span><span class="diff-line">  }</span></pre>
+          </div>
+          <p><code>require_api_key</code> は、直書きの <code>"secret"</code> の代わりに <code>state.config.api_key</code> と比べます。状態を受け取るため、引数の先頭に <code>State(state): State&lt;AppState&gt;</code> を追加します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/middleware.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--remove">- use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response};</span><span class="diff-line diff-line--add">+ use axum::{</span><span class="diff-line diff-line--add">+     extract::{Request, State},</span><span class="diff-line diff-line--add">+     http::StatusCode,</span><span class="diff-line diff-line--add">+     middleware::Next,</span><span class="diff-line diff-line--add">+     response::Response,</span><span class="diff-line diff-line--add">+ };</span><span class="diff-line">  use std::time::Instant;</span><span class="diff-line"> </span><span class="diff-line">  use crate::error::error_response;</span><span class="diff-line diff-line--add">+ use crate::state::AppState;</span><span class="diff-line"> </span><span class="diff-line">  pub async fn log_request(req: Request, next: Next) -&gt; Response {</span><span class="diff-line">  ...</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- pub async fn require_api_key(req: Request, next: Next) -&gt; Response {</span><span class="diff-line diff-line--add">+ pub async fn require_api_key(State(state): State&lt;AppState&gt;, req: Request, next: Next) -&gt; Response {</span><span class="diff-line">      let is_valid = req</span><span class="diff-line">          .headers()</span><span class="diff-line">          .get("x-api-key")</span><span class="diff-line">          .and_then(|value| value.to_str().ok())</span><span class="diff-line diff-line--remove">-         == Some("secret");</span><span class="diff-line diff-line--add">+         == Some(state.config.api_key.as_str());</span><span class="diff-line"> </span><span class="diff-line">      if !is_valid {</span></pre>
+          </div>
+          <p>状態を受け取るミドルウェアは、<code>middleware::from_fn</code> ではなく <code>middleware::from_fn_with_state</code> で登録し、第 1 引数に状態を渡します。<code>from_fn</code> のままだとコンパイルエラーになります。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/routes/mod.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">              put(users::update_user).delete(users::delete_user),</span><span class="diff-line">          )</span><span class="diff-line diff-line--remove">-         .route_layer(middleware::from_fn(require_api_key));</span><span class="diff-line diff-line--add">+         .route_layer(middleware::from_fn_with_state(</span><span class="diff-line diff-line--add">+             state.clone(),</span><span class="diff-line diff-line--add">+             require_api_key,</span><span class="diff-line diff-line--add">+         ));</span><span class="diff-line"> </span><span class="diff-line">      Router::new()</span></pre>
+          </div>
+          <p><code>src/main.rs</code> を次の内容に置き換えます。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">src/main.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use app::{build_app, config::Config, state::AppState};
+use sqlx::SqlitePool;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    dotenvy::dotenv().ok();
+    let config = Config::from_env()?;
+    println!("config: {config:?}");
+
+    let pool = SqlitePool::connect(&amp;config.database_url).await?;
+    sqlx::migrate!().run(&amp;pool).await?;
+
+    let addr = format!("{}:{}", config.host, config.port);
+    let state = AppState {
+        pool,
+        config: Arc::new(config),
+    };
+    let app = build_app(state);
+
+    let listener = tokio::net::TcpListener::bind(&amp;addr).await?;
+    println!("listening on {}", listener.local_addr()?);
+    axum::serve(listener, app).await?;
+    Ok(())
+}</code></pre>
+          </div>
+          <ul>
+            <li><code>dotenvy::dotenv()</code> は、カレントディレクトリから親ディレクトリへ順にさかのぼり、最初に見つかった <code>.env</code> を読んで環境変数に設定します。戻り値の <code>Result</code> は <code>.ok()</code> で捨てます。<code>.env</code> を置かずに、環境変数だけで設定を渡す場合もあるためです。</li>
+            <li><code>Config::from_env()?</code> で設定を読み、失敗したらその場で <code>main</code> から <code>Err</code> を返して終了します。</li>
+            <li><code>println!("config: {config:?}")</code> は、どの設定で起動したかを確かめるための出力です。<code>api_key</code> は <code>"***"</code> になります。実際の運用では、ログに出す内容を改めて検討してください。</li>
+            <li>DB の URL と待ち受けるアドレスを、<code>config</code> の値から組み立てます。</li>
+          </ul>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling project-structure v0.1.0 (/path/to/07-project-structure)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.25s</span></pre>
+          </div>
+          <p><code>API_KEY</code> をまだどこにも設定していないので、このままでは起動できません。次のステップで <code>.env</code> を用意します。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>cargo build</code> がエラーや警告を出さずに終われば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">.env を用意して起動する</h3>
+        </div>
+        <div class="step__body">
+          <p><code>.env</code> には API キーのような秘密情報を書きます。誤ってコミットしないよう、<code>.env</code> を作る前に <code>.gitignore</code> へ追加しておきます。ビルド結果の <code>/target</code> もあわせて無視します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">.gitignore</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--add">+ /target</span><span class="diff-line">  app.db*</span><span class="diff-line diff-line--add">+ .env</span></pre>
+          </div>
+          <p>次に、設定の見本となる <code>.env.example</code> を作ります。こちらは秘密の値を含まないので、リポジトリにコミットします（ステップ 8）。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Text</span>
+              <span class="code-block__filename">.env.example</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext"># コピーして .env を作り、値を書き換える（.env はコミットしない）
+APP_HOST=127.0.0.1
+APP_PORT=8080
+DATABASE_URL=sqlite://app.db?mode=rwc
+# 開発用のダミー値。本番では十分に長いランダムな値を実環境変数で渡す
+API_KEY=change-me-dev-only</code></pre>
+          </div>
+          <p>見本をコピーして <code>.env</code> を作り、エディターで <code>API_KEY</code> の値を書き換えます。ここでは <code>dev-secret-123</code> にします。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp .env.example .env</span></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Text</span>
+              <span class="code-block__filename">.env</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext"># コピーして .env を作り、値を書き換える（.env はコミットしない）
+APP_HOST=127.0.0.1
+APP_PORT=8080
+DATABASE_URL=sqlite://app.db?mode=rwc
+# 開発用のダミー値。本番では十分に長いランダムな値を実環境変数で渡す
+API_KEY=dev-secret-123</code></pre>
+          </div>
+          <p>前のステップまでのユーザーが残らないよう DB ファイルを消してから、環境変数を何も指定せずに起動します。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm -f app.db*</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server</span><span class="terminal__line">config: Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db?mode=rwc", api_key: "***" }</span><span class="terminal__line">listening on 127.0.0.1:8080</span></pre>
+          </div>
+          <p><code>.env</code> から読んだ設定で、ポート 8080 で起動しました。<code>api_key</code> は <code>"***"</code> と伏せて表示されています。2 つ目のターミナルで、<code>.env</code> に書いたキーと 06 のキー <code>secret</code> を試します。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:8080/users</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 2</span><span class="terminal__line"></span><span class="terminal__line">[]</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST localhost:8080/users -H 'x-api-key: dev-secret-123' -H 'content-type: application/json' -d '{"name":"alice"}'</span><span class="terminal__line">HTTP/1.1 201 Created</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 23</span><span class="terminal__line"></span><span class="terminal__line">{"id":1,"name":"alice"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i -X POST localhost:8080/users -H 'x-api-key: secret' -H 'content-type: application/json' -d '{"name":"x"}'</span><span class="terminal__line">HTTP/1.1 401 Unauthorized</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 74</span><span class="terminal__line"></span><span class="terminal__line">{"error":{"code":"unauthorized","message":"invalid or missing x-api-key"}}</span></pre>
+          </div>
+          <p><code>.env</code> の <code>API_KEY</code> を付けた <code>POST</code> は 201 になり、直書きしていた <code>secret</code> はもう通りません。</p>
+          <p>次に、サーバーを止めてから、環境変数 <code>APP_PORT</code> を付けて起動します。<code>.env</code> には <code>APP_PORT=8080</code> と書いてありますが、どちらが使われるかを確かめます。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> APP_PORT=9090 ./target/debug/server</span><span class="terminal__line">config: Config { host: "127.0.0.1", port: 9090, database_url: "sqlite://app.db?mode=rwc", api_key: "***" }</span><span class="terminal__line">listening on 127.0.0.1:9090</span></pre>
+          </div>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> curl -i localhost:9090/health</span><span class="terminal__line">HTTP/1.1 200 OK</span><span class="terminal__line">content-type: application/json</span><span class="terminal__line">content-length: 15</span><span class="terminal__line"></span><span class="terminal__line">{"status":"ok"}</span><span class="terminal__line"><span class="terminal__prompt">$</span> curl -s -m2 localhost:8080/health; echo "rc=$?"</span><span class="terminal__line">rc=7</span></pre>
+          </div>
+          <p>9090 で応答し、8080 には接続できません（<code>curl</code> の終了コード 7 は接続の失敗を表します）。<code>dotenvy::dotenv()</code> は、すでに設定されている環境変数を上書きしません。そのため、実際の環境変数が <code>.env</code> の値より優先されます。<code>.env</code> は開発用の既定値、本番の値は実際の環境変数で渡す、という使い分けができます。</p>
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">秘密情報はコードやリポジトリに置かない</p>
+              <p>API キーやパスワードをソースコードに直書きすると、リポジトリを見られる人全員に漏れます。値は環境変数で渡し、開発用の <code>.env</code> はコミットしません。<code>.env</code> を作る前に <code>.gitignore</code> を書いておくのは、最初のコミットに紛れ込ませないためです。</p>
+              <p>設定をログに出すときは、秘密の値を伏せます。<code>#[derive(Debug)]</code> のままだと <code>{config:?}</code> で API キーがそのまま出力されるので、<code>Debug</code> を手で実装しています。</p>
+              <p>必須の秘密には既定値を持たせず、無ければ起動時にエラーで止めます（fail fast）。既定値を持たせると、設定し忘れたまま弱いキーで動き続けてしまいます。本番では <code>.env.example</code> のダミー値ではなく、十分に長いランダムな値を実際の環境変数で渡してください。</p>
+            </div>
+          </div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>.env</code> のキーで <code>POST /users</code> が 201 を返し、<code>secret</code> が 401 になれば OK です。<code>APP_PORT=9090</code> を付けると 9090 で待ち受けることも確かめます。確認できたら、サーバーを止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">起動時のエラーを確かめる</h3>
+        </div>
+        <div class="step__body">
+          <p>設定が足りないときや間違っているときに、サーバーがどう止まるかを確かめます。まず、<code>.env</code> が無いディレクトリから起動します。<code>$OLDPWD</code> は <code>cd</code> する前のディレクトリ（プロジェクトのディレクトリ）を指します。<code>( )</code> で囲んでいるので、終わった後のカレントディレクトリは変わりません。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> (cd /tmp &amp;&amp; "$OLDPWD/target/debug/server"); echo "exit=$?"</span><span class="terminal__line">Error: Missing("API_KEY")</span><span class="terminal__line">exit=1</span></pre>
+          </div>
+          <ul>
+            <li><code>dotenvy::dotenv()</code> は、プログラムのファイルの場所ではなく、起動したときのカレントディレクトリ（と、その親ディレクトリ）から <code>.env</code> を探します。<code>/tmp</code> と <code>/</code> には <code>.env</code> が無いので読み込めず、<code>API_KEY</code> が未設定になりました。</li>
+            <li><code>main</code> が <code>Err</code> を返すと、Rust はエラーを <code>Error: </code> に続けて <code>Debug</code> 形式で表示し、終了コード 1 で終了します。</li>
+            <li><code>ConfigError</code> は <code>#[derive(Debug)]</code> なので、<code>Missing("API_KEY")</code> とバリアント名がそのまま出ます。原因は分かりますが、読みやすくはありません。</li>
+          </ul>
+          <p><code>ConfigError</code> の <code>Debug</code> を手で実装し、<code>Display</code> と同じ文言を出すようにします。<code>#[derive(Debug)]</code> を外し、<code>impl fmt::Debug</code> を追加します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">src/config.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--remove">- #[derive(Debug)]</span><span class="diff-line">  pub enum ConfigError {</span><span class="diff-line">      Missing(&amp;'static str),</span><span class="diff-line">  ...</span><span class="diff-line">              ConfigError::Invalid(name, value) =&gt; write!(f, "{name} is invalid: {value:?}"),</span><span class="diff-line">          }</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line"> </span><span class="diff-line diff-line--add">+ // main が Err を返すと Debug 形式で表示されるため、Display と同じ文言にする</span><span class="diff-line diff-line--add">+ impl fmt::Debug for ConfigError {</span><span class="diff-line diff-line--add">+     fn fmt(&amp;self, f: &amp;mut fmt::Formatter&lt;'_&gt;) -&gt; fmt::Result {</span><span class="diff-line diff-line--add">+         fmt::Display::fmt(self, f)</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line diff-line--add">+ }</span><span class="diff-line diff-line--add">+</span><span class="diff-line">  impl std::error::Error for ConfigError {}</span></pre>
+          </div>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   Compiling project-structure v0.1.0 (/path/to/07-project-structure)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.80s</span></pre>
+          </div>
+          <p>いくつかの失敗を起こしてみます。<code>.env</code> を一時的に別の名前にして起動し、確認したら元に戻します。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mv .env .env.bak</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server; echo "exit=$?"</span><span class="terminal__line">Error: API_KEY must be set</span><span class="terminal__line">exit=1</span><span class="terminal__line"><span class="terminal__prompt">$</span> mv .env.bak .env</span></pre>
+          </div>
+          <p><code>.env</code> を戻した状態で、環境変数で値を上書きして起動します。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> API_KEY= ./target/debug/server; echo "exit=$?"</span><span class="terminal__line">Error: API_KEY must be set</span><span class="terminal__line">exit=1</span><span class="terminal__line"><span class="terminal__prompt">$</span> APP_PORT=abc ./target/debug/server; echo "exit=$?"</span><span class="terminal__line">Error: APP_PORT is invalid: "abc"</span><span class="terminal__line">exit=1</span><span class="terminal__line"><span class="terminal__prompt">$</span> (cd /tmp &amp;&amp; "$OLDPWD/target/debug/server"); echo "exit=$?"</span><span class="terminal__line">Error: API_KEY must be set</span><span class="terminal__line">exit=1</span></pre>
+          </div>
+          <ul>
+            <li><code>API_KEY=</code> と空で指定すると、<code>.env</code> に値があっても空が優先され、未設定と同じエラーになります。</li>
+            <li><code>APP_PORT=abc</code> は数値に変換できないので、<code>Invalid</code> のエラーになります。</li>
+            <li><code>/tmp</code> から起動した場合も、今度は <code>API_KEY must be set</code> と読みやすく表示されます。</li>
+          </ul>
+          <p>最後に、ポートが使用中の場合です。1 つ目のターミナルで <code>./target/debug/server</code> を起動します。起動したまま、2 つ目のターミナルからもう 1 つ起動します。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal（2 つ目）</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./target/debug/server; echo "exit=$?"</span><span class="terminal__line">config: Config { host: "127.0.0.1", port: 8080, database_url: "sqlite://app.db?mode=rwc", api_key: "***" }</span><span class="terminal__line">Error: Os { code: 48, kind: AddrInUse, message: "Address already in use" }</span><span class="terminal__line">exit=1</span></pre>
+          </div>
+          <p>設定の読み込みには成功するので <code>config:</code> の行は表示され、その後の <code>bind</code> で失敗します。このエラーは標準ライブラリの <code>std::io::Error</code> の <code>Debug</code> 形式です。<code>code: 48</code> は macOS での値で、OS によって変わります。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>どの失敗でもエラーの内容が表示され、終了コード 1 で終われば OK です。最後に起動したサーバーは止めておきます。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 8 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">8</span>
+        <div class="step__header">
+          <h3 class="step__title">.env.example をコミット対象にして仕上げる</h3>
+        </div>
+        <div class="step__body">
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">自分のリポジトリで作る場合</p>
+              <p>以下の手順は、このハンズオンのリポジトリの中で作業している前提です（<code>git -C ../..</code> でリポジトリのルートを指定しています）。<code>!.env.example</code> が必要なのは、このリポジトリのルートが <code>.env*</code> をまとめて無視しているためです。</p>
+              <p>自分のリポジトリで作っている場合は、プロジェクトのディレクトリで <code>git status --short --untracked-files=all | grep -i env</code> を実行します。<code>?? .env.example</code> だけが出れば OK です。<code>.gitignore</code> に <code>.env</code> と書いてあれば、<code>!.env.example</code> は不要です。</p>
+            </div>
+          </div>
+          <p><code>.env.example</code> は、ほかの人が <code>.env</code> を作るための見本なので、コミットする必要があります。ところが、このハンズオンのリポジトリでは、ルートの <code>.gitignore</code> に <code>**/.env*</code> が書かれていて、<code>.env.example</code> まで無視されます。<code>git check-ignore -v</code> で、どの行が効いているかを確かめます（<code>-C ../..</code> はリポジトリのルートで実行する指定です）。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> git -C ../.. check-ignore -v axum/07-project-structure/.env.example</span><span class="terminal__line">.gitignore:31:**/.env*	axum/07-project-structure/.env.example</span></pre>
+          </div>
+          <p>プロジェクトの <code>.gitignore</code> に、否定のパターン <code>!.env.example</code> を追加します。深い階層の <code>.gitignore</code> が優先されるので、<code>.env.example</code> だけ無視が解けます。ルートの <code>.gitignore</code> は変更しません。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">.gitignore</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  app.db*</span><span class="diff-line">  .env</span><span class="diff-line diff-line--add">+ !.env.example</span></pre>
+          </div>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> git -C ../.. status --short --untracked-files=all | grep -i env</span><span class="terminal__line">?? axum/07-project-structure/.env.example</span><span class="terminal__line"><span class="terminal__prompt">$</span> git -C ../.. check-ignore -v axum/07-project-structure/.env.example</span><span class="terminal__line">axum/07-project-structure/.gitignore:4:!.env.example	axum/07-project-structure/.env.example</span><span class="terminal__line"><span class="terminal__prompt">$</span> git -C ../.. check-ignore -v axum/07-project-structure/.env</span><span class="terminal__line">axum/07-project-structure/.gitignore:3:.env	axum/07-project-structure/.env</span></pre>
+          </div>
+          <ul>
+            <li><code>git status</code> に <code>.env.example</code> が未追跡のファイルとして現れ、<code>.env</code> は現れません。</li>
+            <li><code>check-ignore -v</code> に <code>!</code> で始まる行が表示されるのは、否定のパターンが効いている印です。</li>
+            <li><code>.env</code> は、プロジェクトの <code>.gitignore</code> の 3 行目で無視されたままです。</li>
+          </ul>
+          <p>仕上げに、書式・静的解析・ビルドを確認します。Clippy は <code>-D warnings</code> を付けて、警告もエラーとして扱います（出力の先頭は省略しています）。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy --all-targets -- -D warnings</span><span class="terminal__line">   …</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.13s</span></pre>
+          </div>
+          <p><code>cargo fmt --check</code> は何も表示せずに終わります。最終的なディレクトリ構成は次のとおりです（<code>target/</code> は省略）。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Text</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext">07-project-structure/
+  .env                 # ローカル専用（コミットしない）
+  .env.example         # 設定の見本（コミットする）
+  .gitignore
+  Cargo.toml           # [lib] name = "app" / [[bin]] name = "server"
+  Cargo.lock
+  app.db               # 起動時に作られる DB（コミットしない）
+  migrations/
+    0001_create_users.sql
+  src/
+    main.rs            # .env → Config::from_env → DB 接続 → マイグレーション → build_app → 待ち受け
+    lib.rs             # pub mod ... と build_app
+    config.rs          # Config と ConfigError（Debug で API_KEY を伏せる）
+    state.rs           # AppState { pool, config }
+    error.rs           # AppError と error_response（{"error":{"code","message","fields"}}）
+    middleware.rs      # log_request、require_api_key（キーは state.config から読む）
+    routes/
+      mod.rs           # ルーターの組み立てと fallback
+      health.rs        # GET /health
+      users.rs         # User・CreateUser と users の 5 つのハンドラ</code></pre>
+          </div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>git status</code> に <code>.env.example</code> が現れ、<code>.env</code> が現れなければ OK です。<code>cargo fmt --check</code> と <code>cargo clippy --all-targets -- -D warnings</code> がエラーなしで終われば完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">06 のプロジェクトをコピーし、<code>[lib]</code>（<code>app</code>）と <code>[[bin]]</code>（<code>server</code>）を追加して <code>target/debug/server</code> ができた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>main.rs</code> のコードを <code>lib.rs</code>・<code>state.rs</code>・<code>error.rs</code>・<code>middleware.rs</code>・<code>routes/</code> に分け、06 と同じ応答が返ることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>main.rs</code> には <code>mod</code> を書かず、<code>use app::...</code> だけでライブラリを使った</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label">練習用のルートと <code>AppConfig</code> を削除し、<code>/</code> が 404 になることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">エラーの本文を <code>{"error":{"code","message"}}</code> にそろえ、検証エラーの 422 にだけ <code>fields</code> が付くことを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label"><code>Config::from_env</code> で 4 つの環境変数を読み、<code>{config:?}</code> で <code>api_key</code> が <code>"***"</code> と表示されることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>APP_PORT=9090</code> を付けて起動し、実際の環境変数が <code>.env</code> より優先されることを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>API_KEY</code> の欠落・<code>APP_PORT</code> の不正な値・ポートの使用中という 3 つの場合に、起動時にエラーで終了することを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>.env</code> を無視したまま <code>.env.example</code> だけをコミット対象にし、<code>cargo clippy --all-targets -- -D warnings</code> が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>main.rs</code> にも <code>mod</code> を書いてしまう</p>
+          <p><code>main.rs</code> に <code>mod error;</code> などを書くと、同じモジュールがライブラリと実行ファイルの両方に入ります。<code>mod</code> の宣言は <code>lib.rs</code> にだけ書き、<code>main.rs</code> は <code>use app::...</code> で参照してください（ステップ 2 を参照）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">ほかのモジュールの関数や型が見つからない</p>
+          <p>ほかのモジュールから使う関数・型・モジュールには <code>pub</code> が必要です。<code>pub</code> を付け忘れていないか、<code>use crate::...</code> のパスが合っているかを確認してください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>require_api_key</code> を変えたらビルドが失敗する</p>
+          <p><code>State</code> を受け取るミドルウェアは、<code>middleware::from_fn_with_state(state.clone(), require_api_key)</code> で登録します。<code>from_fn</code> のままだとコンパイルエラーになります（ステップ 5 を参照）。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>.env</code> を書いたのに <code>API_KEY must be set</code> になる</p>
+          <p><code>.env</code> は、起動したときのカレントディレクトリから親ディレクトリへさかのぼって探されます。<code>07-project-structure</code> ディレクトリで起動しているか確認してください。また、<code>API_KEY=</code> のように空の環境変数を設定していると、<code>.env</code> の値より優先されます。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>.env</code> を書き換えても値が変わらない</p>
+          <p>実際の環境変数は <code>.env</code> より優先されます。シェルで <code>export APP_PORT=...</code> などを実行したままになっていないか、<code>env | grep APP_</code> で確認してください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>curl</code> の結果が教材と違う</p>
+          <p>前のステップの <code>app.db</code> が残っていると、ユーザーの一覧や <code>id</code> が教材と変わります。<code>rm -f app.db*</code> で DB ファイルを消してから起動してください。また、<code>.env</code> の <code>API_KEY</code> と <code>curl</code> の <code>x-api-key</code> が一致しているかも確認してください。</p>
+        </div>
+      </div>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>.env.example</code> が <code>git status</code> に出ない</p>
+          <p>ルートの <code>.gitignore</code> の <code>**/.env*</code> に巻き込まれています。プロジェクトの <code>.gitignore</code> に <code>!.env.example</code> を追加してください（ステップ 8 を参照）。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>[lib]</code> と <code>[[bin]]</code> を使い、ライブラリ <code>app</code> を実行ファイル <code>server</code> から分け、<code>main.rs</code> 1 つにあったコードを役割ごとのモジュールに移しました。
+        <code>main.rs</code> は、設定を読んで DB に接続し、<code>build_app</code> で作ったアプリを起動するだけになりました。
+        エラーの本文は <code>{"error":{"code","message","fields"}}</code> にそろえ、401 と fallback の 404 も同じ形で返します。
+        ポート・DB の URL・API キーは <code>Config::from_env</code> で環境変数と <code>.env</code> から読み、必須の <code>API_KEY</code> が無ければ起動時にエラーで止まります。
+      </p>
+      <p>設定の読み込みで押さえておく点は次のとおりです。</p>
+
+      <table>
+        <thead>
+          <tr><th>観点</th><th>このレッスンでの扱い</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>.env</code> の場所</td><td>起動したときのカレントディレクトリから親へさかのぼって探す</td></tr>
+          <tr><td>優先順位</td><td>実際の環境変数が <code>.env</code> より優先される</td></tr>
+          <tr><td>秘密の値</td><td>コードに書かない。<code>.env</code> はコミットせず、<code>.env.example</code> にはダミー値だけを書く</td></tr>
+          <tr><td>ログへの出力</td><td><code>Debug</code> を手で実装し、<code>api_key</code> を <code>"***"</code> に伏せる</td></tr>
+          <tr><td>必須の設定</td><td>既定値を持たせず、無ければ起動時にエラー終了する</td></tr>
+          <tr><td>起動失敗の表示</td><td><code>main</code> が返した <code>Err</code> の <code>Debug</code> 形式。<code>ConfigError</code> は <code>Display</code> と同じ文言にした</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/07-project-structure</code> の <code>axum/07-project-structure/</code> ディレクトリにあります。<code>.env</code> はコミットしていないので、<code>.env.example</code> をコピーして作ってください。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../06-error-handling/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">06: エラーハンドリングとバリデーション</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">08: 結合テスト</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
