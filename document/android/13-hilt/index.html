@@ -1,0 +1,1512 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>13: Hilt で依存性注入 | Android ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Android</li>
+          <li aria-current="page">13</li>
+        </ol>
+        <h1 class="lesson-title">Hilt で依存性注入</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 60分（任意の実験を除く）</li>
+          <li class="lesson-meta__item">📊 難易度: 入門</li>
+          <li class="lesson-meta__item">👤 対象: 12 で DataStore の設定の保存まで作った人</li>
+          <li class="lesson-meta__item">📋 前提: 12 で作ったプロジェクトがビルドでき、エミュレータ（<code>Handson_Android36</code>）を起動できること。エミュレータからインターネットに接続できること（アプリでの確認と release の確認で使います）</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../12-datastore/index.html">12: DataStore で設定を保存</a></li>
+          <li class="lesson-meta__item">🧩 版: Dagger / Hilt 2.60.1（<code>com.google.dagger.hilt.android</code> プラグイン・<code>hilt-android</code>・<code>hilt-android-compiler</code>・<code>hilt-android-testing</code>）/ <code>androidx.hilt:hilt-lifecycle-viewmodel-compose</code> 1.4.0 / Kotlin 2.4.20 / AGP 9.4.1 / KSP 2.3.12 / Compose BOM 2026.09.00</li>
+          <li class="lesson-meta__item">🌿 完成コード: ブランチ <code>android/13-hilt</code></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li>Hilt を Gradle に入れ、<code>@HiltAndroidApp</code> と <code>@AndroidEntryPoint</code> でアプリと Activity を Hilt につなげられる</li>
+          <li>手書きの <code>AppContainer</code> にあった部品の作り方を、<code>@Module</code> / <code>@Provides</code> と <code>@Inject constructor</code> / <code>@Singleton</code> で書き直せる</li>
+          <li>ViewModel を <code>@HiltViewModel</code> と <code>hiltViewModel()</code> で受け取り、<code>AppContainer</code> を削除できる</li>
+          <li>UI テストを Hilt のテスト用アプリで動かし、<code>@TestInstallIn</code> の偽の module で DB・DataStore のファイル・ネットワークに出ないように差し替えられる</li>
+          <li><code>TodoFilter</code> を <code>data</code> のパッケージに移し、<code>data</code> から画面側（<code>ui</code>）への依存をなくせる</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>09 から、アプリ全体で使う部品（DB・API・Repository）は <code>AppContainer</code> という <code>object</code> で手書きして組み立ててきました。ViewModel は、引数なしの 2 次コンストラクタから <code>AppContainer</code> の Repository を受け取っています。テストでは、<code>AppContainer</code> の差し替え口（<code>todoRepositoryOverride</code> など）を <code>FakeTodoApiRule</code> が偽物に替えていました。</p>
+      <p>この項目では、この組み立てを Hilt に任せます。Hilt は依存性注入（DI）のライブラリです。部品の作り方を注釈で書いておくと、組み立てるコードを Hilt がビルドのときに生成します。Hilt の本体は <code>com.google.dagger</code> のライブラリで、生成されるコードも Dagger のコード生成（<code>dagger.internal.codegen</code>）が作ります。</p>
+
+      <h3 id="manual-vs-hilt">手書きの DI と Hilt の違い</h3>
+
+          <table>
+            <thead>
+            <tr><th></th><th>12 まで（<code>AppContainer</code>）</th><th>この項目（Hilt）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>部品の作り方を書く場所</td><td><code>AppContainer</code> の <code>lazy</code></td><td>他人の型（Room・Ktor・DataStore）は module の <code>@Provides</code>。自分の型は <code>@Inject constructor</code></td></tr>
+            <tr><td>アプリで 1 つにする</td><td><code>object</code> の <code>lazy</code></td><td><code>@Singleton</code></td></tr>
+            <tr><td><code>Context</code> の受け渡し</td><td><code>TodoApplication.onCreate</code> で <code>AppContainer.init(this)</code></td><td><code>@ApplicationContext</code> を付けた引数に Hilt が渡す</td></tr>
+            <tr><td>ViewModel の作り方</td><td>2 次コンストラクタ <code>constructor()</code> が <code>AppContainer</code> から受け取る</td><td><code>@HiltViewModel</code> を付け、画面では <code>hiltViewModel()</code> で受け取る</td></tr>
+            <tr><td>UI テストの差し替え</td><td><code>FakeTodoApiRule</code> が <code>AppContainer</code> の差し替え口を書き換える</td><td>偽の module（<code>FakeDataModule</code>）を <code>@TestInstallIn</code> で本物の module と入れ替える</td></tr>
+            <tr><td>組み立てのコード</td><td>自分で書く</td><td>Hilt がビルドのときに生成する。部品が足りなければビルドが失敗する</td></tr>
+            </tbody>
+          </table>
+      <p>Hilt がビルドのときに生成するものは、たとえば次のとおりです（ステップ 1・2・4 で実物の場所を確かめます）。</p>
+          <ul>
+            <li><code>@Provides</code> ごと、<code>@Inject constructor</code> ごとの Factory（<code>DataModule_ProvideTodoApiFactory</code>・<code>TodoRepository_Factory</code>）。中身は、引数を受け取って作り方の関数やコンストラクタを呼ぶだけのコードです。</li>
+            <li><code>@AndroidEntryPoint</code> の Activity の基底クラス（<code>Hilt_MainActivity</code>）と、<code>@HiltAndroidApp</code> のアプリの基底クラス（<code>Hilt_TodoApplication</code>）。</li>
+            <li>アプリ全体の部品の置き場所（コンポーネント）の定義（<code>TodoApplication_HiltComponents</code>）と、<code>@HiltViewModel</code> の ViewModel を登録するコード（<code>TodoListViewModel_HiltModules</code>）。</li>
+          </ul>
+
+      <h3 id="what-changes">置き換えるものと残すもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>置き換える・消すもの</th><th>残すもの</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>AppContainer</code>（削除）と <code>TodoApplication.onCreate</code></td><td><code>TodoRepository</code>・<code>SettingsRepository</code>・<code>TodoListViewModel</code> のコンストラクタの引数（<code>@Inject</code> などの注釈を付けるだけ）</td></tr>
+            <tr><td><code>TodoListViewModel</code> の 2 次コンストラクタ</td><td>単体テスト 76 件（ステップ 5 で import を 1 行足すだけ）</td></tr>
+            <tr><td><code>TodoApp</code>・<code>TodoListPage</code> の既定引数 <code>viewModel()</code></td><td><code>createComposeRule()</code> と <code>testViewModel()</code> で ViewModel を渡す UI テスト 62 件（変更なし）</td></tr>
+            <tr><td><code>FakeTodoApiRule</code>（削除）</td><td><code>preferencesDataStore</code> のトップレベルの委譲（置き場所を移すだけ）</td></tr>
+            </tbody>
+          </table>
+      <p>単体テストは Hilt を使いません。ViewModel や Repository は、これまでどおりテストのコードが偽物をコンストラクタに渡して作ります。<code>@Inject constructor</code> にしても、コンストラクタの引数は変わらないので、テストはそのまま通ります。</p>
+      <p>UI テスト 66 件のうち、Hilt に合わせて書き換えるのは、本物の <code>MainActivity</code> を起動する 3 クラス（4 件）だけです。残りの 62 件は、<code>testViewModel()</code> が作った ViewModel を画面に引数で渡します。そのため、既定引数の <code>hiltViewModel()</code> は使われず、テストのコードは変わりません。</p>
+
+      <h3 id="todofilter">12 で予告した依存の向きの整理</h3>
+      <p>12 の終わりで、<code>data</code> のパッケージの <code>SettingsRepository</code> が、画面側（<code>ui.screens</code>）の <code>TodoFilter</code> を参照していることに触れました。ステップ 5 で、enum の <code>TodoFilter</code> を <code>data</code> に移し、画面に出す表示名（「すべて」など）だけを <code>ui.screens</code> に残します。</p>
+
+          <table>
+            <thead>
+            <tr><th></th><th>12 まで</th><th>この項目の後</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>enum <code>TodoFilter</code> の場所</td><td><code>ui.screens</code>（表示名を持つ）</td><td><code>data</code>（表示名なし）</td></tr>
+            <tr><td>表示名（「すべて」「未完了」「完了」）</td><td>enum のコンストラクタ引数</td><td><code>ui.screens</code> の拡張プロパティ <code>TodoFilter.label</code></td></tr>
+            <tr><td>参照の向き</td><td><code>data</code> → <code>ui.screens</code>（逆向き）</td><td><code>ui.screens</code> → <code>data</code> だけ</td></tr>
+            </tbody>
+          </table>
+
+      <h3 id="what-we-build">この項目で作るもの</h3>
+
+          <table>
+            <thead>
+            <tr><th>ステップ</th><th>やること</th><th>主に変えるファイル</th><th>テストの件数（単体 / UI）</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>1</td><td>Hilt を入れる</td><td><code>libs.versions.toml</code>・2 つの <code>build.gradle.kts</code>・<code>TodoApplication.kt</code>・<code>MainActivity.kt</code></td><td>76 / 66</td></tr>
+            <tr><td>2</td><td>部品の作り方を module に書く</td><td><code>DataModule.kt</code>（新規）・<code>AppContainer.kt</code>・<code>TodoRepository.kt</code>・<code>SettingsRepository.kt</code></td><td>76 / 66</td></tr>
+            <tr><td>3</td><td>UI テストを Hilt のテスト用アプリで動かす</td><td><code>app/build.gradle.kts</code>・<code>HiltTestRunner.kt</code>（新規）・Activity を起動する 3 つのテスト</td><td>76 / 66</td></tr>
+            <tr><td>4</td><td>ViewModel を Hilt から受け取り、<code>AppContainer</code> を消す</td><td><code>TodoListViewModel.kt</code>・<code>TodoApp.kt</code>・<code>TodoListPage.kt</code>・<code>FakeDataModule.kt</code>（新規）ほか</td><td>76 / 66</td></tr>
+            <tr><td>5</td><td><code>TodoFilter</code> を <code>data</code> に移す</td><td><code>data/TodoFilter.kt</code>（新規）・<code>ui/screens/TodoFilter.kt</code> と import</td><td>76 / 66</td></tr>
+            <tr><td>6</td><td>まとめて確認する（テスト・lint、機内モードでの UI テスト、release）</td><td>なし</td><td>76 / 66</td></tr>
+            </tbody>
+          </table>
+      <p>12 の完成コードからの変更は、24 ファイル・追加と削除を合わせて 298 行です（準備の名前の変更を除く）。新しいテストは足さず、どのステップの終わりでも単体テスト 76 件と UI テスト 66 件が通ります。</p>
+
+      <h3 id="versions">使用バージョン</h3>
+
+          <table>
+            <thead>
+            <tr><th>ライブラリ・プラグイン</th><th>版</th><th>用途</th></tr>
+            </thead>
+            <tbody>
+            <tr><td><code>com.google.dagger.hilt.android</code>（Gradle プラグイン）</td><td>2.60.1</td><td>Hilt のコード生成をビルドに組み込む</td></tr>
+            <tr><td><code>com.google.dagger:hilt-android</code></td><td>2.60.1</td><td>Hilt の本体（<code>@HiltAndroidApp</code>・<code>@AndroidEntryPoint</code>・<code>@HiltViewModel</code> など）</td></tr>
+            <tr><td><code>com.google.dagger:hilt-android-compiler</code></td><td>2.60.1</td><td>KSP で動くコード生成（Factory などを作る）</td></tr>
+            <tr><td><code>com.google.dagger:hilt-android-testing</code></td><td>2.60.1</td><td>UI テスト用（<code>HiltTestApplication</code>・<code>@HiltAndroidTest</code>・<code>@TestInstallIn</code>）</td></tr>
+            <tr><td><code>androidx.hilt:hilt-lifecycle-viewmodel-compose</code></td><td>1.4.0</td><td>Compose から ViewModel を受け取る <code>hiltViewModel()</code></td></tr>
+            </tbody>
+          </table>
+      <p>執筆時点（2026年10月）の最新の安定版です。<code>hilt-android</code> は、Maven Central の一覧で 2.60.1 が最新でした。<code>hilt-lifecycle-viewmodel-compose</code> は、Google の Maven の一覧で 1.4.0 が最新の安定版でした。KSP（2.3.12）・Kotlin（2.4.20）・<code>compileOptions</code> の Java 11 は 12 のままで、ビルドとテストが通りました。</p>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>hilt-navigation-compose</code> は使わない</p>
+              <p>ネット上の解説の多くは、<code>hiltViewModel()</code> を <code>androidx.hilt:hilt-navigation-compose</code> から使っています。パッケージは <code>androidx.hilt.navigation.compose</code> です。androidx.hilt 1.3.0 で、<code>hiltViewModel()</code> は <code>hilt-lifecycle-viewmodel-compose</code> に移りました。移った先のパッケージは <code>androidx.hilt.lifecycle.viewmodel.compose</code> です。<code>hilt-navigation-compose</code> は Navigation 2 の <code>androidx.navigation</code> を引き込みます。このアプリは Navigation 3 なので使いません。</p>
+            </div>
+          </div>
+
+      <h2 id="prepare">準備</h2>
+      <p>12 の完成プロジェクトをそのまま使います。プロジェクト名とアプリ名を 13 用に変えます。</p>
+      <p>Hilt 2.59 以降の Gradle プラグインには、AGP 9 と Gradle 9.1 以上が必要です。12 のプロジェクトは AGP 9.4.1・Gradle 9.6.0 なので、そのまま使えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">settings.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      }</span><span class="diff-line">  }</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- rootProject.name = &quot;HandsonAndroid12&quot;</span><span class="diff-line diff-line--add">+ rootProject.name = &quot;HandsonAndroid13&quot;</span><span class="diff-line">  include(&quot;:app&quot;)</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/res/values/strings.xml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  &lt;resources&gt;</span><span class="diff-line diff-line--remove">-     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid12&lt;/string&gt;</span><span class="diff-line diff-line--add">+     &lt;string name=&quot;app_name&quot;&gt;HandsonAndroid13&lt;/string&gt;</span><span class="diff-line">  &lt;/resources&gt;</span></pre>
+</div>
+          <p>02 のステップ 1 で書いた <code>appName</code> と、その値を確かめるテストも合わせて変えます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/kotlin/Basics.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  // Step 1: 変数・関数・文字列テンプレート・when 式</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できない（Java の final 相当）。型は右辺から推論される（String）</span><span class="diff-line diff-line--remove">- val appName = &quot;HandsonAndroid12&quot;</span><span class="diff-line diff-line--add">+ val appName = &quot;HandsonAndroid13&quot;</span><span class="diff-line">  </span><span class="diff-line">  // 再代入できる。型は推論されるが、ここでは Int のまま</span><span class="diff-line">  var counter = 0</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/kotlin/BasicsTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          counter = 0</span><span class="diff-line">          assertEquals(1, incrementCounter())</span><span class="diff-line">          assertEquals(2, incrementCounter())</span><span class="diff-line diff-line--remove">-         assertEquals(&quot;HandsonAndroid12&quot;, appName)</span><span class="diff-line diff-line--add">+         assertEquals(&quot;HandsonAndroid13&quot;, appName)</span><span class="diff-line">      }</span><span class="diff-line">  }</span></pre>
+</div>
+          <p>パッケージ名と <code>applicationId</code>（<code>com.handson.android01</code>）は 12 と同じく変えません。エミュレータも 12 と同じ手順で起動しておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/emulator/emulator -avd Handson_Android36 -no-window -no-audio -no-boot-anim -no-snapshot-save &amp;</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb devices</span><span class="terminal__line">emulator-5554	device</span></pre>
+</div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">Hilt を入れる</h3>
+        </div>
+        <div class="step__body">
+          <p>Gradle に Hilt を足し、<code>TodoApplication</code> と <code>MainActivity</code> に注釈を付けます。このステップでは、ViewModel は今までどおり <code>viewModel()</code> と 2 次コンストラクタで作られ、<code>AppContainer</code> も使われたままです。</p>
+          <h4>バージョンカタログとプラグイン</h4>
+          <p>バージョンカタログに、版・ライブラリ・プラグインを足します。<code>hilt-android-testing</code> と <code>androidx-hilt-lifecycle-viewmodel-compose</code> は、ステップ 3・4 で使います。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">gradle/libs.versions.toml</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  room3 = &quot;3.0.3&quot;</span><span class="diff-line">  datastore = &quot;1.2.1&quot;</span><span class="diff-line">  ksp = &quot;2.3.12&quot;</span><span class="diff-line diff-line--add">+ hilt = &quot;2.60.1&quot;</span><span class="diff-line diff-line--add">+ androidxHilt = &quot;1.4.0&quot;</span><span class="diff-line">  </span><span class="diff-line">  [libraries]</span><span class="diff-line">  androidx-core-ktx = { group = &quot;androidx.core&quot;, name = &quot;core-ktx&quot;, version.ref = &quot;coreKtx&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  androidx-navigation3-runtime = { group = &quot;androidx.navigation3&quot;, name = &quot;navigation3-runtime&quot;, version.ref = &quot;navigation3&quot; }</span><span class="diff-line">  androidx-navigation3-ui = { group = &quot;androidx.navigation3&quot;, name = &quot;navigation3-ui&quot;, version.ref = &quot;navigation3&quot; }</span><span class="diff-line">  androidx-datastore-preferences = { group = &quot;androidx.datastore&quot;, name = &quot;datastore-preferences&quot;, version.ref = &quot;datastore&quot; }</span><span class="diff-line diff-line--add">+ androidx-hilt-lifecycle-viewmodel-compose = { group = &quot;androidx.hilt&quot;, name = &quot;hilt-lifecycle-viewmodel-compose&quot;, version.ref = &quot;androidxHilt&quot; }</span><span class="diff-line">  androidx-room3-compiler = { group = &quot;androidx.room3&quot;, name = &quot;room3-compiler&quot;, version.ref = &quot;room3&quot; }</span><span class="diff-line">  androidx-room3-runtime = { group = &quot;androidx.room3&quot;, name = &quot;room3-runtime&quot;, version.ref = &quot;room3&quot; }</span><span class="diff-line diff-line--add">+ hilt-android = { group = &quot;com.google.dagger&quot;, name = &quot;hilt-android&quot;, version.ref = &quot;hilt&quot; }</span><span class="diff-line diff-line--add">+ hilt-android-compiler = { group = &quot;com.google.dagger&quot;, name = &quot;hilt-android-compiler&quot;, version.ref = &quot;hilt&quot; }</span><span class="diff-line diff-line--add">+ hilt-android-testing = { group = &quot;com.google.dagger&quot;, name = &quot;hilt-android-testing&quot;, version.ref = &quot;hilt&quot; }</span><span class="diff-line">  kotlinx-coroutines-android = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-android&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  kotlinx-coroutines-test = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-coroutines-test&quot;, version.ref = &quot;kotlinxCoroutines&quot; }</span><span class="diff-line">  kotlinx-serialization-core = { group = &quot;org.jetbrains.kotlinx&quot;, name = &quot;kotlinx-serialization-core&quot;, version.ref = &quot;kotlinxSerialization&quot; }</span><span class="diff-line">  ...</span><span class="diff-line">  [plugins]</span><span class="diff-line">  android-application = { id = &quot;com.android.application&quot;, version.ref = &quot;agp&quot; }</span><span class="diff-line">  androidx-room3 = { id = &quot;androidx.room3&quot;, version.ref = &quot;room3&quot; }</span><span class="diff-line diff-line--add">+ hilt = { id = &quot;com.google.dagger.hilt.android&quot;, version.ref = &quot;hilt&quot; }</span><span class="diff-line">  ksp = { id = &quot;com.google.devtools.ksp&quot;, version.ref = &quot;ksp&quot; }</span><span class="diff-line">  kotlin-compose = { id = &quot;org.jetbrains.kotlin.plugin.compose&quot;, version.ref = &quot;kotlin&quot; }</span><span class="diff-line">  kotlin-parcelize = { id = &quot;org.jetbrains.kotlin.plugin.parcelize&quot;, version.ref = &quot;kotlin&quot; }</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>プラグインは、KSP や Room と同じく、ルートの <code>build.gradle.kts</code> に <code>apply false</code> で宣言します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  plugins {</span><span class="diff-line">      alias(libs.plugins.android.application) apply false</span><span class="diff-line">      alias(libs.plugins.androidx.room3) apply false</span><span class="diff-line diff-line--add">+     alias(libs.plugins.hilt) apply false</span><span class="diff-line">      alias(libs.plugins.ksp) apply false</span><span class="diff-line">      alias(libs.plugins.kotlin.compose) apply false</span><span class="diff-line">      alias(libs.plugins.kotlin.parcelize) apply false</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>app/build.gradle.kts</code> でプラグインを適用し、本体を <code>implementation</code>、コード生成を <code>ksp</code> で足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  plugins {</span><span class="diff-line">      alias(libs.plugins.android.application)</span><span class="diff-line">      alias(libs.plugins.androidx.room3)</span><span class="diff-line diff-line--add">+     alias(libs.plugins.hilt)</span><span class="diff-line">      alias(libs.plugins.ksp)</span><span class="diff-line">      alias(libs.plugins.kotlin.compose)</span><span class="diff-line">      alias(libs.plugins.kotlin.parcelize)</span><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.navigation3.runtime)</span><span class="diff-line">      implementation(libs.androidx.navigation3.ui)</span><span class="diff-line">      implementation(libs.androidx.room3.runtime)</span><span class="diff-line diff-line--add">+     implementation(libs.hilt.android)</span><span class="diff-line">      implementation(libs.kotlinx.coroutines.android)</span><span class="diff-line">      implementation(libs.kotlinx.serialization.core)</span><span class="diff-line">      implementation(libs.kotlinx.serialization.json)</span><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.ktor.client.core)</span><span class="diff-line">      implementation(libs.ktor.serialization.kotlinx.json)</span><span class="diff-line">      ksp(libs.androidx.room3.compiler)</span><span class="diff-line diff-line--add">+     ksp(libs.hilt.android.compiler)</span><span class="diff-line">      testImplementation(libs.junit)</span><span class="diff-line">      testImplementation(libs.kotlinx.coroutines.test)</span><span class="diff-line">      testImplementation(libs.ktor.client.mock)</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>kapt</code> は書かない</p>
+              <p>ネット上の解説には、<code>kapt(...)</code> で Hilt のコンパイラーを足すものが多くあります。この教材では、Room と同じく KSP だけを使います。<code>ksp(libs.hilt.android.compiler)</code> と書きます。</p>
+            </div>
+          </div>
+          <h4>アプリと Activity に注釈を付ける</h4>
+          <p><code>TodoApplication</code> に <code>@HiltAndroidApp</code> を付けます。<code>AppContainer.init(this)</code> は、ステップ 4 まで残します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/TodoApplication.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import android.app.Application</span><span class="diff-line">  import com.handson.android01.data.AppContainer</span><span class="diff-line diff-line--add">+ import dagger.hilt.android.HiltAndroidApp</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // アプリのプロセスが作られたときに、Activity より先に 1 度だけ作られる。</span><span class="diff-line diff-line--remove">- // DB を作るには Context が要るので、ここで AppContainer に渡す</span><span class="diff-line diff-line--add">+ // Hilt の入口。この注釈を付けると、アプリ全体の部品の置き場所（コンポーネント）がここで作られる。</span><span class="diff-line diff-line--add">+ // DB を作るには Context が要るので、AppContainer への受け渡しは、まだここで行う（ステップ 4 で Hilt に置き換える）</span><span class="diff-line diff-line--add">+ @HiltAndroidApp</span><span class="diff-line">  class TodoApplication : Application() {</span><span class="diff-line">      override fun onCreate() {</span><span class="diff-line">          super.onCreate()</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>MainActivity</code> に <code>@AndroidEntryPoint</code> を付けます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/MainActivity.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line">  import com.handson.android01.ui.navigation.TodoApp</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line diff-line--add">+ import dagger.hilt.android.AndroidEntryPoint</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ // Hilt から部品を受け取る Activity には、この注釈を付ける</span><span class="diff-line diff-line--add">+ @AndroidEntryPoint</span><span class="diff-line">  class MainActivity : ComponentActivity() {</span><span class="diff-line">      override fun onCreate(savedInstanceState: Bundle?) {</span><span class="diff-line">          super.onCreate(savedInstanceState)</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>@HiltAndroidApp</code> は Hilt の入口です。アプリ全体の部品の置き場所（コンポーネント）が、このアプリに作られます。</li>
+            <li><code>@AndroidEntryPoint</code> は、Hilt から部品を受け取る Activity に付けます。ステップ 4 で、この Activity から <code>hiltViewModel()</code> で ViewModel を受け取ります。</li>
+            <li>2 つは両方とも必要です。片方を忘れたときの動きは、ステップ 4 の後で見ます。</li>
+          </ul>
+          <p>まとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m 14s</span></pre>
+</div>
+          <p>筆者の環境では、初回のビルドで <code>kspDebugKotlin</code>・<code>hiltAggregateDepsDebug</code>・<code>hiltJavaCompileDebug</code> などのタスクが走りました。<code>Configuration cache entry stored.</code> も出ており、12 から有効にしている configuration cache と一緒に使えました。</p>
+          <h4>生成されたクラスを探す</h4>
+          <p>Hilt が作った基底クラスの場所を確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> find app/build/generated/ksp/debug -name &#x27;Hilt_MainActivity.java&#x27; -o -name &#x27;Hilt_TodoApplication.java&#x27;</span><span class="terminal__line">app/build/generated/ksp/debug/java/com/handson/android01/Hilt_MainActivity.java</span><span class="terminal__line"><span class="terminal__prompt">$</span> find app/build -name &#x27;Hilt_TodoApplication.java&#x27;</span><span class="terminal__line">app/build/generated/hilt/component_sources/debug/com/handson/android01/Hilt_TodoApplication.java</span></pre>
+</div>
+          <ul>
+            <li><code>Hilt_MainActivity.java</code> は、KSP の出力先（<code>app/build/generated/ksp/debug/java/</code>）にあります。</li>
+            <li><code>Hilt_TodoApplication.java</code> は KSP の出力先には無く、Hilt の Gradle プラグインのタスク（<code>hiltJavaCompileDebug</code>）の出力先 <code>app/build/generated/hilt/component_sources/</code> にありました。</li>
+          </ul>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 76 件と UI テスト 66 件がすべて成功すれば OK です。アプリの動きはまだ 12 と同じです。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">部品の作り方を module に書く</h3>
+        </div>
+        <div class="step__body">
+          <p><code>AppContainer</code> の <code>lazy</code> に書いていた部品の作り方を、Hilt に教えます。このステップの終わりでも、アプリはまだ <code>AppContainer</code> の部品を使います。Hilt のほうの作り方は、ステップ 4 で使い始めます。</p>
+          <h4>他人の型の作り方を module に書く</h4>
+          <p><code>app/src/main/java/com/handson/android01/di/DataModule.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/di/DataModule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.di
+
+import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.preferencesDataStore
+import androidx.room3.Room
+import androidx.sqlite.driver.AndroidSQLiteDriver
+import com.handson.android01.data.AppDatabase
+import com.handson.android01.data.TodoApi
+import com.handson.android01.data.TodoDao
+import com.handson.android01.data.createTodoHttpClient
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import io.ktor.client.engine.android.Android
+import kotlinx.coroutines.Dispatchers
+import javax.inject.Singleton
+
+// DataStore は、ファイル（datastore/settings.preferences_pb）ごとに、アプリで 1 つだけ作る。
+// preferencesDataStore のプロパティ委譲は、トップレベルに 1 回だけ書く（クラスの中に書くと、インスタンスのたびに別の DataStore が作られる）。
+// AppContainer も使うので private にしない（internal）
+internal val Context.settingsDataStore: DataStore&lt;Preferences&gt; by preferencesDataStore(name = &quot;settings&quot;)
+
+// 自分で `@Inject constructor` を書けない、または組み立てが要る型（Room・Ktor・DataStore は他人の型。TodoApi は HttpClient を組み立てて渡す）の作り方を Hilt に教える module。
+// SingletonComponent に入れるので、ここで作る部品はアプリ全体で使える。AppContainer の lazy と 1 対 1 で対応する
+@Module
+@InstallIn(SingletonComponent::class)
+object DataModule {
+
+    // @Singleton は「コンポーネントに 1 つ」＝アプリで 1 つ。DB は何度も作らず、使い回す。
+    // Context は Hilt が用意している（@ApplicationContext を付けると Application の Context が渡される）
+    @Provides
+    @Singleton
+    fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
+        Room.databaseBuilder&lt;AppDatabase&gt;(context, &quot;todos.db&quot;)
+            // クエリを実行するスレッド。ここでは IO 用のスレッドプールを指定する
+            .setQueryCoroutineContext(Dispatchers.IO)
+            // SQLite を動かすドライバー。省略しても既定でこのドライバーが使われるが、何を使っているか分かるように明示する
+            .setDriver(AndroidSQLiteDriver())
+            .build()
+
+    // DAO は DB が持っているので、scope は付けない（呼ばれるたびに database.todoDao() を返すだけ）。
+    // 引数の AppDatabase は、上の provideDatabase の結果を Hilt が渡す
+    @Provides
+    fun provideTodoDao(database: AppDatabase): TodoDao = database.todoDao()
+
+    // HttpClient は接続を使い回すので、アプリで 1 つにする
+    @Provides
+    @Singleton
+    fun provideTodoApi(): TodoApi = TodoApi(createTodoHttpClient(Android.create()))
+
+    // 12 のトップレベルの委譲を返すだけ。「ファイルごとに 1 つ」の保証は、委譲のほうが持っている
+    @Provides
+    @Singleton
+    fun provideSettingsDataStore(@ApplicationContext context: Context): DataStore&lt;Preferences&gt; = context.settingsDataStore
+}</code></pre>
+</div>
+          <ul>
+            <li><code>@Module</code> の付いた <code>object</code> が、作り方を並べる場所（module）です。<code>@InstallIn(SingletonComponent::class)</code> で、アプリ全体のコンポーネントに入れます。</li>
+            <li><code>@Provides</code> の付いた関数が、1 つの型の作り方です。何を提供するかは<strong>戻り値の型</strong>で決まります。<code>provideTodoDao</code> は <code>TodoDao</code> を返すので、<code>TodoDao</code> を欲しがる引数に渡されます。</li>
+            <li>関数の引数も Hilt が用意します。<code>provideTodoDao(database: AppDatabase)</code> の <code>database</code> には、<code>provideDatabase</code> の結果が渡されます。</li>
+            <li><code>@Singleton</code> は「コンポーネントに 1 つ」です。アプリ全体のコンポーネントなので、アプリで 1 つになります。DB・<code>TodoApi</code>（中の <code>HttpClient</code>）・DataStore は使い回すので付けます。<code>TodoDao</code> は DB が持っているので付けません。</li>
+            <li><code>Context</code> は、<code>@ApplicationContext</code> を付けた引数で受け取ります。Application の <code>Context</code> が渡されます。この注釈が無いと、<code>Context</code> は渡されません（<code>Context</code> を返す <code>@Provides</code> は無いため）。</li>
+            <li>12 で <code>AppContainer.kt</code> のトップレベルに書いた <code>preferencesDataStore</code> の委譲は、このファイルに移しました。<code>AppContainer</code> からも使うので、このステップでは <code>internal</code> にしています。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title">DataStore の委譲を残し、<code>@Provides</code> はそれを返すだけにする理由</p>
+              <p><code>preferencesDataStore</code> の委譲は、1 つのファイルに DataStore が 1 つだけ作られることを、プロセス全体で保証します（12 で見たとおり、2 つ作ると例外になります）。<code>@Singleton</code> の保証は「コンポーネントに 1 つ」です。ステップ 3 で使うテスト用アプリは、テストごとにコンポーネントを作り直します。<code>@Provides</code> の中で DataStore を作ると、本物の module を使うテストのたびに、同じファイルの DataStore を新しく作ることになります。この教材の UI テストは、どれも <code>FakeDataModule</code> に入れ替わるので、これは起きません。それでも、作るのは委譲に任せ、<code>@Provides</code> はそれを返すだけにしました。</p>
+            </div>
+          </div>
+          <p><code>AppContainer</code> は、移した委譲を import して使います。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/AppContainer.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.data</span><span class="diff-line">  </span><span class="diff-line">  import android.content.Context</span><span class="diff-line diff-line--remove">- import androidx.datastore.core.DataStore</span><span class="diff-line diff-line--remove">- import androidx.datastore.preferences.core.Preferences</span><span class="diff-line diff-line--remove">- import androidx.datastore.preferences.preferencesDataStore</span><span class="diff-line">  import androidx.room3.Room</span><span class="diff-line">  import androidx.sqlite.driver.AndroidSQLiteDriver</span><span class="diff-line diff-line--add">+ import com.handson.android01.di.settingsDataStore</span><span class="diff-line">  import io.ktor.client.engine.android.Android</span><span class="diff-line">  import kotlinx.coroutines.Dispatchers</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">- // DataStore は、ファイル（datastore/settings.preferences_pb）ごとに、アプリで 1 つだけ作る。</span><span class="diff-line diff-line--remove">- // preferencesDataStore のプロパティ委譲は、トップレベルに 1 回だけ書く（クラスの中に書くと、インスタンスのたびに別の DataStore が作られる）</span><span class="diff-line diff-line--remove">- private val Context.settingsDataStore: DataStore&lt;Preferences&gt; by preferencesDataStore(name = &quot;settings&quot;)</span><span class="diff-line">  </span><span class="diff-line">  // アプリ全体で使う部品の置き場所（手書きの最小の DI）。ViewModel は、ここから TodoRepository と SettingsRepository を受け取る。</span><span class="diff-line">  // HttpClient は接続を使い回すので、画面ごとに作らず、アプリで 1 つを使い回す。DB も同じで、アプリで 1 つだけ作る。</span><span class="diff-line">  ...</span></pre>
+</div>
+          <h4>自分の型には <code>@Inject constructor</code> を付ける</h4>
+          <p><code>TodoRepository</code> と <code>SettingsRepository</code> は自分で書いたクラスです。module には書かず、コンストラクタに <code>@Inject</code> を付けます。Hilt は、引数の型（<code>TodoDao</code>・<code>TodoApi</code>・<code>SettingsRepository</code>）を作ってから、このコンストラクタを呼びます。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoRepository.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import kotlinx.coroutines.flow.Flow</span><span class="diff-line">  import kotlinx.coroutines.flow.map</span><span class="diff-line diff-line--add">+ import javax.inject.Inject</span><span class="diff-line diff-line--add">+ import javax.inject.Singleton</span><span class="diff-line">  </span><span class="diff-line">  // Todo の入口。画面（ViewModel）は DAO と API を直接触らず、ここだけを使う。</span><span class="diff-line">  // 唯一の情報源は Room。API は、最初の 1 回だけ一覧を取ってくるために使う（取得済みかどうかは DataStore の設定に残す）</span><span class="diff-line diff-line--remove">- class TodoRepository(</span><span class="diff-line diff-line--add">+ @Singleton</span><span class="diff-line diff-line--add">+ class TodoRepository @Inject constructor(</span><span class="diff-line">      private val dao: TodoDao,</span><span class="diff-line">      private val api: TodoApi,</span><span class="diff-line">      private val settings: SettingsRepository,</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/SettingsRepository.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import kotlinx.coroutines.flow.Flow</span><span class="diff-line">  import kotlinx.coroutines.flow.first</span><span class="diff-line">  import kotlinx.coroutines.flow.map</span><span class="diff-line diff-line--add">+ import javax.inject.Inject</span><span class="diff-line diff-line--add">+ import javax.inject.Singleton</span><span class="diff-line">  </span><span class="diff-line">  // アプリの設定の入口。保存先は Preferences DataStore（キーと値の組を、1 つのファイルに保存する）。</span><span class="diff-line">  // DataStore&lt;Preferences&gt; は引数で受け取る（テストでは、メモリ上の偽物を渡すため）</span><span class="diff-line diff-line--remove">- class SettingsRepository(private val dataStore: DataStore&lt;Preferences&gt;) {</span><span class="diff-line diff-line--add">+ @Singleton</span><span class="diff-line diff-line--add">+ class SettingsRepository @Inject constructor(private val dataStore: DataStore&lt;Preferences&gt;) {</span><span class="diff-line">  </span><span class="diff-line">      // 「初回の取得が済んだか」。キーは型ごとの関数（booleanPreferencesKey）で作り、名前は保存されるキーそのもの</span><span class="diff-line">      suspend fun isInitialFetchDone(): Boolean = dataStore.data.first()[INITIAL_FETCH_DONE] ?: false</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@Inject</code> を付けるときは <code>constructor</code> を書く</p>
+              <p>Kotlin の主コンストラクタは、ふだん <code>constructor</code> を省略して <code>class X(...)</code> と書きます。注釈を付けるときは省略できないので、<code>class X @Inject constructor(...)</code> と書きます。</p>
+            </div>
+          </div>
+          <p><code>TodoApi</code> は自分のクラスですが、<code>HttpClient</code>（Ktor の型）を組み立てて渡す必要があるので、<code>@Provides</code> で書きました。「他人の型や、組み立てが要る型は <code>@Provides</code>、引数をそのまま受け取れる自分の型は <code>@Inject constructor</code>」と使い分けます。</p>
+          <p>まとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 51s</span></pre>
+</div>
+          <h4>生成された Factory を見る</h4>
+          <p><code>@Provides</code> と <code>@Inject constructor</code> から、Factory のクラスが生成されています。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rn &quot;preferencesDataStore(&quot; app/src/main</span><span class="terminal__line">app/src/main/java/com/handson/android01/di/DataModule.kt:25:internal val Context.settingsDataStore: DataStore&lt;Preferences&gt; by preferencesDataStore(name = &quot;settings&quot;)</span><span class="terminal__line"><span class="terminal__prompt">$</span> find app/build/generated/ksp/debug -name &#x27;DataModule_ProvideTodoApiFactory.java&#x27; -o -name &#x27;TodoRepository_Factory.java&#x27;</span><span class="terminal__line">app/build/generated/ksp/debug/java/com/handson/android01/di/DataModule_ProvideTodoApiFactory.java</span><span class="terminal__line">app/build/generated/ksp/debug/java/com/handson/android01/data/TodoRepository_Factory.java</span></pre>
+</div>
+          <p><code>TodoRepository_Factory</code> の <code>newInstance</code> は、受け取った 3 つの部品で <code>new TodoRepository(dao, api, settings)</code> を呼ぶだけです。<code>AppContainer</code> に手で書いていた組み立てと同じことを、Hilt が生成したコードが行います。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">生成された <code>TodoRepository_Factory.java</code> の全文を見る（任意）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Java</span>
+    <span class="code-block__filename">TodoRepository_Factory.java（生成されたコード）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-java">package com.handson.android01.data;
+
+import dagger.internal.DaggerGenerated;
+import dagger.internal.Factory;
+import dagger.internal.Provider;
+import dagger.internal.QualifierMetadata;
+import dagger.internal.ScopeMetadata;
+import javax.annotation.processing.Generated;
+
+@ScopeMetadata(&quot;javax.inject.Singleton&quot;)
+@QualifierMetadata
+@DaggerGenerated
+@Generated(
+    value = &quot;dagger.internal.codegen.ComponentProcessor&quot;,
+    comments = &quot;https://dagger.dev&quot;
+)
+@SuppressWarnings({
+    &quot;unchecked&quot;,
+    &quot;rawtypes&quot;,
+    &quot;KotlinInternal&quot;,
+    &quot;KotlinInternalInJava&quot;,
+    &quot;cast&quot;,
+    &quot;deprecation&quot;,
+    &quot;nullness:initialization.field.uninitialized&quot;
+})
+public final class TodoRepository_Factory implements Factory&lt;TodoRepository&gt; {
+  private final Provider&lt;TodoDao&gt; daoProvider;
+
+  private final Provider&lt;TodoApi&gt; apiProvider;
+
+  private final Provider&lt;SettingsRepository&gt; settingsProvider;
+
+  private TodoRepository_Factory(Provider&lt;TodoDao&gt; daoProvider, Provider&lt;TodoApi&gt; apiProvider,
+      Provider&lt;SettingsRepository&gt; settingsProvider) {
+    this.daoProvider = daoProvider;
+    this.apiProvider = apiProvider;
+    this.settingsProvider = settingsProvider;
+  }
+
+  @Override
+  public TodoRepository get() {
+    return newInstance(daoProvider.get(), apiProvider.get(), settingsProvider.get());
+  }
+
+  public static TodoRepository_Factory create(Provider&lt;TodoDao&gt; daoProvider,
+      Provider&lt;TodoApi&gt; apiProvider, Provider&lt;SettingsRepository&gt; settingsProvider) {
+    return new TodoRepository_Factory(daoProvider, apiProvider, settingsProvider);
+  }
+
+  public static TodoRepository newInstance(TodoDao dao, TodoApi api, SettingsRepository settings) {
+    return new TodoRepository(dao, api, settings);
+  }
+}</code></pre>
+</div>
+          <p><code>DataModule_ProvideTodoApiFactory.java</code> も同じ形で、<code>get()</code> が <code>DataModule.INSTANCE.provideTodoApi()</code> を呼びます。</p>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 76 件と UI テスト 66 件がすべて成功すれば OK です。<code>preferencesDataStore(</code> が <code>DataModule.kt</code> の 1 か所だけにあることも確かめます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">UI テストを Hilt のテスト用アプリで動かす</h3>
+        </div>
+        <div class="step__body">
+          <p>ステップ 4 で ViewModel を Hilt から受け取るようにすると、本物の <code>MainActivity</code> を起動する UI テストも Hilt のコンポーネントを使います。その準備として、UI テストを Hilt のテスト用アプリ（<code>HiltTestApplication</code>）で動かします。偽物への差し替えは、このステップではまだ <code>FakeTodoApiRule</code> のままです。</p>
+          <h4>テストランナーを替える</h4>
+          <p><code>app/build.gradle.kts</code> で、テストランナーを自分のクラスに替え、テスト用の依存を足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">          versionCode = 1</span><span class="diff-line">          versionName = &quot;1.0&quot;</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         testInstrumentationRunner = &quot;androidx.test.runner.AndroidJUnitRunner&quot;</span><span class="diff-line diff-line--add">+         testInstrumentationRunner = &quot;com.handson.android01.HiltTestRunner&quot;</span><span class="diff-line">  </span><span class="diff-line">          // AGP 8.0 以降は BuildConfig の生成が既定で無効（AGP 9 も同じ）。カタログの値を埋め込む</span><span class="diff-line">          buildConfigField(&quot;String&quot;, &quot;KOTLIN_VERSION&quot;, &quot;\&quot;${libs.versions.kotlin.get()}\&quot;&quot;)</span><span class="diff-line">  ...</span><span class="diff-line">      androidTestImplementation(libs.androidx.compose.ui.test.junit4)</span><span class="diff-line">      androidTestImplementation(libs.androidx.espresso.core)</span><span class="diff-line">      androidTestImplementation(libs.androidx.junit)</span><span class="diff-line diff-line--add">+     androidTestImplementation(libs.hilt.android.testing)</span><span class="diff-line">      androidTestImplementation(libs.ktor.client.mock)</span><span class="diff-line diff-line--add">+     kspAndroidTest(libs.hilt.android.compiler)</span><span class="diff-line">      debugImplementation(libs.androidx.compose.ui.test.manifest)</span><span class="diff-line">      debugImplementation(libs.androidx.compose.ui.tooling)</span><span class="diff-line">  }</span></pre>
+</div>
+          <p><code>app/src/androidTest/java/com/handson/android01/HiltTestRunner.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/HiltTestRunner.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01
+
+import android.app.Application
+import android.content.Context
+import androidx.test.runner.AndroidJUnitRunner
+import dagger.hilt.android.testing.HiltTestApplication
+
+// UI テストでは、TodoApplication の代わりに HiltTestApplication を起動する。
+// HiltTestApplication は、テストごとに Hilt のコンポーネントを作り直す（@HiltAndroidTest を付けたテストで有効）
+class HiltTestRunner : AndroidJUnitRunner() {
+    override fun newApplication(cl: ClassLoader?, className: String?, context: Context?): Application =
+        super.newApplication(cl, HiltTestApplication::class.java.name, context)
+}</code></pre>
+</div>
+          <p><code>newApplication</code> で、作るアプリのクラス名を <code>HiltTestApplication</code> に差し替えます。UI テストでは <code>TodoApplication</code> が作られないので、<code>AppContainer.init</code> も呼ばれません。今は <code>FakeTodoApiRule</code> が差し替えているので、本物の DB と DataStore のどちらにも触れません。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/FakeTodoApiRule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import org.junit.runner.Description</span><span class="diff-line">  </span><span class="diff-line">  // 実際の Activity（MainActivity）を起動するテスト用: アプリが使う TodoRepository と SettingsRepository を、本物の DB にも DataStore のファイルにもネットワークにも出ない（偽の DAO・偽のサーバー・偽の DataStore の）ものに差し替える。</span><span class="diff-line diff-line--add">+ // HiltTestApplication では TodoApplication が作られず、AppContainer.init は呼ばれない。ここで差し替えるので、DB にも DataStore にも触れない。</span><span class="diff-line">  // Activity を起動するルールより外側に置く（RuleChain.outerRule）。そうしないと、起動のあとに差し替えることになる</span><span class="diff-line">  class FakeTodoApiRule(val server: FakeTodoServer = FakeTodoServer(demoTodos(20))) : TestWatcher() {</span><span class="diff-line">  </span><span class="diff-line">  ...</span></pre>
+</div>
+          <h4>Activity を起動するテストに <code>@HiltAndroidTest</code> を付ける</h4>
+          <p>本物の <code>MainActivity</code> を起動する 3 クラスに、<code>@HiltAndroidTest</code> と <code>HiltAndroidRule</code> を足します。<code>MainActivityTest</code> は次のとおりです。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/MainActivityTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.onNodeWithText</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line">  import com.handson.android01.ui.screens.FakeTodoApiRule</span><span class="diff-line diff-line--add">+ import dagger.hilt.android.testing.HiltAndroidRule</span><span class="diff-line diff-line--add">+ import dagger.hilt.android.testing.HiltAndroidTest</span><span class="diff-line">  import org.junit.Rule</span><span class="diff-line">  import org.junit.rules.RuleChain</span><span class="diff-line">  import org.junit.Test</span><span class="diff-line">  import org.junit.runner.RunWith</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ @HiltAndroidTest</span><span class="diff-line">  @RunWith(AndroidJUnit4::class)</span><span class="diff-line">  class MainActivityTest {</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">      private val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()</span><span class="diff-line">  </span><span class="diff-line">      @get:Rule</span><span class="diff-line diff-line--remove">-     val rules: RuleChain = RuleChain.outerRule(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line diff-line--add">+     val rules: RuleChain = RuleChain.outerRule(HiltAndroidRule(this)).around(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun launchedActivity_showsTodoListScreen() {</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>HiltAndroidRule</code> は、<code>RuleChain</code> の一番外側に置きます。Activity の起動より前に、Hilt のコンポーネントを作るためです。</li>
+            <li><code>@RunWith(AndroidJUnit4::class)</code> は残します。</li>
+            <li>公式のガイドでは <code>@get:Rule(order = 0)</code> で順番を決めますが、この教材は 12 までの <code>RuleChain</code> の書き方に揃えました。</li>
+          </ul>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoNavigationRestorationTest.kt</code> と <code>TodoListViewModelRecreationTest.kt</code> の変更を見る（同じ変更）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/navigation/TodoNavigationRestorationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line">  import com.handson.android01.MainActivity</span><span class="diff-line">  import com.handson.android01.ui.screens.FakeTodoApiRule</span><span class="diff-line diff-line--add">+ import dagger.hilt.android.testing.HiltAndroidRule</span><span class="diff-line diff-line--add">+ import dagger.hilt.android.testing.HiltAndroidTest</span><span class="diff-line">  import org.junit.Rule</span><span class="diff-line">  import org.junit.rules.RuleChain</span><span class="diff-line">  import org.junit.Test</span><span class="diff-line">  import org.junit.runner.RunWith</span><span class="diff-line">  </span><span class="diff-line">  // 実際の Activity を作り直しても（画面回転と同じ）、開いている詳細画面が残ることを確かめる</span><span class="diff-line diff-line--add">+ @HiltAndroidTest</span><span class="diff-line">  @RunWith(AndroidJUnit4::class)</span><span class="diff-line">  class TodoNavigationRestorationTest {</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      // アプリが使う TodoApi を、起動の前に偽のサーバーへ差し替える（ネットワークに出ない）</span><span class="diff-line">      @get:Rule</span><span class="diff-line diff-line--remove">-     val rules: RuleChain = RuleChain.outerRule(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line diff-line--add">+     val rules: RuleChain = RuleChain.outerRule(HiltAndroidRule(this)).around(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun detailScreen_survivesActivityRecreation() {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListViewModelRecreationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.performClick</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line">  import com.handson.android01.MainActivity</span><span class="diff-line diff-line--add">+ import dagger.hilt.android.testing.HiltAndroidRule</span><span class="diff-line diff-line--add">+ import dagger.hilt.android.testing.HiltAndroidTest</span><span class="diff-line">  import org.junit.Rule</span><span class="diff-line">  import org.junit.rules.RuleChain</span><span class="diff-line">  import org.junit.Test</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  // Activity を実際に作り直して（画面回転と同じ）、ViewModel の状態が残ることを確かめる。</span><span class="diff-line">  // StateRestorationTester は Activity を作り直さないので、ViewModel のテストには向かない</span><span class="diff-line diff-line--add">+ @HiltAndroidTest</span><span class="diff-line">  @RunWith(AndroidJUnit4::class)</span><span class="diff-line">  class TodoListViewModelRecreationTest {</span><span class="diff-line">  </span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      // アプリが使う TodoApi を、起動の前に偽のサーバーへ差し替える（ネットワークに出ない）</span><span class="diff-line">      @get:Rule</span><span class="diff-line diff-line--remove">-     val rules: RuleChain = RuleChain.outerRule(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line diff-line--add">+     val rules: RuleChain = RuleChain.outerRule(HiltAndroidRule(this)).around(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun toggles_surviveActivityRecreation() {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>まとめて実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 55s</span></pre>
+</div>
+          <p><code>createComposeRule()</code> を使う 62 件も含めて、66 件すべてが <code>HiltTestApplication</code> の下で通りました。62 件は Hilt のコンポーネントを使わないので、テスト用アプリが替わっても影響を受けません。</p>
+          <p>テストランナーが替わったことは、端末に入ったテストのアプリで確かめられます。<code>connectedDebugAndroidTest</code> はテストの後にアプリをアンインストールするので、先にインストールしておきます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug installDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 3s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm list instrumentation</span><span class="terminal__line">instrumentation:com.handson.android01.test/com.handson.android01.HiltTestRunner (target=com.handson.android01)</span></pre>
+</div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: テストランナーを替え忘れると</summary>
+            <div class="disclosure__body">
+          <p>この実験は任意です。読むだけでもかまいません。筆者は <code>testInstrumentationRunner</code> を <code>androidx.test.runner.AndroidJUnitRunner</code> に戻しました。そのうえで、<code>MainActivityTest</code> だけを実行しました（1 回の実測）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.handson.android01.MainActivityTest</span><span class="terminal__line">&gt; Task :app:connectedDebugAndroidTest FAILED</span><span class="terminal__line">&gt; There were failing tests. See the report at: file:///.../app/build/reports/androidTests/connected/debug/index.html</span><span class="terminal__line">BUILD FAILED in 3s</span></pre>
+</div>
+          <p>テストの結果（<code>TEST-*.xml</code>）には、次の例外が記録されていました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">TEST-*.xml の failure（冒頭）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">java.lang.IllegalStateException: Hilt test, com.handson.android01.MainActivityTest, cannot use a @HiltAndroidApp application but found com.handson.android01.TodoApplication. To fix, configure the test to use HiltTestApplication or a custom Hilt test application generated with @CustomTestApplication.
+	at dagger.hilt.internal.Preconditions.checkState(Preconditions.java:83)
+	at dagger.hilt.android.internal.testing.MarkThatRulesRanRule.&lt;init&gt;(MarkThatRulesRanRule.java:63)
+	at dagger.hilt.android.testing.HiltAndroidRule.&lt;init&gt;(HiltAndroidRule.java:36)
+	at com.handson.android01.MainActivityTest.&lt;init&gt;(MainActivityTest.kt:25)</code></pre>
+</div>
+          <p><code>HiltAndroidRule</code> を作った時点で、「Hilt のテストは <code>@HiltAndroidApp</code> のアプリ（<code>TodoApplication</code>）では動かせない」と止まります。<code>testInstrumentationRunner</code> の書き換えを忘れたときは、このメッセージが目印です。実験の変更は元に戻してください。</p>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 76 件と UI テスト 66 件がすべて成功すれば OK です。<code>pm list instrumentation</code> に <code>HiltTestRunner</code> が出ることも確かめます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">ViewModel を Hilt から受け取り、AppContainer を消す</h3>
+        </div>
+        <div class="step__body">
+          <p>ViewModel を Hilt から受け取るようにして、<code>AppContainer</code> を消します。UI テストの偽物も、<code>FakeTodoApiRule</code> から偽の module に移します。変更するファイルが多いので、ビルドはステップの最後にまとめて行います。</p>
+          <h4>ViewModel を <code>@HiltViewModel</code> にする</h4>
+          <p><code>hiltViewModel()</code> のライブラリを足します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/build.gradle.kts</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">      implementation(libs.androidx.compose.ui.tooling.preview)</span><span class="diff-line">      implementation(libs.androidx.core.ktx)</span><span class="diff-line">      implementation(libs.androidx.datastore.preferences)</span><span class="diff-line diff-line--add">+     implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.runtime.compose)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.runtime.ktx)</span><span class="diff-line">      implementation(libs.androidx.lifecycle.viewmodel.compose)</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>TodoListViewModel</code> に <code>@HiltViewModel</code> と <code>@Inject constructor</code> を付け、<code>AppContainer</code> から受け取っていた 2 次コンストラクタを消します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListViewModel.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import androidx.lifecycle.ViewModel</span><span class="diff-line">  import androidx.lifecycle.viewModelScope</span><span class="diff-line diff-line--remove">- import com.handson.android01.data.AppContainer</span><span class="diff-line">  import com.handson.android01.data.SettingsRepository</span><span class="diff-line">  import com.handson.android01.data.TodoRepository</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line diff-line--add">+ import dagger.hilt.android.lifecycle.HiltViewModel</span><span class="diff-line">  import io.ktor.client.call.NoTransformationFoundException</span><span class="diff-line">  import io.ktor.client.network.sockets.ConnectTimeoutException</span><span class="diff-line">  import io.ktor.client.network.sockets.SocketTimeoutException</span><span class="diff-line">  ...</span><span class="diff-line">  import kotlinx.coroutines.launch</span><span class="diff-line">  import kotlinx.serialization.SerializationException</span><span class="diff-line">  import java.io.IOException</span><span class="diff-line diff-line--add">+ import javax.inject.Inject</span><span class="diff-line">  </span><span class="diff-line">  // 画面状態を持つ ViewModel。画面回転（Activity の作り直し）では破棄されず、同じインスタンスが使われ続ける。</span><span class="diff-line diff-line--remove">- class TodoListViewModel(</span><span class="diff-line diff-line--remove">-     // Todo の保存先と取得元。テストでは、偽の DAO と、通信しない MockEngine 入りの TodoApi をつないだものを渡す</span><span class="diff-line diff-line--add">+ // @HiltViewModel + @Inject constructor: Hilt が、引数の TodoRepository と SettingsRepository を組み立てて渡す</span><span class="diff-line diff-line--add">+ @HiltViewModel</span><span class="diff-line diff-line--add">+ class TodoListViewModel @Inject constructor(</span><span class="diff-line diff-line--add">+     // Todo の保存先と取得元。Hilt が DataModule と @Inject constructor から組み立てて渡す。単体テストでは自分で渡す（偽の DAO と、通信しない MockEngine 入りの TodoApi をつないだもの）</span><span class="diff-line">      private val repository: TodoRepository,</span><span class="diff-line">      // 絞り込みの保存先（DataStore）。アプリを終了しても残る。テストでは、メモリ上の偽の DataStore をつないだものを渡す</span><span class="diff-line">      private val settings: SettingsRepository,</span><span class="diff-line">  ) : ViewModel() {</span><span class="diff-line diff-line--remove">- </span><span class="diff-line diff-line--remove">-     // viewModel() の既定のファクトリは、引数なしのコンストラクタを探して呼ぶ。</span><span class="diff-line diff-line--remove">-     // そのため、アプリでは TodoRepository と SettingsRepository を AppContainer（手書きの置き場所）から受け取る</span><span class="diff-line diff-line--remove">-     constructor() : this(AppContainer.todoRepository, AppContainer.settingsRepository)</span><span class="diff-line">  </span><span class="diff-line">      // 読み込み中かどうかと失敗の文言。DB には入らない画面だけの状態なので、ViewModel のメモリだけに持つ（復元しない）</span><span class="diff-line">      private data class LoadState(val isLoading: Boolean = true, val errorMessage: String? = null)</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      // 「取得済み」の印が無いときだけ API から取得して保存し、成功なら読み込み済みにして、失敗なら失敗の状態にする。</span><span class="diff-line">      // viewModelScope: ViewModel が破棄される（onCleared）ときに、中の処理もまとめてキャンセルされるスコープ。</span><span class="diff-line diff-line--remove">-     // 既定のディスパッチャーは Dispatchers.Main.immediate。DB の処理は Room が（AppContainer で指定した）IO のスレッドで、</span><span class="diff-line diff-line--add">+     // 既定のディスパッチャーは Dispatchers.Main.immediate。DB の処理は Room が（DataModule で指定した）IO のスレッドで、</span><span class="diff-line">      // 通信は Ktor のエンジンが別のスレッドで行うので、withContext は要らない</span><span class="diff-line">      private fun load() {</span><span class="diff-line">          viewModelScope.launch {</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p>画面の既定引数を <code>viewModel()</code> から <code>hiltViewModel()</code> に替えます。import のパッケージは <code>androidx.hilt.lifecycle.viewmodel.compose</code> です。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/navigation/TodoApp.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import androidx.compose.runtime.Composable</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line diff-line--remove">- import androidx.lifecycle.viewmodel.compose.viewModel</span><span class="diff-line diff-line--add">+ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel</span><span class="diff-line">  import androidx.navigation3.runtime.entryProvider</span><span class="diff-line">  import androidx.navigation3.runtime.rememberNavBackStack</span><span class="diff-line">  import androidx.navigation3.ui.NavDisplay</span><span class="diff-line">  ...</span><span class="diff-line">  fun TodoApp(</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line">      // NavDisplay の外（Activity が持ち主の ViewModelStoreOwner）で作るので、一覧と詳細で同じインスタンスを使える</span><span class="diff-line diff-line--remove">-     viewModel: TodoListViewModel = viewModel(),</span><span class="diff-line diff-line--add">+     viewModel: TodoListViewModel = hiltViewModel(),</span><span class="diff-line">  ) {</span><span class="diff-line">      // rememberNavBackStack: remember と同じ使い方で、画面回転とプロセスの再生成のあとも中身が戻るバックスタックを作る。</span><span class="diff-line">      // 返るのは NavBackStack&lt;NavKey&gt;（MutableList なので、add と removeLastOrNull はこれまでどおり）</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListPage.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.runtime.setValue</span><span class="diff-line">  import androidx.compose.runtime.saveable.rememberSaveable</span><span class="diff-line">  import androidx.compose.ui.Modifier</span><span class="diff-line diff-line--add">+ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel</span><span class="diff-line">  import androidx.lifecycle.compose.collectAsStateWithLifecycle</span><span class="diff-line diff-line--remove">- import androidx.lifecycle.viewmodel.compose.viewModel</span><span class="diff-line">  import kotlinx.coroutines.launch</span><span class="diff-line">  </span><span class="diff-line">  // stateful（状態を持つ）な画面。Todo の一覧と絞り込みは ViewModel が持ち、ここは購読して画面に渡す。</span><span class="diff-line">  ...</span><span class="diff-line">  @Composable</span><span class="diff-line">  fun TodoListPage(</span><span class="diff-line">      modifier: Modifier = Modifier,</span><span class="diff-line diff-line--remove">-     viewModel: TodoListViewModel = viewModel(),</span><span class="diff-line diff-line--add">+     viewModel: TodoListViewModel = hiltViewModel(),</span><span class="diff-line">      // 行のタイトルが押されたときに呼ばれる。どこへ進むかは、呼び出し側（画面遷移）が決める</span><span class="diff-line">      onOpenDetail: (id: Int) -&gt; Unit = {},</span><span class="diff-line">  ) {</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li><code>hiltViewModel()</code> は、既定では <code>LocalViewModelStoreOwner</code> から ViewModel を取り出します。<code>TodoApp</code> は <code>NavDisplay</code> の外にあるので、持ち主は Activity です。</li>
+            <li>12 までと同じく、<code>TodoApp</code> が作った 1 つの ViewModel を一覧と詳細の両方に渡します。詳細で完了にした Todo が、戻った一覧にも反映されます（この後、アプリで確かめます）。</li>
+            <li><code>TodoListViewModel</code> の引数（<code>TodoRepository</code>・<code>SettingsRepository</code>）は、Hilt が <code>DataModule</code> と <code>@Inject constructor</code> から組み立てて渡します。単体テストでは、これまでどおり自分で渡します。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>viewModel()</code> のままでも動くが、<code>hiltViewModel()</code> を使う</p>
+              <p><code>@HiltViewModel</code> の ViewModel は、<code>viewModel()</code>（<code>androidx.lifecycle.viewmodel.compose</code>）で取っても動きます。<code>@AndroidEntryPoint</code> の Activity の中なら、Hilt の作り方が使われるためです。ただし、公式の書き方は <code>hiltViewModel()</code> です。Hilt から受け取っていることがコードから読み取れるので、この教材も <code>hiltViewModel()</code> にしました。</p>
+            </div>
+          </div>
+          <h4><code>AppContainer</code> を消す</h4>
+          <p><code>AppContainer</code> を使う場所は無くなったので、ファイルを削除します。プロジェクトのディレクトリ（<code>android/13-hilt</code>）で実行します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm app/src/main/java/com/handson/android01/data/AppContainer.kt</span></pre>
+</div>
+          <p><code>TodoApplication</code> は、<code>AppContainer.init</code> を呼ぶ必要が無くなり、中身が空になります。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/TodoApplication.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01</span><span class="diff-line">  </span><span class="diff-line">  import android.app.Application</span><span class="diff-line diff-line--remove">- import com.handson.android01.data.AppContainer</span><span class="diff-line">  import dagger.hilt.android.HiltAndroidApp</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // Hilt の入口。この注釈を付けると、アプリ全体の部品の置き場所（コンポーネント）がここで作られる。</span><span class="diff-line diff-line--remove">- // DB を作るには Context が要るので、AppContainer への受け渡しは、まだここで行う（ステップ 4 で Hilt に置き換える）</span><span class="diff-line diff-line--add">+ // Hilt の入口。この注釈を付けると、アプリ全体の部品の置き場所（コンポーネント）がここで作られる</span><span class="diff-line">  @HiltAndroidApp</span><span class="diff-line diff-line--remove">- class TodoApplication : Application() {</span><span class="diff-line diff-line--remove">-     override fun onCreate() {</span><span class="diff-line diff-line--remove">-         super.onCreate()</span><span class="diff-line diff-line--remove">-         AppContainer.init(this)</span><span class="diff-line diff-line--remove">-     }</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ class TodoApplication : Application()</span></pre>
+</div>
+          <p><code>DataModule.kt</code> の委譲は、<code>AppContainer</code> から使われなくなったので <code>private</code> に戻し、コメントから <code>AppContainer</code> への言及を消します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/di/DataModule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  // DataStore は、ファイル（datastore/settings.preferences_pb）ごとに、アプリで 1 つだけ作る。</span><span class="diff-line">  // preferencesDataStore のプロパティ委譲は、トップレベルに 1 回だけ書く（クラスの中に書くと、インスタンスのたびに別の DataStore が作られる）。</span><span class="diff-line diff-line--remove">- // AppContainer も使うので private にしない（internal）</span><span class="diff-line diff-line--remove">- internal val Context.settingsDataStore: DataStore&lt;Preferences&gt; by preferencesDataStore(name = &quot;settings&quot;)</span><span class="diff-line diff-line--add">+ private val Context.settingsDataStore: DataStore&lt;Preferences&gt; by preferencesDataStore(name = &quot;settings&quot;)</span><span class="diff-line">  </span><span class="diff-line">  // 自分で `@Inject constructor` を書けない、または組み立てが要る型（Room・Ktor・DataStore は他人の型。TodoApi は HttpClient を組み立てて渡す）の作り方を Hilt に教える module。</span><span class="diff-line diff-line--remove">- // SingletonComponent に入れるので、ここで作る部品はアプリ全体で使える。AppContainer の lazy と 1 対 1 で対応する</span><span class="diff-line diff-line--add">+ // SingletonComponent に入れるので、ここで作る部品はアプリ全体で使える</span><span class="diff-line">  @Module</span><span class="diff-line">  @InstallIn(SingletonComponent::class)</span><span class="diff-line">  object DataModule {</span><span class="diff-line">  ...</span></pre>
+</div>
+          <h4>UI テストの偽物を module で差し込む</h4>
+          <p><code>app/src/androidTest/java/com/handson/android01/di/FakeDataModule.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/di/FakeDataModule.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.di
+
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import com.handson.android01.data.TodoApi
+import com.handson.android01.data.TodoDao
+import com.handson.android01.ui.screens.FakeDataStore
+import com.handson.android01.ui.screens.FakeTodoDao
+import com.handson.android01.ui.screens.FakeTodoServer
+import com.handson.android01.ui.screens.demoTodos
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.components.SingletonComponent
+import dagger.hilt.testing.TestInstallIn
+import javax.inject.Singleton
+
+// androidTest のすべての @HiltAndroidTest で、DataModule の代わりにこの module が使われる。
+// 本物の DB にも DataStore のファイルにもネットワークにも出ない。AppDatabase は提供しない（TodoDao を直接、偽物にするので作られない）。
+// HiltTestApplication はテストごとにコンポーネントを作り直すので、@Singleton の偽物もテストごとに新しくなる
+@Module
+@TestInstallIn(components = [SingletonComponent::class], replaces = [DataModule::class])
+object FakeDataModule {
+
+    @Provides
+    @Singleton
+    fun provideTodoDao(): TodoDao = FakeTodoDao()
+
+    @Provides
+    @Singleton
+    fun provideTodoApi(): TodoApi = FakeTodoServer(demoTodos(20)).api
+
+    @Provides
+    @Singleton
+    fun provideSettingsDataStore(): DataStore&lt;Preferences&gt; = FakeDataStore()
+}</code></pre>
+</div>
+          <ul>
+            <li><code>@TestInstallIn(components = [SingletonComponent::class], replaces = [DataModule::class])</code> で、androidTest のすべての <code>@HiltAndroidTest</code> のテストで、<code>DataModule</code> の代わりにこの module が使われます。</li>
+            <li>偽物は 12 までと同じ <code>FakeTodoDao</code>・<code>FakeTodoServer</code>・<code>FakeDataStore</code> です。<code>TodoRepository</code> と <code>SettingsRepository</code> は本物（<code>@Inject constructor</code>）がそのまま使われ、偽物の部品を受け取ります。</li>
+            <li><code>AppDatabase</code> は提供しません。<code>TodoDao</code> を直接偽物にしたので、DB を作る必要がありません。</li>
+            <li><code>HiltTestApplication</code> はテストごとにコンポーネントを作り直すので、<code>@Singleton</code> の偽物もテストごとに新しくなります。<code>FakeTodoApiRule</code> がテストの開始ごとに作り直していたのと同じ動きです。</li>
+          </ul>
+          <p><code>FakeTodoApiRule</code> は要らなくなったので削除します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> rm app/src/androidTest/java/com/handson/android01/ui/screens/FakeTodoApiRule.kt</span></pre>
+</div>
+          <p>3 つのテストから <code>FakeTodoApiRule</code> を外します。<code>MainActivityTest</code> は次のとおりです。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/MainActivityTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule</span><span class="diff-line">  import androidx.compose.ui.test.onNodeWithText</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line diff-line--remove">- import com.handson.android01.ui.screens.FakeTodoApiRule</span><span class="diff-line">  import dagger.hilt.android.testing.HiltAndroidRule</span><span class="diff-line">  import dagger.hilt.android.testing.HiltAndroidTest</span><span class="diff-line">  import org.junit.Rule</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      // createAndroidComposeRule&lt;MainActivity&gt;(): 実際の Activity を起動してテストする。</span><span class="diff-line">      // createComposeRule() と違い、setContent は使わず、アプリ本来の画面をそのまま確かめる</span><span class="diff-line diff-line--remove">-     // アプリが使う TodoApi を、起動の前に偽のサーバーへ差し替える（ネットワークに出ない）</span><span class="diff-line">      private val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+     // HiltAndroidRule は一番外側に置く（Activity の起動より前に、Hilt のコンポーネントを作るため）。偽物への差し替えは FakeDataModule が行う（全テストに効く）</span><span class="diff-line">      @get:Rule</span><span class="diff-line diff-line--remove">-     val rules: RuleChain = RuleChain.outerRule(HiltAndroidRule(this)).around(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line diff-line--add">+     val rules: RuleChain = RuleChain.outerRule(HiltAndroidRule(this)).around(composeTestRule)</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun launchedActivity_showsTodoListScreen() {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary"><code>TodoNavigationRestorationTest.kt</code> と <code>TodoListViewModelRecreationTest.kt</code> の変更を見る（同じ変更）</summary>
+            <div class="disclosure__body">
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/navigation/TodoNavigationRestorationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.performClick</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line">  import com.handson.android01.MainActivity</span><span class="diff-line diff-line--remove">- import com.handson.android01.ui.screens.FakeTodoApiRule</span><span class="diff-line">  import dagger.hilt.android.testing.HiltAndroidRule</span><span class="diff-line">  import dagger.hilt.android.testing.HiltAndroidTest</span><span class="diff-line">  import org.junit.Rule</span><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      private val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // アプリが使う TodoApi を、起動の前に偽のサーバーへ差し替える（ネットワークに出ない）</span><span class="diff-line diff-line--add">+     // HiltAndroidRule は一番外側に置く（Activity の起動より前に、Hilt のコンポーネントを作るため）。偽物への差し替えは FakeDataModule が行う（全テストに効く）</span><span class="diff-line">      @get:Rule</span><span class="diff-line diff-line--remove">-     val rules: RuleChain = RuleChain.outerRule(HiltAndroidRule(this)).around(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line diff-line--add">+     val rules: RuleChain = RuleChain.outerRule(HiltAndroidRule(this)).around(composeTestRule)</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun detailScreen_survivesActivityRecreation() {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoListViewModelRecreationTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">      private val composeTestRule = createAndroidComposeRule&lt;MainActivity&gt;()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-     // アプリが使う TodoApi を、起動の前に偽のサーバーへ差し替える（ネットワークに出ない）</span><span class="diff-line diff-line--add">+     // HiltAndroidRule は一番外側に置く（Activity の起動より前に、Hilt のコンポーネントを作るため）。偽物への差し替えは FakeDataModule が行う（全テストに効く）</span><span class="diff-line">      @get:Rule</span><span class="diff-line diff-line--remove">-     val rules: RuleChain = RuleChain.outerRule(HiltAndroidRule(this)).around(FakeTodoApiRule()).around(composeTestRule)</span><span class="diff-line diff-line--add">+     val rules: RuleChain = RuleChain.outerRule(HiltAndroidRule(this)).around(composeTestRule)</span><span class="diff-line">  </span><span class="diff-line">      @Test</span><span class="diff-line">      fun toggles_surviveActivityRecreation() {</span><span class="diff-line">  ...</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>まとめて実行し、<code>AppContainer</code> と <code>viewModel()</code> が残っていないことを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2m</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rn &quot;AppContainer\|FakeTodoApiRule\|Override&quot; app/src | wc -l</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rn &quot;viewModel()&quot; app/src/main | wc -l</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rn &quot;hiltViewModel()&quot; app/src/main | wc -l</span><span class="terminal__line">2</span><span class="terminal__line"><span class="terminal__prompt">$</span> find app/build/generated/ksp/debug -name &#x27;TodoListViewModel_HiltModules.java&#x27;</span><span class="terminal__line">app/build/generated/ksp/debug/java/com/handson/android01/ui/screens/TodoListViewModel_HiltModules.java</span></pre>
+</div>
+          <p><code>TodoListViewModelRecreationTest</code> は、<code>recreate()</code> で Activity を作り直しても状態が残ることを確かめるテストです。構成変更による作り直しでは、ViewModel を入れておく ViewModelStore（Hilt でいえば <code>ActivityRetainedComponent</code>）が残ります。そのため ViewModel は残り、アプリ全体のコンポーネントにある偽物も残って、2 件とも通りました。</p>
+          <h4>アプリで確かめる</h4>
+          <p>アプリを入れ、データを消してから起動します（機内モードではなく、実際のネットワークを使います）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew installDebug</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 2s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell pm clear com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p>筆者の環境では、次のとおりに動きました。</p>
+
+          <table>
+            <thead>
+            <tr><th>操作</th><th>画面</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>起動する</td><td><code>20 件中 11 件完了</code> の一覧が出る</td></tr>
+            <tr><td>「未完了」のチップを押す</td><td>未完了の Todo だけになる（先頭は Delectus Aut Autem）</td></tr>
+            <tr><td>先頭の行を押して詳細を開き、チェックボックスで完了にする</td><td>詳細（Delectus Aut Autem）が完了になる</td></tr>
+            <tr><td>戻る</td><td>一覧のサマリーが <code>20 件中 12 件完了</code> に変わる</td></tr>
+            <tr><td><code>adb shell am force-stop com.handson.android01</code> の後に起動する</td><td>絞り込みは「未完了」のまま。先頭は Quis Ut Nam Facilis Et Officia Qui に変わる</td></tr>
+            </tbody>
+          </table>
+          <p>詳細での変更が一覧に反映されるので、一覧と詳細は同じ ViewModel を使っています。絞り込みは、12 と同じく DataStore から戻りました。</p>
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: 部品の作り方が足りないと、ビルドで分かる</summary>
+            <div class="disclosure__body">
+          <p>この実験は任意です。読むだけでもかまいません。Hilt の組み立ては、ビルドのときに確かめられます。筆者は、<code>DataModule</code> の <code>provideTodoApi</code> を注釈ごとコメントアウトしました。そのうえで <code>./gradlew assembleDebug</code> を実行しました（1 回の実測。実験の後は元に戻しています）。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">ビルドの出力（抜粋）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">&gt; Task :app:hiltJavaCompileDebug FAILED
+/Users/kazuki/Work/handson/android/13-hilt/app/build/generated/hilt/component_sources/debug/com/handson/android01/TodoApplication_HiltComponents.java:138: error: [Dagger/MissingBinding] com.handson.android01.data.TodoApi cannot be provided without an @Inject constructor or an @Provides-annotated method.
+  public abstract static class SingletonC implements TodoApplication_GeneratedInjector,
+                         ^
+
+      com.handson.android01.data.TodoApi is injected at
+          [com.handson.android01.TodoApplication_HiltComponents.SingletonC] com.handson.android01.data.TodoRepository(…, api, …)
+      com.handson.android01.data.TodoRepository is injected at
+          [com.handson.android01.TodoApplication_HiltComponents.ViewModelC] com.handson.android01.ui.screens.TodoListViewModel(repository, …)
+      com.handson.android01.ui.screens.TodoListViewModel is injected at
+          [com.handson.android01.TodoApplication_HiltComponents.ViewModelC] com.handson.android01.ui.screens.TodoListViewModel_HiltModules.BindsModule.binds(arg0)
+      @dagger.hilt.android.internal.lifecycle.HiltViewModelMap java.util.Map&lt;java.lang.Class&lt;?&gt;,javax.inject.Provider&lt;androidx.lifecycle.ViewModel&gt;&gt; is requested at
+          [com.handson.android01.TodoApplication_HiltComponents.ViewModelC] dagger.hilt.android.internal.lifecycle.HiltViewModelFactory.ViewModelFactoriesEntryPoint.getHiltViewModelMap() [com.handson.android01.TodoApplication_HiltComponents.SingletonC → com.handson.android01.TodoApplication_HiltComponents.ActivityRetainedC → com.handson.android01.TodoApplication_HiltComponents.ViewModelC]
+1 error</code></pre>
+</div>
+          <ul>
+            <li>1 行目の <code>[Dagger/MissingBinding]</code> がエラーの種類で、<code>TodoApi</code> の作り方（<code>@Inject constructor</code> も <code>@Provides</code> も）が無いと言っています。</li>
+            <li>その下の経路は<strong>下から上へ</strong>読みます。一番下が「ViewModel の一覧を求めた」入口で、<code>TodoListViewModel</code> → <code>TodoRepository(…, api, …)</code> → <code>TodoApi</code> と、上へ行くほど足りない部品に近づきます。</li>
+            <li>一番上の <code>TodoApi is injected at ... TodoRepository(…, api, …)</code> が、「<code>TodoRepository</code> の引数 <code>api</code> が <code>TodoApi</code> を欲しがっているのに、作り方が無い」という意味です。</li>
+            <li>失敗したのは KSP のタスクではなく <code>hiltJavaCompileDebug</code> でした。部品の過不足は、KSP の後の Java のコンパイルで確かめられます。筆者の出力では、同じエラーが 2 回出ました。</li>
+          </ul>
+
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@Inject constructor</code> のある型に <code>@Provides</code> を足すと</p>
+              <p>筆者は、<code>DataModule</code> に <code>@Provides fun provideTodoRepository(...)</code> を足してみました（1 回の実測）。<code>TodoRepository</code> には <code>@Inject constructor</code> がある状態です。エラーにはならず、ビルドは成功し、<code>@Provides</code> のほうが使われました。<code>@Inject constructor</code> は、ほかに作り方が無いときに使われます。この場合、クラスに付けた <code>@Singleton</code> も効かなくなるので注意します。</p>
+              <p>同じ型の <code>@Provides</code> を 2 つ書くと、ビルドは失敗しました。<code>provideTodoApi</code> と <code>provideTodoApi2</code> を書いた場合は、次のエラーに続けて、2 つの関数が並んで表示されました。</p>
+              <p><code>[Dagger/DuplicateBindings] com.handson.android01.data.TodoApi is bound multiple times:</code></p>
+            </div>
+          </div>
+
+            </div>
+          </details>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">任意の実験: 注釈を忘れると、起動したときに落ちる</summary>
+            <div class="disclosure__body">
+          <p>この実験は任意です。読むだけでもかまいません。部品の過不足と違い、<code>@AndroidEntryPoint</code> と <code>@HiltAndroidApp</code> を付け忘れても、ビルドは通りました。筆者は、<code>MainActivity</code> の <code>@AndroidEntryPoint</code>（と import）を外して <code>installDebug</code> し、起動しました（1 回の実測）。起動した直後に、次のとおりに落ちました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">adb logcat -d -b crash（冒頭）</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">--------- beginning of crash
+10-04 11:14:38.885  6547  6547 E AndroidRuntime: FATAL EXCEPTION: main
+10-04 11:14:38.885  6547  6547 E AndroidRuntime: Process: com.handson.android01, PID: 6547
+10-04 11:14:38.885  6547  6547 E AndroidRuntime: java.lang.IllegalStateException: Given component holder class com.handson.android01.MainActivity does not implement interface dagger.hilt.internal.GeneratedComponent or interface dagger.hilt.internal.GeneratedComponentManager
+10-04 11:14:38.885  6547  6547 E AndroidRuntime: 	at dagger.hilt.EntryPoints.get(EntryPoints.java:62)
+10-04 11:14:38.885  6547  6547 E AndroidRuntime: 	at dagger.hilt.android.internal.lifecycle.HiltViewModelFactory.createInternal(HiltViewModelFactory.java:207)
+10-04 11:14:38.885  6547  6547 E AndroidRuntime: 	at androidx.hilt.lifecycle.viewmodel.HiltViewModelFactory.create(HiltViewModelFactory.kt:57)
+10-04 11:14:38.885  6547  6547 E AndroidRuntime: 	at androidx.hilt.lifecycle.viewmodel.compose.HiltViewModelKt.rememberHiltViewModelFactory(HiltViewModel.kt:99)
+10-04 11:14:38.885  6547  6547 E AndroidRuntime: 	at com.handson.android01.ui.navigation.TodoAppKt.TodoApp(TodoApp.kt:55)
+10-04 11:14:38.885  6547  6547 E AndroidRuntime: 	at com.handson.android01.ComposableSingletons$MainActivityKt.lambda_1647446001$lambda$0(MainActivity.kt:19)
+（中略）</code></pre>
+</div>
+          <p><code>hiltViewModel()</code> が ViewModel の作り方（ファクトリ）を用意するところで、「<code>MainActivity</code> は Hilt のコンポーネントを持っていない」と落ちています。<code>TodoApp.kt</code> に 55 行目はありません。インライン関数の <code>hiltViewModel()</code> が展開された先（<code>hiltViewModel()</code> の中）を指しています。呼び出しているのは、19 行目の既定引数です。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@HiltAndroidApp</code> を忘れたとき</p>
+              <p>筆者は、<code>TodoApplication</code> の <code>@HiltAndroidApp</code> を外して試しました（1 回の実測）。こちらもビルドは通り、起動したときに次の例外で落ちました。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">例外のメッセージ</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">java.lang.IllegalStateException: Hilt Activity must be attached to an @HiltAndroidApp Application. Found: class com.handson.android01.TodoApplication</code></pre>
+</div>
+              <p>どちらの注釈も、忘れるとビルドでは気づけません。起動して落ちたら、2 つの注釈を確かめます。</p>
+            </div>
+          </div>
+
+            </div>
+          </details>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 76 件と UI テスト 66 件がすべて成功すれば OK です。<code>AppContainer</code> と <code>viewModel()</code> が残っていないこと、詳細での変更が一覧に反映されること、強制終了の後も絞り込みが残ることも確かめます。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">TodoFilter を data に移す</h3>
+        </div>
+        <div class="step__body">
+          <p>最後に、12 の終わりで予告した依存の向きを直します。<code>data</code> のパッケージの <code>SettingsRepository</code> が、画面側の <code>ui.screens.TodoFilter</code> を import しています。enum を <code>data</code> に移し、表示名だけを画面側に残します。</p>
+          <p><code>app/src/main/java/com/handson/android01/data/TodoFilter.kt</code> を作ります。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Kotlin</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/TodoFilter.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-kotlin">package com.handson.android01.data
+
+// 一覧の絞り込み。
+// name は DataStore に保存する値なので、名前を変えない。表示名は画面側（ui.screens）で決める
+enum class TodoFilter {
+    All,
+    Active,
+    Done,
+}</code></pre>
+</div>
+          <p>画面側の <code>ui/screens/TodoFilter.kt</code> から enum の定義を消し、表示名を拡張プロパティ <code>label</code> にします。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoFilter.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoFilter</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">- // 一覧の絞り込み。enum は Serializable なので、rememberSaveable にそのまま入れられる</span><span class="diff-line diff-line--remove">- enum class TodoFilter(val label: String) {</span><span class="diff-line diff-line--remove">-     All(&quot;すべて&quot;),</span><span class="diff-line diff-line--remove">-     Active(&quot;未完了&quot;),</span><span class="diff-line diff-line--remove">-     Done(&quot;完了&quot;),</span><span class="diff-line diff-line--remove">- }</span><span class="diff-line diff-line--add">+ // 絞り込みのチップに出す表示名</span><span class="diff-line diff-line--add">+ val TodoFilter.label: String</span><span class="diff-line diff-line--add">+     get() = when (this) {</span><span class="diff-line diff-line--add">+         TodoFilter.All -&gt; &quot;すべて&quot;</span><span class="diff-line diff-line--add">+         TodoFilter.Active -&gt; &quot;未完了&quot;</span><span class="diff-line diff-line--add">+         TodoFilter.Done -&gt; &quot;完了&quot;</span><span class="diff-line diff-line--add">+     }</span><span class="diff-line">  </span><span class="diff-line">  // 絞り込みの結果に、そのセクションの Todo が含まれるか</span><span class="diff-line">  fun TodoFilter.showsActive(): Boolean = this != TodoFilter.Done</span><span class="diff-line">  ...</span></pre>
+</div>
+          <ul>
+            <li>enum の <code>name</code>（<code>All</code>・<code>Active</code>・<code>Done</code>）は、12 から DataStore に保存している値です。名前を変えると、保存した絞り込みが読めなくなるので、変えません。</li>
+            <li>画面の文言（「すべて」など）は <code>data</code> に置かず、<code>ui.screens</code> の拡張プロパティにしました。<code>TodoListScreen.kt</code> の <code>option.label</code> は、同じパッケージの拡張プロパティに解決されるので、書き換えは要りません。</li>
+          </ul>
+          <p><code>SettingsRepository</code> は <code>TodoFilter</code> と同じパッケージになるので、import を消します。</p>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/data/SettingsRepository.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.datastore.preferences.core.booleanPreferencesKey</span><span class="diff-line">  import androidx.datastore.preferences.core.edit</span><span class="diff-line">  import androidx.datastore.preferences.core.stringPreferencesKey</span><span class="diff-line diff-line--remove">- import com.handson.android01.ui.screens.TodoFilter</span><span class="diff-line">  import kotlinx.coroutines.flow.Flow</span><span class="diff-line">  import kotlinx.coroutines.flow.first</span><span class="diff-line">  import kotlinx.coroutines.flow.map</span><span class="diff-line">  ...</span></pre>
+</div>
+          <p><code>TodoFilter</code> を使う残りの 5 ファイルに、<code>import com.handson.android01.data.TodoFilter</code> を 1 行ずつ足します。<code>TodoFilterTest.kt</code> では、12 から残っていた古いコメントも直します（絞り込みは、今は DataStore に保存しています）。</p>
+
+          <details class="disclosure">
+            <summary class="disclosure__summary">import を足す 5 ファイルの変更を見る</summary>
+            <div class="disclosure__body">
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListScreen.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.platform.testTag</span><span class="diff-line">  import androidx.compose.ui.tooling.preview.Preview</span><span class="diff-line">  import androidx.compose.ui.unit.dp</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoFilter</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import com.handson.android01.ui.components.CountBadge</span><span class="diff-line">  import com.handson.android01.ui.components.TodoInput</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListUiState.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  package com.handson.android01.ui.screens</span><span class="diff-line">  </span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoFilter</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  </span><span class="diff-line">  // 一覧画面の「画面状態」。ViewModel が持ち、UI は読むだけ。</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/main/java/com/handson/android01/ui/screens/TodoListViewModel.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.lifecycle.ViewModel</span><span class="diff-line">  import androidx.lifecycle.viewModelScope</span><span class="diff-line">  import com.handson.android01.data.SettingsRepository</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoFilter</span><span class="diff-line">  import com.handson.android01.data.TodoRepository</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import dagger.hilt.android.lifecycle.HiltViewModel</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/test/java/com/handson/android01/ui/screens/TodoListViewModelTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  </span><span class="diff-line">  import androidx.lifecycle.viewModelScope</span><span class="diff-line">  import com.handson.android01.data.SettingsRepository</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoFilter</span><span class="diff-line">  import com.handson.android01.data.TodoRepository</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import io.ktor.http.HttpStatusCode</span><span class="diff-line">  ...</span></pre>
+</div>
+
+<div class="code-block code-block--diff">
+  <div class="code-block__header">
+    <span class="code-block__lang">Diff</span>
+    <span class="code-block__filename">app/src/androidTest/java/com/handson/android01/ui/screens/TodoFilterTest.kt</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><span class="diff-line">  ...</span><span class="diff-line">  import androidx.compose.ui.test.performClick</span><span class="diff-line">  import androidx.compose.ui.test.performScrollToIndex</span><span class="diff-line">  import androidx.test.ext.junit.runners.AndroidJUnit4</span><span class="diff-line diff-line--add">+ import com.handson.android01.data.TodoFilter</span><span class="diff-line">  import com.handson.android01.kotlin.Todo</span><span class="diff-line">  import com.handson.android01.ui.theme.HandsonAndroid01Theme</span><span class="diff-line">  import org.junit.Rule</span><span class="diff-line">  ...</span><span class="diff-line">          composeTestRule.onNodeWithTag(&quot;filter_Done&quot;).performClick()</span><span class="diff-line">  </span><span class="diff-line diff-line--remove">-         // 画面回転と同じく、保存された状態から作り直す（フィルタは rememberSaveable）</span><span class="diff-line diff-line--add">+         // 画面回転と同じく、保存された状態から作り直す（絞り込みは ViewModel から DataStore に保存されるので残る）</span><span class="diff-line">          tester.emulateSavedInstanceStateRestore()</span><span class="diff-line">  ...</span></pre>
+</div>
+
+            </div>
+          </details>
+          <p>まとめて実行し、<code>data</code> と <code>di</code> から <code>ui</code> への import が無くなったことを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 52s</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rn &quot;import com.handson.android01.ui&quot; app/src/main/java/com/handson/android01/data app/src/main/java/com/handson/android01/di | wc -l</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> grep -rn &quot;enum class TodoFilter&quot; app/src</span><span class="terminal__line">app/src/main/java/com/handson/android01/data/TodoFilter.kt:5:enum class TodoFilter {</span></pre>
+</div>
+          <p>絞り込みのチップの表示名が「すべて / 未完了 / 完了」のままであることは、UI テストの <code>TodoFilterTest</code> が通ることで確かめられます。</p>
+
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">別のパッケージから表示名を使うとき</p>
+              <p><code>label</code> は <code>ui.screens</code> のパッケージの拡張プロパティです。別のパッケージから <code>TodoFilter.All.label</code> と書くときは、<code>import com.handson.android01.ui.screens.label</code> も必要です。</p>
+            </div>
+          </div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>BUILD SUCCESSFUL</code> で終わり、単体テスト 76 件と UI テスト 66 件がすべて成功すれば OK です。これが完成状態です。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">まとめて確認する</h3>
+        </div>
+        <div class="step__body">
+          <p>完成状態でビルド・lint・単体テスト・UI テストをまとめて実行し、UI テストがネットワークに出ないことと、release ビルドでも Hilt が動くことを確かめます。コードはステップ 5 の完成状態のままです。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleDebug lint test connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 43s</span></pre>
+</div>
+
+          <table>
+            <thead>
+            <tr><th>確認項目</th><th>結果</th></tr>
+            </thead>
+            <tbody>
+            <tr><td>単体テスト（<code>test</code>）</td><td>76 件すべて成功（12 と同じ件数）</td></tr>
+            <tr><td>UI テスト（<code>connectedDebugAndroidTest</code>）</td><td>66 件すべて成功（12 と同じ件数）</td></tr>
+            <tr><td>lint</td><td>エラー 0 件・警告 9 件・ヒント 1 件（12 と同じ）。警告の内訳は <code>UnusedResources</code> 7 件・<code>RedundantLabel</code> 1 件・<code>AndroidGradlePluginVersion</code> 1 件。ヒントは <code>AutoboxingStateCreation</code> 1 件。Hilt で増えた警告はありません</td></tr>
+            <tr><td>debug APK</td><td>約 15.5MB（<code>./gradlew clean</code> の後のビルドで 15,511,580 バイト。12 は 15,258,418 バイト）</td></tr>
+            </tbody>
+          </table>
+          <h4>機内モードでも UI テストが通ることを確かめる</h4>
+          <p>Activity を起動する 4 件も、<code>FakeDataModule</code> の偽物でネットワークに出ないことを確かめます。機内モードにして UI テストを実行します。機内モードが効くまで 1〜2 秒かかるので、<code>sleep 2</code> で待ってから、<code>ping</code> で外に出られないことを確かめます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode enable</span><span class="terminal__line"><span class="terminal__prompt">$</span> sleep 2</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode</span><span class="terminal__line">enabled</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell &quot;ping -c1 -W2 8.8.8.8&quot;</span><span class="terminal__line">connect: Network is unreachable</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew connectedDebugAndroidTest</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 1m 53s</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell cmd connectivity airplane-mode disable</span></pre>
+</div>
+          <p>筆者の環境では、機内モードのまま UI テスト 66 件がすべて成功しました。最後のコマンドで機内モードを解除しています。</p>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">機内モードの解除を忘れない</p>
+              <p>解除しないまま次の release の確認に進むと、最初の一覧を API から取得できず、「ネットワークに接続できません」と表示されます。</p>
+            </div>
+          </div>
+          <h4>release ビルドでも動くことを確かめる</h4>
+          <p>release ビルドでは R8 がコードを縮小し、名前を短く変えます。Hilt が release でも動くことを確かめます。手順の詳しい説明は、09 のステップ 3「release ビルドでも動くことを確かめる」を参照してください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew assembleRelease</span><span class="terminal__line">（中略）</span><span class="terminal__line">BUILD SUCCESSFUL in 27s</span><span class="terminal__line">55 actionable tasks: 55 executed</span></pre>
+</div>
+          <p>できた <code>app-release-unsigned.apk</code> は約 1.9MB（1,891,504 バイト）でした。12 は 1,888,473 バイトで、増えたのは約 3KB です。debug APK の増え方（約 250KB）より小さいのは、R8 が Hilt のライブラリのうち使わない部分を削るためです。mapping では、<code>DataModule</code> のクラス自体が消えていました（<code>@Provides</code> の中身がインライン化されるため）。</p>
+          <p>12 と同じ手順で、作業用ディレクトリにコピーし、debug 用の鍵で <code>apksigner sign</code> します。次のコマンドの <code>build-tools/37.0.0</code> は、筆者の環境の版です。<code>~/Library/Android/sdk/build-tools/</code> にインストール済みの版に読み替えてください。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cp app/build/outputs/apk/release/app-release-unsigned.apk &lt;作業用ディレクトリ&gt;/rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd &lt;作業用ディレクトリ&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner sign --ks ~/.android/debug.keystore --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey --out rel-signed.apk rel.apk</span><span class="terminal__line"><span class="terminal__prompt">$</span> ~/Library/Android/sdk/build-tools/37.0.0/apksigner verify --verbose rel-signed.apk</span><span class="terminal__line">Verifies</span><span class="terminal__line">Verified using v1 scheme (JAR signing): false</span><span class="terminal__line">Verified using v2 scheme (APK Signature Scheme v2): true</span><span class="terminal__line">Verified using v3 scheme (APK Signature Scheme v3): true</span><span class="terminal__line">Verified using v3.1 scheme (APK Signature Scheme v3.1): false</span><span class="terminal__line">Verified using v3.2 scheme (APK Signature Scheme v3.2): false</span><span class="terminal__line">Verified using v4 scheme (APK Signature Scheme v4): false</span><span class="terminal__line">Verified for SourceStamp: false</span><span class="terminal__line">Number of signers: 1</span></pre>
+</div>
+          <p><code>apksigner sign</code> は、成功すると何も表示しません。<code>connectedDebugAndroidTest</code> はテストの後にアプリをアンインストールするので、端末にはアプリが残っていません。そのまま release 版を入れます（アプリが残っているときは、先に <code>adb uninstall com.handson.android01</code> で消します）。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb install rel-signed.apk</span><span class="terminal__line">Serving...</span><span class="terminal__line">All files should be loaded. Notifying the device.</span><span class="terminal__line">Performing Incremental Install</span><span class="terminal__line">Success</span><span class="terminal__line">Install command complete in 72 ms</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -c</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span></pre>
+</div>
+          <p><code>Install command complete in</code> の後の時間は、実行のたびに変わります。筆者の環境では、<code>20 件中 11 件完了</code> の一覧が出ました。「完了」のチップで絞り込み、先頭の行を押して詳細が出ることを確かめてから戻ります。続けて、強制終了して起動し直します。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am force-stop com.handson.android01</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb shell am start -n com.handson.android01/.MainActivity</span><span class="terminal__line">Starting: Intent { cmp=com.handson.android01/.MainActivity }</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d | grep -c &quot;FATAL EXCEPTION&quot;</span><span class="terminal__line">0</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb logcat -d -b crash | wc -l</span><span class="terminal__line">0</span></pre>
+</div>
+          <p>起動し直すと、「完了」のチップが選ばれた状態でした。クラッシュは記録されていません。<code>proguard-rules.pro</code> に自前の keep ルールを足す必要はありませんでした。</p>
+          <p>keep ルールが要らなかった理由は、生成されたファイルで確かめられます。生成されたファイルはプロジェクトのディレクトリにあるので、先に作業用ディレクトリから戻ります。Hilt の KSP が、<code>@HiltViewModel</code> の ViewModel 用の keep ルールを生成していました。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cd -</span><span class="terminal__line">&lt;プロジェクトのディレクトリ&gt;</span><span class="terminal__line"><span class="terminal__prompt">$</span> find app/build/generated/ksp/release -path &#x27;*META-INF/proguard*&#x27; -name &#x27;*.pro&#x27;</span><span class="terminal__line">app/build/generated/ksp/release/resources/META-INF/proguard/com_handson_android01_ui_screens_TodoListViewModel_HiltModules_KeyModule_LazyClassKeys.pro</span><span class="terminal__line">app/build/generated/ksp/release/resources/META-INF/proguard/com_handson_android01_ui_screens_TodoListViewModel_HiltModules_BindsModule_LazyClassKeys.pro</span></pre>
+</div>
+          <p>2 つのファイルの中身は、どちらも次の 1 行です。</p>
+
+<div class="code-block">
+  <div class="code-block__header">
+    <span class="code-block__lang">Text</span>
+    <span class="code-block__filename">生成された keep ルール</span>
+    <span class="code-block__spacer"></span>
+    <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+  </div>
+  <pre><code class="language-plaintext">-keep,allowobfuscation,allowshrinking class com.handson.android01.ui.screens.TodoListViewModel</code></pre>
+</div>
+          <ul>
+            <li><code>allowobfuscation</code> なので、名前は難読化されます。筆者の <code>mapping.txt</code> では <code>com.handson.android01.ui.screens.TodoListViewModel -&gt; hl2:</code> でした。それでも起動できたのは、ViewModel の一覧のキーの文字列も R8 が書き換えるためです。キーはクラス名の文字列（生成された <code>*_LazyMapKey</code> の <code>lazyClassKeyName</code>）で、<code>@IdentifierNameString</code> が付いているので、R8 は新しい名前 <code>hl2</code> に書き換えます。</li>
+            <li>Hilt の内部で使う EntryPoint などは、<code>hilt-android</code> に入っている keep ルール（<code>-keep,allowobfuscation,allowshrinking @dagger.hilt.EntryPoint class *</code> など）で残されます。</li>
+          </ul>
+          <p>確認が終わったら、作業用ディレクトリの APK を削除し、アプリをアンインストールします。エミュレータと Gradle デーモンも止めます。</p>
+
+<div class="terminal">
+  <div class="terminal__header">
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__dot"></span>
+    <span class="terminal__title">Terminal</span>
+  </div>
+  <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> adb uninstall com.handson.android01</span><span class="terminal__line">Success</span><span class="terminal__line"><span class="terminal__prompt">$</span> adb emu kill</span><span class="terminal__line">OK: killing emulator, bye bye</span><span class="terminal__line">OK</span><span class="terminal__line"><span class="terminal__prompt">$</span> ./gradlew --stop</span><span class="terminal__line">Stopping Daemon(s)</span><span class="terminal__line">1 Daemon stopped</span></pre>
+</div>
+
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>単体テスト 76 件と UI テスト 66 件が成功し、機内モードのままでも UI テストが通り、機内モードを解除していれば OK です。release の APK でも一覧・詳細・絞り込みが動き、クラッシュが記録されていないことも確かめてください。</p>
+          </div>
+
+        </div>
+      </section>
+
+      <h2 id="not-covered">この項目で扱わなかったこと</h2>
+      <ul>
+        <li>Hilt を使うテストの書き方のうち、<code>@UninstallModules</code> とテストクラスの中の module、<code>@BindValue</code>、<code>hiltRule.inject()</code> と <code>@Inject lateinit var</code>。この項目では、androidTest 全体に効く <code>@TestInstallIn</code> だけを使いました。15 で扱う予定です。</li>
+        <li><code>HiltTestActivity</code> を使い、<code>createComposeRule()</code> の 62 件も Hilt の ViewModel ごと動かすテスト。<code>testViewModel()</code> をなくす整理と合わせて、15 で検討します。</li>
+        <li><code>@Binds</code>（interface に実装を結び付ける書き方）。この項目の module は <code>object</code> と <code>@Provides</code> だけです。</li>
+        <li><code>@Qualifier</code>（同じ型の部品を複数、名前で区別する）・<code>@EntryPoint</code>・Assisted Injection（<code>@AssistedInject</code>）。</li>
+        <li><code>@Singleton</code> 以外のスコープ（<code>@ViewModelScoped</code> など）。</li>
+        <li><code>SavedStateHandle</code> の受け取り。12 で絞り込みを DataStore に移したので、今のアプリでは使いません。</li>
+        <li>module の分け方。部品が増えたら、ネットワーク・DB・DataStore のように module を分けられます。この項目では、<code>AppContainer</code> と見比べやすいように 1 つにしました。</li>
+        <li><code>rememberHiltViewModelFactory()</code>。Hilt の ViewModel を手動で作る API で、<code>rememberViewModelStoreOwner</code> に既定のファクトリを渡すときに役立ちます。画面（entry）ごとの ViewModel は、entry の中で <code>hiltViewModel()</code> を使えば作れます。</li>
+        <li>生成されたコンポーネント（<code>TodoApplication_HiltComponents</code>）の中身の読解。</li>
+      </ul>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label"><code>rootProject.name</code>・<code>app_name</code>・<code>appName</code> を <code>HandsonAndroid13</code> に変えた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label">手書きの <code>AppContainer</code> と Hilt の違い（作り方を書く場所・1 つにする方法・テストの差し替え）を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label">Hilt のプラグインと依存を KSP で足し、<code>@HiltAndroidApp</code> と <code>@AndroidEntryPoint</code> を付けた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>@Provides</code> と <code>@Inject constructor</code> の使い分けと、<code>@Provides</code> の戻り値の型が何を表すかを説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label"><code>preferencesDataStore</code> の委譲を残し、<code>@Provides @Singleton</code> がそれを返すだけにした理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">UI テストを <code>HiltTestRunner</code> で動かし、Activity を起動する 3 クラスに <code>@HiltAndroidTest</code> と <code>HiltAndroidRule</code> を付けた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label"><code>@HiltViewModel</code> と <code>hiltViewModel()</code> にして <code>AppContainer</code> と <code>FakeTodoApiRule</code> を消し、偽物を <code>@TestInstallIn</code> の module で差し込んだ</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>[Dagger/MissingBinding]</code> のエラーを下から上へ読み、どの部品の作り方が足りないかを見つけられる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-9" class="checklist__input">
+          <label for="check-9" class="checklist__label"><code>TodoFilter</code> を <code>data</code> に移し、<code>data</code> から <code>ui</code> への import をなくした</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-10" class="checklist__input">
+          <label for="check-10" class="checklist__label">単体テスト 76 件・UI テスト 66 件を通し、機内モードでも UI テストが通ること、release の APK でも動くことを確かめた</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>[Dagger/MissingBinding]</code> でビルドが失敗する</p>
+              <p>その型の作り方がありません。経路を下から上へ読み、一番上の <code>is injected at</code> の型を確かめます。自分のクラスなら <code>@Inject constructor</code> を、他人の型なら module に <code>@Provides</code> を足します。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">起動した直後に <code>Given component holder class ... does not implement ...</code> で落ちる</p>
+              <p>Activity に <code>@AndroidEntryPoint</code> が付いていません。ビルドは通るので、起動するまで気づけません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">起動したときに <code>Hilt Activity must be attached to an @HiltAndroidApp Application</code> で落ちる</p>
+              <p><code>TodoApplication</code> に <code>@HiltAndroidApp</code> が付いていません。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title">UI テストが <code>Hilt test, ..., cannot use a @HiltAndroidApp application</code> で失敗する</p>
+              <p><code>app/build.gradle.kts</code> の <code>testInstrumentationRunner</code> を確かめます。正しい値は <code>com.handson.android01.HiltTestRunner</code> です。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>hiltViewModel</code> の import が解決できない</p>
+              <p>パッケージは <code>androidx.hilt.lifecycle.viewmodel.compose</code> です。依存は <code>androidx.hilt:hilt-lifecycle-viewmodel-compose</code> です。ネット上の解説にある <code>androidx.hilt.navigation.compose</code> は、この教材では使わない別のライブラリです。</p>
+            </div>
+          </div>
+
+          <div class="callout callout--warning">
+            <span class="callout__icon" aria-hidden="true">⚠️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>@Inject</code> を付ける場所が無い</p>
+              <p>Kotlin で <code>class X(...)</code> と書いたクラスには、<code>class X @Inject constructor(...)</code> と <code>constructor</code> を書いて注釈を付けます。</p>
+            </div>
+          </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        09 から手書きしてきた <code>AppContainer</code> を、Hilt に置き換えました。
+        他人の型（Room・Ktor・DataStore）の作り方は、<code>DataModule</code> の <code>@Provides</code> に書きました。自分の Repository は <code>@Inject constructor</code> にして、アプリで 1 つにする部品には <code>@Singleton</code> を付けました。
+        ViewModel は <code>@HiltViewModel</code> にして、画面では <code>hiltViewModel()</code> で受け取ります。一覧と詳細で同じ ViewModel を使う作りは 12 までのままです。
+        UI テストは <code>HiltTestApplication</code> で動かし、偽物は <code>@TestInstallIn</code> の <code>FakeDataModule</code> でまとめて差し込みました。単体テスト 76 件と、<code>testViewModel()</code> を使う UI テスト 62 件は、ほとんど変えずに通ります。
+        最後に <code>TodoFilter</code> を <code>data</code> に移し、<code>data</code> から画面側への依存をなくしました。</p>
+      <p>次の項目（14: WorkManager）では、WorkManager でバックグラウンドの処理を動かします。Worker でも Hilt の部品を使うため、この項目で空にした <code>TodoApplication</code> へ、WorkManager の設定を足す予定です。</p>
+
+      <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+              <p class="callout__title">完成コード</p>
+              <p>このレッスンの完成コードは、ブランチ <code>android/13-hilt</code> の <code>android/13-hilt/</code> ディレクトリにあります。</p>
+            </div>
+          </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../12-datastore/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">12: DataStore で設定を保存</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">14: WorkManager</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
