@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08: 結合テスト | Axum ハンズオン</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="../../assets/css/main.css">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+
+<header class="site-header">
+  <a class="site-header__brand" href="../../index.html">Handson Materials</a>
+  <div class="site-header__actions">
+    <button type="button" class="toc-toggle" data-toc-toggle aria-expanded="false" aria-controls="lesson-toc" aria-label="目次を開閉">
+      ☰
+    </button>
+    <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">🌙 ダーク</button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- サイドバー: 目次（h2/h3 から JS で自動生成） -->
+  <aside class="layout__sidebar" id="lesson-toc">
+    <p class="toc__title">目次</p>
+    <nav aria-label="このレッスンの目次" data-toc-list></nav>
+  </aside>
+
+  <main class="layout__content">
+    <div class="lesson-content">
+
+      <!-- ページヘッダー -->
+      <header class="page-header">
+        <ol class="breadcrumb">
+          <li><a href="../../index.html">ハンズオン</a></li>
+          <li>Axum</li>
+          <li aria-current="page">08</li>
+        </ol>
+        <h1 class="lesson-title">結合テスト</h1>
+        <ul class="lesson-meta">
+          <li class="lesson-meta__item">⏱ 所要時間: 45分</li>
+          <li class="lesson-meta__item">📊 難易度: 初級</li>
+          <li class="lesson-meta__item">👤 対象: 07 で整理した users の API を、<code>curl</code> で手で確かめる代わりに、<code>cargo test</code> で自動で確かめられるようにしたい人</li>
+          <li class="lesson-meta__item">📋 前提: Rust の基本文法（モジュール・トレイト・<code>async</code>/<code>await</code>）、<code>cargo</code> の基本操作、07 で作った <code>build_app</code> と <code>Config</code> の構成</li>
+          <li class="lesson-meta__item">🔗 前提となる項目: <a href="../07-project-structure/index.html">07: プロジェクト構成と設定の外部化</a></li>
+        </ul>
+      </header>
+
+      <!-- 学習目標ボックス -->
+      <section class="objectives">
+        <p class="objectives__title">🎯 このレッスンで学ぶこと</p>
+        <ul class="objectives__list">
+          <li><code>tests/</code> ディレクトリに結合テストを書き、<code>cargo test</code> で実行する</li>
+          <li><code>tower::ServiceExt::oneshot</code> で、サーバーを起動せずに <code>Router</code> へリクエストを送る</li>
+          <li><code>http_body_util::BodyExt::collect</code> でレスポンスの本文を読み、JSON として検査する</li>
+          <li><code>#[sqlx::test]</code> で、マイグレーション済みのテスト専用の DB をテストごとに受け取る</li>
+          <li>401・422・404・400 の異常系もテストに含める</li>
+          <li>共通の部品を <code>tests/common/mod.rs</code> にまとめる</li>
+          <li>テストが失敗したときの出力を読む</li>
+        </ul>
+      </section>
+
+      <h2 id="overview">概要</h2>
+      <p>
+        07 までは、サーバーを起動して <code>curl</code> でリクエストを送り、応答を目で見て確かめていました。
+        コードを変えるたびに同じ確認を手で繰り返すのは手間がかかり、見落としも出ます。
+        このレッスンでは、その確認を <code>cargo test</code> で自動で実行できるようにします。
+      </p>
+      <p>
+        Axum の <code>Router</code> は tower の <code>Service</code> なので、サーバーを起動せず、ポートも使わずに、テストのコードから直接リクエストを渡せます。
+        DB は sqlx の <code>#[sqlx::test]</code> を使い、テストごとにマイグレーション済みの専用の DB を用意します。
+        09 以降の項目では、機能を足すたびにこの <code>tests/</code> へテストを足し、最後に <code>cargo test</code> の全件成功を確かめながら進めます。
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>項目</th><th>07（<code>curl</code> で確かめる）</th><th>08（結合テスト）</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>サーバー</td><td>起動する</td><td>起動しない</td></tr>
+          <tr><td>ポート</td><td>8080 で待ち受ける</td><td>使わない（<code>Router</code> に直接リクエストを渡す）</td></tr>
+          <tr><td>DB</td><td><code>app.db</code></td><td>テストごとに作られる専用の DB</td></tr>
+          <tr><td>結果の判定</td><td>出力を目で見る</td><td><code>assert_eq!</code> で自動で判定する</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">使用バージョン</p>
+          <p>Rust（rustc）1.99.0 / cargo 1.99.0（Rust edition 2024）で動作を確認しています。</p>
+          <p>クレートは 07 と同じです。axum 0.8.9 / tokio 1.53.1 / serde 1.0.229 / serde_json 1.0.151 / sqlx 0.9.0 / dotenvy 0.15.7 を使います。テスト用に tower 0.5.3（<code>util</code> feature）と http-body-util 0.1.5 を <code>[dev-dependencies]</code> に追加します。バージョンは執筆時点（2026年10月）のものです。</p>
+        </div>
+      </div>
+
+      <h2 id="step-by-step">手順</h2>
+
+      <!-- ステップ 1 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">1</span>
+        <div class="step__header">
+          <h3 class="step__title">07 のプロジェクトをコピーして出発点を作る</h3>
+        </div>
+        <div class="step__body">
+          <p>07 の完成コードを出発点としてコピーします。<code>07-project-structure</code> ディレクトリがある場所で、次のコマンドを実行してください。ビルド結果の <code>target/</code>、DB ファイルの <code>app.db*</code>、ローカル専用の <code>.env</code> はコピーしません。<code>.env</code> は見本の <code>.env.example</code> から作り直します。コマンドは何も表示せずに終わります。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir -p 08-integration-test</span><span class="terminal__line"><span class="terminal__prompt">$</span> cd 08-integration-test</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp ../07-project-structure/Cargo.toml ../07-project-structure/Cargo.lock ../07-project-structure/.gitignore ../07-project-structure/.env.example .</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp -R ../07-project-structure/src ../07-project-structure/migrations .</span><span class="terminal__line"><span class="terminal__prompt">$</span> cp .env.example .env</span></pre>
+          </div>
+          <p>このレッスンのテストは <code>.env</code> を読みません。<code>.env</code> は、<code>cargo run</code> でサーバーを起動するときのために作っておきます。</p>
+          <p><code>Cargo.toml</code> の <code>name</code> を <code>integration-test</code> に変えます。<code>[lib]</code> の <code>name = "app"</code> と <code>[[bin]]</code> の <code>name = "server"</code> は 07 のままにします。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  [package]</span><span class="diff-line diff-line--remove">- name = "project-structure"</span><span class="diff-line diff-line--add">+ name = "integration-test"</span><span class="diff-line">  version = "0.1.0"</span><span class="diff-line">  edition = "2024"</span></pre>
+          </div>
+          <p>このレッスンでは、<code>src/</code> と <code>migrations/</code> を一切変更しません。追加するのは <code>tests/</code> ディレクトリのテストと、<code>Cargo.toml</code> の <code>[dev-dependencies]</code> だけです。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>Cargo.toml</code> などの 5 つのファイルと、<code>src/</code>・<code>migrations/</code> ができていることを確かめます。<code>Cargo.toml</code> の <code>name</code> が <code>integration-test</code> になっていれば OK です。以降のコマンドは全て <code>08-integration-test</code> ディレクトリで実行します。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 2 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">2</span>
+        <div class="step__header">
+          <h3 class="step__title">テスト用のクレートを追加し、/health を呼ぶテストを書く</h3>
+        </div>
+        <div class="step__body">
+          <p>テストだけで使うクレートを 2 つ追加します。<code>--dev</code> を付けると、<code>[dependencies]</code> ではなく <code>[dev-dependencies]</code> に追加されます。<code>[dev-dependencies]</code> のクレートはテストのビルドにだけ使われ、実行ファイル <code>server</code> には入りません。<code>Features:</code> の一覧は一部を省略しています。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add --dev tower --features util</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding tower v0.5.3 to dev-dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             + futures-core</span><span class="terminal__line">             + futures-util</span><span class="terminal__line">             + pin-project-lite</span><span class="terminal__line">             + sync_wrapper</span><span class="terminal__line">             + util</span><span class="terminal__line">             - balance</span><span class="terminal__line">             - buffer</span><span class="terminal__line">             - discover</span><span class="terminal__line">             …</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo add --dev http-body-util</span><span class="terminal__line">    Updating crates.io index</span><span class="terminal__line">      Adding http-body-util v0.1.5 to dev-dependencies</span><span class="terminal__line">             Features:</span><span class="terminal__line">             - channel</span><span class="terminal__line">             - full</span></pre>
+          </div>
+          <ul>
+            <li>tower: Axum の <code>Router</code> は、tower の <code>Service</code> というトレイトを実装しています。<code>util</code> feature を有効にすると、<code>Service</code> に <code>oneshot</code> などのメソッドを足すトレイト <code>ServiceExt</code> が使えるようになります。</li>
+            <li>http-body-util: レスポンスの本文を最後まで読み込む <code>BodyExt::collect</code> を提供します。</li>
+          </ul>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">Cargo.toml</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread"] }</span><span class="diff-line diff-line--add">+</span><span class="diff-line diff-line--add">+ [dev-dependencies]</span><span class="diff-line diff-line--add">+ http-body-util = "0.1.5"</span><span class="diff-line diff-line--add">+ tower = { version = "0.5.3", features = ["util"] }</span></pre>
+          </div>
+          <p>tokio・serde_json・sqlx は <code>[dependencies]</code> にあるので、テストからもそのまま使えます。tokio は <code>macros</code> feature 入りで追加済みなので、<code>[dev-dependencies]</code> に足す必要はありません。sqlx の既定の feature には <code>macros</code> と <code>migrate</code> が含まれているので、ステップ 3 で使う <code>#[sqlx::test]</code> も追加の設定なしで使えます。</p>
+          <p>最初のテストとして、07 で <code>curl localhost:8080/health</code> で確かめていた <code>GET /health</code> を、テストのコードから呼び出します。<code>tests</code> ディレクトリを作り、<code>tests/health.rs</code> を次の内容で作成します。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir tests</span></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">tests/health.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use app::{build_app, config::Config, state::AppState};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
+use http_body_util::BodyExt;
+use sqlx::SqlitePool;
+use std::sync::Arc;
+use tower::ServiceExt;
+
+#[tokio::test]
+async fn health_returns_ok() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let config = Config {
+        host: "127.0.0.1".to_string(),
+        port: 0,
+        database_url: "sqlite::memory:".to_string(),
+        api_key: "test-api-key".to_string(),
+    };
+    let app = build_app(AppState {
+        pool,
+        config: Arc::new(config),
+    });
+
+    let response = app
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&amp;bytes).unwrap();
+    assert_eq!(json, serde_json::json!({ "status": "ok" }));
+}</code></pre>
+          </div>
+          <ul>
+            <li><code>tests/</code> に置いたファイルは、それぞれが独立したテスト用のクレートとしてビルドされます。外から見たライブラリ <code>app</code> を使うので、<code>use app::...</code> で参照します。07 でコードを <code>lib.rs</code> に分けたのは、このためでもあります。</li>
+            <li><code>Config</code> は <code>Config::from_env</code> を使わずに直接作ります。テストの結果が <code>.env</code> や環境変数に左右されないようにするためです。API キーには、本物ではない固定のダミー値 <code>test-api-key</code> を使います。<code>host</code>・<code>port</code>・<code>database_url</code> は <code>main.rs</code> でしか使わないので、テストでは使われません。</li>
+            <li><code>sqlite::memory:</code> は、ファイルを作らないメモリ上の DB です。<code>/health</code> は DB を使わないので、ここでは空の DB で足ります。</li>
+            <li><code>app.oneshot(request)</code>: <code>Router</code> に 1 つのリクエストを渡し、レスポンスを受け取ります。HTTP サーバーを起動せず、ポートも使いません。<code>oneshot</code> は <code>ServiceExt</code> のメソッドなので、<code>use tower::ServiceExt;</code> が必要です。</li>
+            <li><code>oneshot(...).await</code> の結果は <code>Result&lt;Response, Infallible&gt;</code> です。<code>Router</code> はエラーを返さない（エラーもレスポンスとして返す）ので、<code>unwrap()</code> は常に成功します。</li>
+            <li><code>oneshot</code> は <code>Router</code> を消費します（引数の <code>self</code> を受け取ります）。同じ <code>app</code> で 2 回呼ぶ方法はステップ 3 で扱います。</li>
+            <li><code>response.into_body().collect().await</code> で本文を最後まで読み、<code>to_bytes()</code> でバイト列にします。それを <code>serde_json::Value</code> に変換し、<code>json!</code> で書いた期待値と比べます。</li>
+            <li><code>#[tokio::test]</code> は、非同期のテスト関数を tokio のランタイムで実行する属性です。</li>
+          </ul>
+          <p>ビルドします。初回は追加したクレートのコンパイルから始まります（出力の先頭は省略しています）。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo build</span><span class="terminal__line">   …</span><span class="terminal__line">   Compiling sqlx-macros-core v0.9.0</span><span class="terminal__line">   Compiling sqlx-macros v0.9.0</span><span class="terminal__line">   Compiling sqlx v0.9.0</span><span class="terminal__line">   Compiling integration-test v0.1.0 (/path/to/08-integration-test)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.02s</span></pre>
+          </div>
+          <p><code>cargo test</code> でテストを実行します。サーバーは起動しません（出力の先頭の <code>Compiling</code> の行は省略しています）。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   …</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.04s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-9537462ecb009d98)</span><span class="terminal__line"></span><span class="terminal__line">running 0 tests</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line"></span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-91905c3557d6ad3a)</span><span class="terminal__line"></span><span class="terminal__line">running 0 tests</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line"></span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-8c1e08676c64e32e)</span><span class="terminal__line"></span><span class="terminal__line">running 1 test</span><span class="terminal__line">test health_returns_ok ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line"></span><span class="terminal__line">   Doc-tests app</span><span class="terminal__line"></span><span class="terminal__line">running 0 tests</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+          </div>
+          <p><code>cargo test</code> は、次の 4 種類のテストを順に実行します。</p>
+          <table>
+            <thead>
+              <tr><th>出力の見出し</th><th>実行されるテスト</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>unittests src/lib.rs</code></td><td>ライブラリ <code>app</code> の中に書いた <code>#[cfg(test)]</code> のテスト（このプロジェクトには無いので <code>running 0 tests</code>）</td></tr>
+              <tr><td><code>unittests src/main.rs</code></td><td>実行ファイル <code>server</code> の中に書いたテスト（同じく 0 件）</td></tr>
+              <tr><td><code>tests/health.rs</code></td><td><code>tests/</code> に置いた結合テスト。ファイルごとに 1 つのブロックが出る</td></tr>
+              <tr><td><code>Doc-tests app</code></td><td>ドキュメントコメントの中のコード例（0 件）</td></tr>
+            </tbody>
+          </table>
+          <p><code>running 0 tests</code> のブロックは、テストを足しても毎回表示されます。注目するのは <code>tests/</code> のブロックです。<code>target/debug/deps/health-...</code> の末尾の英数字は、環境によって変わります。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>tests/health.rs</code> のブロックに <code>test health_returns_ok ... ok</code> と <code>1 passed</code> が表示されれば OK です。サーバーを起動していないのに、<code>/health</code> の応答を確かめられました。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 3 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">3</span>
+        <div class="step__header">
+          <h3 class="step__title">#[sqlx::test] でテスト専用の DB を使う</h3>
+        </div>
+        <div class="step__body">
+          <p>次は <code>POST /users</code> でユーザーを作り、<code>GET /users/{id}</code> で取り出せることを確かめます。ただし、ステップ 2 の <code>sqlite::memory:</code> の DB は空で、<code>users</code> テーブルがありません。テーブルを作るマイグレーションを、テストの中で毎回実行する必要があります。</p>
+          <p>そこで、sqlx の <code>#[sqlx::test]</code> を使います。<code>#[sqlx::test]</code> を付けたテスト関数は、<code>migrations/</code> のマイグレーションを適用済みの DB を、引数の <code>SqlitePool</code> として受け取れます。DB はテスト関数ごとに別のものが作られます。<code>tests/users.rs</code> を次の内容で作成します。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">tests/users.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use app::{build_app, config::Config, state::AppState};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
+use http_body_util::BodyExt;
+use sqlx::SqlitePool;
+use std::sync::Arc;
+use tower::ServiceExt;
+
+fn test_app(pool: SqlitePool) -&gt; axum::Router {
+    let config = Config {
+        host: "127.0.0.1".to_string(),
+        port: 0,
+        database_url: "unused".to_string(),
+        api_key: "test-api-key".to_string(),
+    };
+    build_app(AppState {
+        pool,
+        config: Arc::new(config),
+    })
+}
+
+#[sqlx::test]
+async fn create_then_get_user(pool: SqlitePool) {
+    let app = test_app(pool);
+
+    let request = Request::post("/users")
+        .header("x-api-key", "test-api-key")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"name":"alice"}"#))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let created: serde_json::Value = serde_json::from_slice(&amp;bytes).unwrap();
+    assert_eq!(created["name"], "alice");
+    let id = created["id"].as_i64().unwrap();
+
+    let response = app
+        .oneshot(
+            Request::get(format!("/users/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let fetched: serde_json::Value = serde_json::from_slice(&amp;bytes).unwrap();
+    assert_eq!(fetched, serde_json::json!({ "id": id, "name": "alice" }));
+}</code></pre>
+          </div>
+          <ul>
+            <li><code>#[sqlx::test]</code> は、テスト用の DB を作ってマイグレーションを適用し、非同期のテスト関数を実行するところまで受け持ちます。<code>#[tokio::test]</code> は付けません（両方を付けた場合の失敗はステップ 6 で見ます）。</li>
+            <li><code>test_app</code>: テスト用の <code>Config</code> と受け取った <code>pool</code> から <code>Router</code> を作る関数です。<code>database_url</code> は使われないので <code>"unused"</code> にしています。</li>
+            <li><code>oneshot</code> は <code>Router</code> を消費するので、1 回目は <code>app.clone()</code> を渡し、2 回目に <code>app</code> そのものを渡します。<code>Router</code> の <code>clone</code> は軽い処理です。</li>
+            <li>1 回目のレスポンスから <code>created["id"]</code> を取り出し、2 回目の URL に使います。<code>serde_json::Value</code> は <code>["name"]</code> のようにキーで中身を取り出せます。</li>
+          </ul>
+          <p>テストを実行する前後で、本番用の DB ファイル <code>app.db</code> と、テスト用の DB の置き場所を確かめます。<code>--test users</code> を付けると、<code>tests/users.rs</code> のテストだけを実行します。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls app.db* ; ls target/sqlx</span><span class="terminal__line">zsh: no matches found: app.db*</span><span class="terminal__line">ls: target/sqlx: No such file or directory</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test users</span><span class="terminal__line">   Compiling integration-test v0.1.0 (/path/to/08-integration-test)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.76s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-a6ec1a5383ee42fd)</span><span class="terminal__line"></span><span class="terminal__line">running 1 test</span><span class="terminal__line">test create_then_get_user ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s</span><span class="terminal__line"></span><span class="terminal__line"><span class="terminal__prompt">$</span> ls app.db*; ls target/sqlx/test-dbs</span><span class="terminal__line">zsh: no matches found: app.db*</span><span class="terminal__line">users</span></pre>
+          </div>
+          <p><code>no matches found</code> は zsh の表示で、該当するファイルが無いという意味です。</p>
+          <ul>
+            <li>テスト用の DB は、<code>target/sqlx/test-dbs/&lt;テストのファイル名&gt;/&lt;テスト関数名&gt;.sqlite</code> に作られます。</li>
+            <li>テストが成功すると DB ファイルは削除され、<code>target/sqlx/test-dbs/users/</code> は空のディレクトリだけが残ります。失敗したときは DB ファイルが残ります（ステップ 6 で確かめます）。</li>
+            <li><code>app.db</code> はテストの前後とも作られません。<code>.env</code> の <code>DATABASE_URL</code> も使われません。テストを何度実行しても、開発用の DB の中身は変わりません。</li>
+          </ul>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>1 passed</code> が表示され、<code>target/sqlx/test-dbs/users</code> ディレクトリができていれば OK です。<code>app.db</code> は作られません。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 4 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">4</span>
+        <div class="step__header">
+          <h3 class="step__title">異常系のテストを足す</h3>
+        </div>
+        <div class="step__body">
+          <p>正しいリクエストだけでなく、間違ったリクエストに正しくエラーを返すことも確かめます。07 で <code>curl</code> を使って確かめた次の 4 つをテストにします。</p>
+          <table>
+            <thead>
+              <tr><th>リクエスト</th><th>期待するステータス</th><th><code>error.code</code></th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>x-api-key</code> を付けずに <code>POST /users</code></td><td>401 Unauthorized</td><td><code>unauthorized</code></td></tr>
+              <tr><td><code>POST /users</code> に空白だけの <code>name</code></td><td>422 Unprocessable Entity</td><td><code>validation_failed</code>（<code>error.fields.name</code> も付く）</td></tr>
+              <tr><td>存在しない id で <code>GET /users/999</code></td><td>404 Not Found</td><td><code>not_found</code></td></tr>
+              <tr><td><code>POST /users</code> に壊れた JSON</td><td>400 Bad Request</td><td><code>bad_request</code></td></tr>
+            </tbody>
+          </table>
+          <p>テストが増えると、リクエストを送って本文を JSON にする処理が何度も出てきます。そこで、ファイルの中に補助関数 <code>send</code> と <code>post_user</code> を作ります。<code>tests/users.rs</code> を次の内容に置き換えます。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">tests/users.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">use app::{build_app, config::Config, state::AppState};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
+use http_body_util::BodyExt;
+use sqlx::SqlitePool;
+use std::sync::Arc;
+use tower::ServiceExt;
+
+fn test_app(pool: SqlitePool) -&gt; axum::Router {
+    let config = Config {
+        host: "127.0.0.1".to_string(),
+        port: 0,
+        database_url: "unused".to_string(),
+        api_key: "test-api-key".to_string(),
+    };
+    build_app(AppState {
+        pool,
+        config: Arc::new(config),
+    })
+}
+
+async fn send(app: axum::Router, request: Request&lt;Body&gt;) -&gt; (StatusCode, serde_json::Value) {
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&amp;bytes).unwrap();
+    (status, json)
+}
+
+fn post_user(api_key: Option&lt;&amp;str&gt;, body: &amp;'static str) -&gt; Request&lt;Body&gt; {
+    let mut builder = Request::post("/users").header("content-type", "application/json");
+    if let Some(key) = api_key {
+        builder = builder.header("x-api-key", key);
+    }
+    builder.body(Body::from(body)).unwrap()
+}
+
+#[sqlx::test]
+async fn create_then_get_user(pool: SqlitePool) {
+    let app = test_app(pool);
+
+    let (status, created) = send(
+        app.clone(),
+        post_user(Some("test-api-key"), r#"{"name":"alice"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["name"], "alice");
+    let id = created["id"].as_i64().unwrap();
+
+    let (status, fetched) = send(
+        app,
+        Request::get(format!("/users/{id}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched, serde_json::json!({ "id": id, "name": "alice" }));
+}
+
+#[sqlx::test]
+async fn create_without_api_key_is_unauthorized(pool: SqlitePool) {
+    let (status, body) = send(test_app(pool), post_user(None, r#"{"name":"alice"}"#)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], "unauthorized");
+}
+
+#[sqlx::test]
+async fn create_with_empty_name_is_unprocessable(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        post_user(Some("test-api-key"), r#"{"name":"   "}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["code"], "validation_failed");
+    assert!(body["error"]["fields"]["name"].is_array());
+}
+
+#[sqlx::test]
+async fn get_unknown_user_is_not_found(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        Request::get("/users/999").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[sqlx::test]
+async fn create_with_broken_json_is_bad_request(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        post_user(Some("test-api-key"), r#"{"name":"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "bad_request");
+}</code></pre>
+          </div>
+          <ul>
+            <li><code>send</code>: リクエストを送り、ステータスと本文の JSON を組にして返します。</li>
+            <li><code>post_user</code>: <code>POST /users</code> のリクエストを作ります。<code>api_key</code> が <code>None</code> のときは <code>x-api-key</code> ヘッダーを付けません。</li>
+            <li>422 のテストでは、<code>error.code</code> に加えて <code>error.fields.name</code> が配列であることも確かめます。文言そのものではなく形を確かめておくと、文言を直してもテストが壊れません。</li>
+            <li>壊れた JSON には <code>{"name":</code> を送ります。<code>r#"..."#</code> は、<code>"</code> をエスケープせずに書ける Rust の文字列リテラルです。</li>
+          </ul>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test users</span><span class="terminal__line">   Compiling integration-test v0.1.0 (/path/to/08-integration-test)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.80s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-a6ec1a5383ee42fd)</span><span class="terminal__line"></span><span class="terminal__line">running 5 tests</span><span class="terminal__line">test create_with_empty_name_is_unprocessable ... ok</span><span class="terminal__line">test create_without_api_key_is_unauthorized ... ok</span><span class="terminal__line">test create_with_broken_json_is_bad_request ... ok</span><span class="terminal__line">test get_unknown_user_is_not_found ... ok</span><span class="terminal__line">test create_then_get_user ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span></pre>
+          </div>
+          <p>テストは並列に実行されるので、<code>test ... ok</code> の行の順番は実行のたびに変わります。各テストが別々の DB を受け取るので、<code>create_then_get_user</code> が作った alice は、ほかのテストからは見えません。</p>
+          <div class="callout callout--tip">
+            <span class="callout__icon" aria-hidden="true">💡</span>
+            <div class="callout__body">
+              <p class="callout__title">認可の失敗は必ずテストに含める</p>
+              <p>「API キーが無いと書き込めない」ことは、正しいリクエストのテストだけでは確かめられません。ミドルウェアの登録を誤って外しても、正常系のテストは通ってしまうからです。401 を返すテストを用意しておけば、保護が外れたときにすぐ気付けます。</p>
+              <p>テストで使う秘密の値は、<code>test-api-key</code> のような固定のダミーにします。本物の API キーをテストのコードに書かないでください。</p>
+            </div>
+          </div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>5 passed</code> が表示されれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 5 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">5</span>
+        <div class="step__header">
+          <h3 class="step__title">共通の部品を tests/common/mod.rs にまとめる</h3>
+        </div>
+        <div class="step__body">
+          <p><code>test_app</code> と <code>send</code> は、<code>tests/health.rs</code> でも使いたい部品です。<code>tests/</code> の各ファイルは別々のクレートとしてビルドされるので、ファイル同士で関数を直接呼べません。共通の部品はモジュール <code>common</code> にまとめ、各ファイルから <code>mod common;</code> で取り込みます。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> mkdir tests/common</span></pre>
+          </div>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">tests/common/mod.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">#![allow(dead_code)] // tests/ の各ファイルが別クレートとして common を取り込むため、使わない関数の警告を抑える
+
+use app::{build_app, config::Config, state::AppState};
+use axum::{Router, body::Body, http::Request, http::StatusCode};
+use http_body_util::BodyExt;
+use sqlx::SqlitePool;
+use std::sync::Arc;
+use tower::ServiceExt;
+
+pub const TEST_API_KEY: &amp;str = "test-api-key";
+
+pub fn test_app(pool: SqlitePool) -&gt; Router {
+    let config = Config {
+        host: "127.0.0.1".to_string(),
+        port: 0,
+        database_url: "unused".to_string(),
+        api_key: TEST_API_KEY.to_string(),
+    };
+    build_app(AppState {
+        pool,
+        config: Arc::new(config),
+    })
+}
+
+pub async fn send(app: Router, request: Request&lt;Body&gt;) -&gt; (StatusCode, serde_json::Value) {
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&amp;bytes).unwrap();
+    (status, json)
+}
+
+pub fn get(uri: &amp;str) -&gt; Request&lt;Body&gt; {
+    Request::get(uri).body(Body::empty()).unwrap()
+}
+
+pub fn json_request(
+    method: &amp;str,
+    uri: &amp;str,
+    api_key: Option&lt;&amp;str&gt;,
+    body: &amp;'static str,
+) -&gt; Request&lt;Body&gt; {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(key) = api_key {
+        builder = builder.header("x-api-key", key);
+    }
+    builder.body(Body::from(body)).unwrap()
+}</code></pre>
+          </div>
+          <ul>
+            <li><code>TEST_API_KEY</code>: テスト用の API キーを定数にしました。<code>test_app</code> の <code>Config</code> と、リクエストのヘッダーの両方でこの定数を使います。</li>
+            <li><code>get</code>: 本文の無い <code>GET</code> のリクエストを作ります。</li>
+            <li><code>json_request</code>: メソッド・パス・API キー・JSON の本文からリクエストを作ります。ステップ 4 の <code>post_user</code> を、<code>POST /users</code> 以外にも使える形にしたものです。</li>
+            <li>先頭の <code>#![allow(dead_code)]</code> は、使っていない関数の警告を、このファイル全体で出さないようにする指定です。理由はこのステップの最後で説明します。</li>
+          </ul>
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>tests/common.rs</code> ではなく <code>tests/common/mod.rs</code> にする</p>
+              <p><code>tests/</code> の直下に置いた <code>.rs</code> ファイルは、全てテスト用のクレートとして扱われます。<code>tests/common.rs</code> にすると、それ自体もテストとして実行され、<code>cargo test</code> の出力に <code>running 0 tests</code> のブロックが 1 つ増えます。サブディレクトリの <code>mod.rs</code> にすれば、テストとしては実行されず、モジュールとしてだけ使われます。</p>
+            </div>
+          </div>
+          <p><code>tests/health.rs</code> を次の内容に置き換えます。<code>test_app</code> が <code>SqlitePool</code> を受け取るので、<code>/health</code> のテストも <code>#[sqlx::test]</code> に切り替えます。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">tests/health.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">mod common;
+
+use axum::http::StatusCode;
+use common::{get, send, test_app};
+use sqlx::SqlitePool;
+
+#[sqlx::test]
+async fn health_returns_ok(pool: SqlitePool) {
+    let (status, body) = send(test_app(pool), get("/health")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!({ "status": "ok" }));
+}</code></pre>
+          </div>
+          <p><code>tests/users.rs</code> も次の内容に置き換えます。ファイル内の補助関数を削除して <code>common</code> の関数を使い、<code>GET /users</code> が空の配列を返すテスト <code>list_starts_empty</code> を足します。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Rust</span>
+              <span class="code-block__filename">tests/users.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-rust">mod common;
+
+use axum::http::StatusCode;
+use common::{TEST_API_KEY, get, json_request, send, test_app};
+use sqlx::SqlitePool;
+
+#[sqlx::test]
+async fn create_then_get_user(pool: SqlitePool) {
+    let app = test_app(pool);
+
+    let (status, created) = send(
+        app.clone(),
+        json_request("POST", "/users", Some(TEST_API_KEY), r#"{"name":"alice"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["name"], "alice");
+    let id = created["id"].as_i64().unwrap();
+
+    let (status, fetched) = send(app, get(&amp;format!("/users/{id}"))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched, serde_json::json!({ "id": id, "name": "alice" }));
+}
+
+#[sqlx::test]
+async fn list_starts_empty(pool: SqlitePool) {
+    let (status, body) = send(test_app(pool), get("/users")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, serde_json::json!([]));
+}
+
+#[sqlx::test]
+async fn create_without_api_key_is_unauthorized(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        json_request("POST", "/users", None, r#"{"name":"alice"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"]["code"], "unauthorized");
+}
+
+#[sqlx::test]
+async fn create_with_empty_name_is_unprocessable(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        json_request("POST", "/users", Some(TEST_API_KEY), r#"{"name":"   "}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["code"], "validation_failed");
+    assert!(body["error"]["fields"]["name"].is_array());
+}
+
+#[sqlx::test]
+async fn get_unknown_user_is_not_found(pool: SqlitePool) {
+    let (status, body) = send(test_app(pool), get("/users/999")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[sqlx::test]
+async fn create_with_broken_json_is_bad_request(pool: SqlitePool) {
+    let (status, body) = send(
+        test_app(pool),
+        json_request("POST", "/users", Some(TEST_API_KEY), r#"{"name":"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "bad_request");
+}</code></pre>
+          </div>
+          <p><code>list_starts_empty</code> は、ほかのテストと並列に実行されても、常に <code>[]</code> を受け取ります。テストごとに DB が分かれていることを確かめるテストでもあります。</p>
+          <p>全てのテストを実行します（出力の先頭は省略しています）。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test</span><span class="terminal__line">   …</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s</span><span class="terminal__line">     Running unittests src/lib.rs (target/debug/deps/app-9537462ecb009d98)</span><span class="terminal__line"></span><span class="terminal__line">running 0 tests</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line"></span><span class="terminal__line">     Running unittests src/main.rs (target/debug/deps/server-91905c3557d6ad3a)</span><span class="terminal__line"></span><span class="terminal__line">running 0 tests</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span><span class="terminal__line"></span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-8c1e08676c64e32e)</span><span class="terminal__line"></span><span class="terminal__line">running 1 test</span><span class="terminal__line">test health_returns_ok ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s</span><span class="terminal__line"></span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-a6ec1a5383ee42fd)</span><span class="terminal__line"></span><span class="terminal__line">running 6 tests</span><span class="terminal__line">test create_without_api_key_is_unauthorized ... ok</span><span class="terminal__line">test create_with_empty_name_is_unprocessable ... ok</span><span class="terminal__line">test get_unknown_user_is_not_found ... ok</span><span class="terminal__line">test list_starts_empty ... ok</span><span class="terminal__line">test create_with_broken_json_is_bad_request ... ok</span><span class="terminal__line">test create_then_get_user ... ok</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s</span><span class="terminal__line"></span><span class="terminal__line">   Doc-tests app</span><span class="terminal__line"></span><span class="terminal__line">running 0 tests</span><span class="terminal__line"></span><span class="terminal__line">test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s</span></pre>
+          </div>
+          <p>テストは並列に実行されるので、<code>test ... ok</code> の行の順番は実行のたびに変わります。</p>
+          <p><code>#![allow(dead_code)]</code> を書かずに <code>cargo test</code> を実行すると、次の警告が出ます（行番号は、先頭の 2 行が無い状態のものです）。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line">warning: function `json_request` is never used</span><span class="terminal__line">  --&gt; tests/common/mod.rs:35:8</span><span class="terminal__line">   |</span><span class="terminal__line">35 | pub fn json_request(</span><span class="terminal__line">   |        ^^^^^^^^^^^^</span><span class="terminal__line">   |</span><span class="terminal__line">   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default</span><span class="terminal__line"></span><span class="terminal__line">warning: `integration-test` (test "health") generated 1 warning</span></pre>
+          </div>
+          <p><code>common</code> は、<code>health.rs</code> と <code>users.rs</code> のそれぞれのクレートへ別々に取り込まれます。<code>health.rs</code> のクレートは <code>json_request</code> を使わないので、「使われていない関数」の警告が出ます。<code>users.rs</code> 側では使っていても、クレートが別なので警告は消えません。ステップ 7 で実行する <code>cargo clippy --all-targets -- -D warnings</code> では、この警告がエラーになります。そのため、共通の部品のファイルでは <code>#![allow(dead_code)]</code> で警告を抑えます。</p>
+          <div class="callout callout--note">
+            <span class="callout__icon" aria-hidden="true">ℹ️</span>
+            <div class="callout__body">
+              <p class="callout__title"><code>send</code> は本文が JSON のレスポンス専用</p>
+              <p><code>send</code> は本文を必ず <code>serde_json::from_slice</code> で JSON として読みます。本文が空のレスポンス（204 No Content など）に使うと、JSON の変換に失敗します。このレッスンでテストする API は全て JSON の本文を返すので、<code>send</code> だけで足ります。</p>
+            </div>
+          </div>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>tests/health.rs</code> が <code>1 passed</code>、<code>tests/users.rs</code> が <code>6 passed</code> で、合計 7 件のテストが成功すれば OK です。警告が出ないことも確かめてください。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 6 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">6</span>
+        <div class="step__header">
+          <h3 class="step__title">テストの失敗を読む</h3>
+        </div>
+        <div class="step__body">
+          <p>テストが失敗したときの出力を、意図的に失敗させて読んでおきます。3 つとも、確かめたら必ず元に戻してください。</p>
+          <h4>期待するステータスを間違える</h4>
+          <p><code>tests/users.rs</code> の <code>create_then_get_user</code> で、<code>POST /users</code> に期待するステータスを 201 から 200 に書き換えます。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">tests/users.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">      .await;</span><span class="diff-line diff-line--remove">-     assert_eq!(status, StatusCode::CREATED);</span><span class="diff-line diff-line--add">+     assert_eq!(status, StatusCode::OK);</span><span class="diff-line">      assert_eq!(created["name"], "alice");</span></pre>
+          </div>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test users</span><span class="terminal__line">   Compiling integration-test v0.1.0 (/path/to/08-integration-test)</span><span class="terminal__line">    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s</span><span class="terminal__line">     Running tests/users.rs (target/debug/deps/users-a6ec1a5383ee42fd)</span><span class="terminal__line"></span><span class="terminal__line">running 6 tests</span><span class="terminal__line">test create_without_api_key_is_unauthorized ... ok</span><span class="terminal__line">test create_with_broken_json_is_bad_request ... ok</span><span class="terminal__line">test create_with_empty_name_is_unprocessable ... ok</span><span class="terminal__line">test get_unknown_user_is_not_found ... ok</span><span class="terminal__line">test list_starts_empty ... ok</span><span class="terminal__line">test create_then_get_user ... FAILED</span><span class="terminal__line"></span><span class="terminal__line">failures:</span><span class="terminal__line"></span><span class="terminal__line">---- create_then_get_user stdout ----</span><span class="terminal__line">POST /users -&gt; 201 Created (923.125µs)</span><span class="terminal__line"></span><span class="terminal__line">thread 'create_then_get_user' (9623684) panicked at tests/users.rs:16:5:</span><span class="terminal__line">assertion `left == right` failed</span><span class="terminal__line">  left: 201</span><span class="terminal__line"> right: 200</span><span class="terminal__line">note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line">failures:</span><span class="terminal__line">    create_then_get_user</span><span class="terminal__line"></span><span class="terminal__line">test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s</span><span class="terminal__line"></span><span class="terminal__line">error: test failed, to rerun pass `--test users`</span></pre>
+          </div>
+          <ul>
+            <li><code>panicked at tests/users.rs:16:5</code>: 失敗した <code>assert_eq!</code> の位置（16 行目の 5 文字目）です。</li>
+            <li><code>left</code> は <code>assert_eq!</code> の 1 つ目の引数（実際の値 201）、<code>right</code> は 2 つ目の引数（期待値 200）です。</li>
+            <li><code>POST /users -&gt; 201 Created (...)</code> の行は、07 で作ったミドルウェア <code>log_request</code> の <code>println!</code> の出力です。成功したテストの標準出力は表示されず、失敗したテストの分だけが <code>---- ... stdout ----</code> の下に表示されます。失敗の直前にどんなリクエストが処理されたかが分かります。</li>
+            <li><code>(9623684)</code> のようなスレッドの番号と処理時間は、実行のたびに変わります。</li>
+          </ul>
+          <p>このとき、失敗したテストの DB ファイルは削除されずに残ります。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls target/sqlx/test-dbs/users</span><span class="terminal__line">create_then_get_user.sqlite</span></pre>
+          </div>
+          <p>残った DB ファイルは、失敗した時点の DB の中身を調べるのに使えます。201 に戻して <code>cargo test --test users</code> を実行し、全件が通ると、このファイルは削除されます。もう一度 <code>ls</code> を実行し、何も表示されなければ削除されています。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> ls target/sqlx/test-dbs/users</span></pre>
+          </div>
+          <h4><code>use tower::ServiceExt;</code> を忘れる</h4>
+          <p><code>tests/common/mod.rs</code> から <code>use tower::ServiceExt;</code> の行を削除します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">tests/common/mod.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line">  use std::sync::Arc;</span><span class="diff-line diff-line--remove">- use tower::ServiceExt;</span></pre>
+          </div>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test users</span><span class="terminal__line">   Compiling integration-test v0.1.0 (/path/to/08-integration-test)</span><span class="terminal__line">error[E0599]: no method named `oneshot` found for struct `Router&lt;S&gt;` in the current scope</span><span class="terminal__line">   --&gt; tests/common/mod.rs:25:24</span><span class="terminal__line">    |</span><span class="terminal__line"> 25 |     let response = app.oneshot(request).await.unwrap();</span><span class="terminal__line">    |                        ^^^^^^^</span><span class="terminal__line">    |</span><span class="terminal__line">   ::: ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tower-0.5.3/src/util/mod.rs:89:8</span><span class="terminal__line">    |</span><span class="terminal__line"> 89 |     fn oneshot(self, req: Request) -&gt; Oneshot&lt;Self, Request&gt;</span><span class="terminal__line">    |        ------- the method is available for `Router` here</span><span class="terminal__line">    |</span><span class="terminal__line">    = help: items from traits can only be used if the trait is in scope</span><span class="terminal__line">help: there is a method `nest` with a similar name, but with different arguments</span><span class="terminal__line">   --&gt; ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/axum-0.8.9/src/routing/mod.rs:209:5</span><span class="terminal__line">    |</span><span class="terminal__line">209 |     pub fn nest(self, path: &amp;str, router: Router&lt;S&gt;) -&gt; Self {</span><span class="terminal__line">    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span><span class="terminal__line">help: trait `ServiceExt` which provides `oneshot` is implemented but not in scope; perhaps you want to import it</span><span class="terminal__line">    |</span><span class="terminal__line">  3 + use tower::util::ServiceExt;</span><span class="terminal__line">    |</span><span class="terminal__line"></span><span class="terminal__line">For more information about this error, try `rustc --explain E0599`.</span><span class="terminal__line">error: could not compile `integration-test` (test "users") due to 1 previous error</span></pre>
+          </div>
+          <p><code>oneshot</code> は <code>Router</code> 自身のメソッドではなく、トレイト <code>ServiceExt</code> のメソッドです。トレイトのメソッドは、そのトレイトを <code>use</code> しないと呼べません（<code>items from traits can only be used if the trait is in scope</code>）。最後の <code>help</code> は <code>use tower::util::ServiceExt;</code> を勧めています。<code>util</code> feature を有効にしていれば、<code>use tower::ServiceExt;</code> でも同じトレイトを指します。<code>~/.cargo/registry/...</code> のパスは環境によって変わります。確かめたら <code>use</code> を元に戻します。</p>
+          <h4><code>#[tokio::test]</code> と <code>#[sqlx::test]</code> を両方付ける</h4>
+          <p><code>tests/health.rs</code> の <code>#[sqlx::test]</code> の上に <code>#[tokio::test]</code> を足します。</p>
+          <div class="code-block code-block--diff">
+            <div class="code-block__header">
+              <span class="code-block__lang">Diff</span>
+              <span class="code-block__filename">tests/health.rs</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><span class="diff-line diff-line--add">+ #[tokio::test]</span><span class="diff-line">  #[sqlx::test]</span><span class="diff-line">  async fn health_returns_ok(pool: SqlitePool) {</span></pre>
+          </div>
+          <p>これはコンパイルエラーにはならず、テストの実行時に失敗します。出力の先頭と末尾は省略しています。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test --test health</span><span class="terminal__line">   …</span><span class="terminal__line">     Running tests/health.rs (target/debug/deps/health-8c1e08676c64e32e)</span><span class="terminal__line"></span><span class="terminal__line">running 2 tests</span><span class="terminal__line">test health_returns_ok ... FAILED</span><span class="terminal__line">test health_returns_ok ... FAILED</span><span class="terminal__line"></span><span class="terminal__line">failures:</span><span class="terminal__line"></span><span class="terminal__line">---- health_returns_ok stdout ----</span><span class="terminal__line"></span><span class="terminal__line">thread 'health_returns_ok' (9700744) panicked at tests/health.rs:12:60:</span><span class="terminal__line">Cannot start a runtime from within a runtime. This happens because a function (like `block_on`) attempted to block the current thread while the thread is being used to drive asynchronous tasks.</span><span class="terminal__line">note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace</span><span class="terminal__line"></span><span class="terminal__line">---- health_returns_ok stdout ----</span><span class="terminal__line"></span><span class="terminal__line">thread 'health_returns_ok' (9700745) panicked at tests/health.rs:12:60:</span><span class="terminal__line">Cannot start a runtime from within a runtime. This happens because a function (like `block_on`) attempted to block the current thread while the thread is being used to drive asynchronous tasks.</span><span class="terminal__line"></span><span class="terminal__line"></span><span class="terminal__line">failures:</span><span class="terminal__line">    health_returns_ok</span><span class="terminal__line">    health_returns_ok</span><span class="terminal__line"></span><span class="terminal__line">test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s</span><span class="terminal__line"></span><span class="terminal__line">error: test failed, to rerun pass `--test health`</span></pre>
+          </div>
+          <ul>
+            <li>2 つの属性がそれぞれテストを生成するので、同じ名前のテストが 2 件実行されます（<code>running 2 tests</code>）。末尾の集計は <code>test result: FAILED. 0 passed; 2 failed</code> です。</li>
+            <li>2 件とも、多くの場合は同じ <code>Cannot start a runtime from within a runtime</code> で失敗します。2 つのテストは同じ名前の DB ファイルを使うので、実行によっては 2 件目が <code>failed to apply migrations: ... table users already exists</code> になることもあります。</li>
+            <li>この失敗は、ランタイムの中でさらにランタイムを起動しようとしたことによるものです。<code>#[sqlx::test]</code> は自分でランタイムを用意するので、<code>#[tokio::test]</code> のランタイムと二重になります。</li>
+          </ul>
+          <p><code>#[sqlx::test]</code> を使うテストには、<code>#[sqlx::test]</code> だけを付けます。<code>#[tokio::test]</code> の行を削除して元に戻します。</p>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p>3 つの失敗を確かめたあと、全て元に戻して <code>cargo test</code> を実行し、合計 7 件が成功すれば OK です。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ステップ 7 -->
+      <section class="step">
+        <span class="step__number" aria-hidden="true">7</span>
+        <div class="step__header">
+          <h3 class="step__title">並列実行を確かめて仕上げる</h3>
+        </div>
+        <div class="step__body">
+          <p>テストは既定で並列に実行されます。<code>-- --test-threads=1</code> を付けると、1 つずつ順番に実行します。どちらでも結果が変わらないことを確かめます（出力は集計の行だけを抜き出しています）。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo test -- --test-threads=1</span><span class="terminal__line">   …</span><span class="terminal__line">test result: ok. 1 passed; 0 failed; …</span><span class="terminal__line">   …</span><span class="terminal__line">test result: ok. 6 passed; 0 failed; …</span><span class="terminal__line">   …</span></pre>
+          </div>
+          <p>並列のまま <code>cargo test</code> を何回か続けて実行しても、毎回 7 件とも成功します。テストごとに別の DB ファイルを使うので、テスト同士でデータがぶつかりません。<code>ls app.db*</code> も、何度テストを実行したあとでも <code>no matches found</code> のままです。</p>
+          <p>仕上げに、書式と静的解析を確認します。<code>--all-targets</code> を付けると、<code>tests/</code> のコードも Clippy の検査対象になります（出力の先頭は省略しています）。</p>
+          <div class="terminal">
+            <div class="terminal__header">
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__dot"></span>
+              <span class="terminal__title">Terminal</span>
+            </div>
+            <pre class="terminal__body"><span class="terminal__line"><span class="terminal__prompt">$</span> cargo fmt --check</span><span class="terminal__line"><span class="terminal__prompt">$</span> cargo clippy --all-targets -- -D warnings</span><span class="terminal__line">   …</span><span class="terminal__line">    Checking sqlx v0.9.0</span><span class="terminal__line">    Checking integration-test v0.1.0 (/path/to/08-integration-test)</span><span class="terminal__line">    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.21s</span></pre>
+          </div>
+          <p><code>cargo fmt --check</code> は何も表示せずに終わります。最終的なディレクトリ構成は次のとおりです（<code>target/</code> は省略）。</p>
+          <div class="code-block">
+            <div class="code-block__header">
+              <span class="code-block__lang">Text</span>
+              <span class="code-block__spacer"></span>
+              <button type="button" class="code-block__copy" data-label="コピー">コピー</button>
+            </div>
+            <pre><code class="language-plaintext">08-integration-test/
+  .env                 # ローカル専用（コミットしない）
+  .env.example
+  .gitignore
+  Cargo.toml           # [dev-dependencies] に http-body-util と tower（util）
+  Cargo.lock
+  migrations/
+    0001_create_users.sql
+  src/                 # 07 から変更なし
+    main.rs
+    lib.rs
+    config.rs
+    state.rs
+    error.rs
+    middleware.rs
+    routes/
+      mod.rs
+      health.rs
+      users.rs
+  tests/
+    common/
+      mod.rs           # TEST_API_KEY・test_app・send・get・json_request
+    health.rs          # GET /health のテスト（1 件）
+    users.rs           # /users のテスト（6 件）</code></pre>
+          </div>
+          <p>このレッスンで書いたテストは次の 7 件です。</p>
+          <table>
+            <thead>
+              <tr><th>ファイル</th><th>テスト</th><th>確かめること</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>tests/health.rs</code></td><td><code>health_returns_ok</code></td><td><code>GET /health</code> が 200 と <code>{"status":"ok"}</code> を返す</td></tr>
+              <tr><td><code>tests/users.rs</code></td><td><code>create_then_get_user</code></td><td><code>POST /users</code> が 201 を返し、作ったユーザーを <code>GET /users/{id}</code> で取り出せる</td></tr>
+              <tr><td><code>tests/users.rs</code></td><td><code>list_starts_empty</code></td><td><code>GET /users</code> が空の配列を返す（テストごとに DB が分かれている）</td></tr>
+              <tr><td><code>tests/users.rs</code></td><td><code>create_without_api_key_is_unauthorized</code></td><td>API キーが無い <code>POST /users</code> が 401 と <code>unauthorized</code> を返す</td></tr>
+              <tr><td><code>tests/users.rs</code></td><td><code>create_with_empty_name_is_unprocessable</code></td><td>空白だけの <code>name</code> が 422 と <code>validation_failed</code>、<code>fields.name</code> を返す</td></tr>
+              <tr><td><code>tests/users.rs</code></td><td><code>get_unknown_user_is_not_found</code></td><td>存在しない id が 404 と <code>not_found</code> を返す</td></tr>
+              <tr><td><code>tests/users.rs</code></td><td><code>create_with_broken_json_is_bad_request</code></td><td>壊れた JSON が 400 と <code>bad_request</code> を返す</td></tr>
+            </tbody>
+          </table>
+          <div class="step__check">
+            <p class="step__check-title">✅ 確認ポイント</p>
+            <p><code>--test-threads=1</code> でも並列でも 7 件が成功すれば OK です。<code>cargo fmt --check</code> と <code>cargo clippy --all-targets -- -D warnings</code> がエラーなしで終われば完成です。</p>
+          </div>
+        </div>
+      </section>
+
+      <h2 id="exercise">演習</h2>
+      <p>以下のチェックリストを使って、このレッスンの内容を振り返りましょう。</p>
+
+      <ul class="checklist">
+        <li class="checklist__item">
+          <input type="checkbox" id="check-1" class="checklist__input">
+          <label for="check-1" class="checklist__label">07 のプロジェクトをコピーし、<code>[dev-dependencies]</code> に <code>tower</code>（<code>util</code>）と <code>http-body-util</code> を追加した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-2" class="checklist__input">
+          <label for="check-2" class="checklist__label"><code>oneshot</code> で <code>GET /health</code> を呼び、サーバーを起動せずに 200 と <code>{"status":"ok"}</code> を確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-3" class="checklist__input">
+          <label for="check-3" class="checklist__label"><code>#[sqlx::test]</code> で受け取った DB を使い、<code>POST /users</code> → <code>GET /users/{id}</code> のテストを書いた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-4" class="checklist__input">
+          <label for="check-4" class="checklist__label"><code>target/sqlx/test-dbs/users</code> ができ、<code>app.db</code> は作られないことを確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-5" class="checklist__input">
+          <label for="check-5" class="checklist__label">401・422・404・400 の異常系のテストを書き、<code>error.code</code> と <code>error.fields</code> を検査した</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-6" class="checklist__input">
+          <label for="check-6" class="checklist__label">共通の部品を <code>tests/common/mod.rs</code> にまとめ、<code>#![allow(dead_code)]</code> が必要な理由を説明できる</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-7" class="checklist__input">
+          <label for="check-7" class="checklist__label">意図的に失敗させ、<code>left</code> と <code>right</code> の意味、<code>ServiceExt</code> の <code>use</code> 忘れ、属性の併記による失敗を確かめた</label>
+        </li>
+        <li class="checklist__item">
+          <input type="checkbox" id="check-8" class="checklist__input">
+          <label for="check-8" class="checklist__label"><code>cargo clippy --all-targets -- -D warnings</code> と <code>cargo test</code> の 7 件が通った</label>
+        </li>
+      </ul>
+
+      <h2 id="troubleshooting">つまずきポイント</h2>
+
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>oneshot</code> が見つからないというコンパイルエラーになる</p>
+          <p><code>use tower::ServiceExt;</code> が抜けています。<code>Cargo.toml</code> の <code>tower</code> に <code>features = ["util"]</code> が付いているかも確認してください（ステップ 2、ステップ 6 を参照）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">2 回目の <code>oneshot</code> でコンパイルエラーになる</p>
+          <p><code>oneshot</code> は <code>Router</code> を消費します。同じ <code>app</code> に 2 回リクエストを送るときは、1 回目に <code>app.clone()</code> を渡してください（ステップ 3 を参照）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title">同じ名前のテストが 2 件失敗する</p>
+          <p><code>#[tokio::test]</code> と <code>#[sqlx::test]</code> を両方付けています。<code>#[sqlx::test]</code> だけにしてください（ステップ 6 を参照）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>function ... is never used</code> の警告が出る</p>
+          <p><code>tests/common/mod.rs</code> の関数のうち、どれかのテストファイルで使っていないものがあると警告が出ます。<code>mod.rs</code> の先頭に <code>#![allow(dead_code)]</code> を書いてください（ステップ 5 を参照）。</p>
+        </div>
+      </div>
+      <div class="callout callout--tip">
+        <span class="callout__icon" aria-hidden="true">💡</span>
+        <div class="callout__body">
+          <p class="callout__title"><code>target/sqlx/test-dbs</code> に <code>.sqlite</code> ファイルが残っている</p>
+          <p>そのテストが前回失敗したしるしです。次に成功すれば削除されます。失敗の原因を調べるときに中身を見ることもできます（ステップ 6 を参照）。</p>
+        </div>
+      </div>
+
+      <h2 id="summary">まとめ</h2>
+      <p>
+        <code>tests/</code> ディレクトリに結合テストを書き、07 まで <code>curl</code> で確かめていた応答を <code>cargo test</code> で自動で確かめられるようにしました。
+        <code>oneshot</code> で <code>Router</code> に直接リクエストを渡すので、サーバーを起動せず、ポートも使いません。
+        <code>#[sqlx::test]</code> がテストごとにマイグレーション済みの DB を用意するので、テストは並列に実行してもぶつからず、開発用の <code>app.db</code> にも影響しません。
+        <code>src/</code> は 1 行も変えずに、正常系と異常系の 7 件のテストを用意できました。
+      </p>
+      <p>テストを書くときに押さえておく点は次のとおりです。</p>
+
+      <table>
+        <thead>
+          <tr><th>観点</th><th>このレッスンでの扱い</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>リクエストの送り方</td><td><code>tower::ServiceExt::oneshot</code> で <code>Router</code> に直接渡す。サーバーもポートも使わない</td></tr>
+          <tr><td>本文の読み方</td><td><code>http_body_util::BodyExt::collect</code> で読み、<code>serde_json::Value</code> にして比べる</td></tr>
+          <tr><td>DB</td><td><code>#[sqlx::test]</code> がテストごとにマイグレーション済みの DB を用意する。成功すると削除、失敗すると残る</td></tr>
+          <tr><td>設定</td><td><code>Config</code> をテストの中で直接作る。API キーは固定のダミー <code>test-api-key</code></td></tr>
+          <tr><td>共通の部品</td><td><code>tests/common/mod.rs</code> に置き、各ファイルで <code>mod common;</code> と書く</td></tr>
+          <tr><td>異常系</td><td>401・422・404・400 を <code>error.code</code> で確かめる。認可の失敗は必ず含める</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout--note">
+        <span class="callout__icon" aria-hidden="true">ℹ️</span>
+        <div class="callout__body">
+          <p class="callout__title">完成コード</p>
+          <p>このレッスンの完成コードは、ブランチ <code>axum/08-integration-test</code> の <code>axum/08-integration-test/</code> ディレクトリにあります。<code>.env</code> はコミットしていないので、<code>.env.example</code> をコピーして作ってください。</p>
+        </div>
+      </div>
+
+      <!-- 前後レッスンへのナビゲーション -->
+      <nav class="lesson-nav" aria-label="前後のレッスン">
+        <a class="lesson-nav__link lesson-nav__link--prev" href="../07-project-structure/index.html">
+          <span class="lesson-nav__direction">← 前のレッスン</span>
+          <span class="lesson-nav__title">07: プロジェクト構成と設定の外部化</span>
+        </a>
+        <span class="lesson-nav__link lesson-nav__link--next" aria-disabled="true">
+          <span class="lesson-nav__direction">次のレッスン →（準備中）</span>
+          <span class="lesson-nav__title">09: マイグレーション運用と記事リソース</span>
+        </span>
+      </nav>
+
+    </div>
+  </main>
+</div>
+
+<script src="../../assets/js/main.js"></script>
+</body>
+</html>
