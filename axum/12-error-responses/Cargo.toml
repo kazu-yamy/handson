@@ -1,0 +1,36 @@
+[package]
+name = "error-responses"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[dependencies]
+argon2 = "0.6.0"
+axum = "0.8.9"
+base64 = "0.23.1"
+dotenvy = "0.15.7"
+getrandom = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.11.0"
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }
+tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tower-http = { version = "0.7.1", features = ["timeout"] }
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+tower = { version = "0.5.3", features = ["util"] }
+
+# argon2 は意図的に重い計算なので、debug ビルドでも最適化する（これが無いとテストが極端に遅い）
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
